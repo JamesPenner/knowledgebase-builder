@@ -1,0 +1,58 @@
+# General-media capture rules — common date/time/numbering patterns in photo/video filenames
+# These load into knowledge.db with source='seeded' when using --template general-media
+
+- pattern: '^(19|20)(\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$'
+  label: date_yyyymmdd
+  extract_as: file_date
+  value_type: date
+  format_str: '{1}{2}-{3}-{4}'
+  keep_token: false
+
+- pattern: '^([0-9]{2})(0[1-9]|1[0-2])([0-3][0-9])$'
+  label: date_yymmdd
+  extract_as: file_date
+  value_type: date
+  format_str: '20{1}-{2}-{3}'
+  keep_token: false
+
+- pattern: '^([01]\d|2[0-3])([0-5]\d)([0-5]\d)$'
+  label: time_hhmmss
+  extract_as: file_time
+  value_type: time
+  format_str: '{1}:{2}:{3}'
+  keep_token: false
+
+- pattern: '^(CLIP|CLP)[-_]?(\d+)$'
+  label: clip_number
+  extract_as: clip_number
+  value_type: code
+  format_str: null
+  keep_token: false
+
+- pattern: '^(SCENE|SCN)[-_]?(\d+)$'
+  label: scene_number
+  extract_as: scene_number
+  value_type: code
+  format_str: null
+  keep_token: false
+
+- pattern: '^(DSC|DSCN|DSCF|DSC_)(\d+)$'
+  label: camera_dsc
+  extract_as: camera_seq
+  value_type: code
+  format_str: null
+  keep_token: false
+
+- pattern: '^(IMG|IMG_|MVI_)(\d+)$'
+  label: camera_img
+  extract_as: camera_seq
+  value_type: code
+  format_str: null
+  keep_token: false
+
+- pattern: '^(DJI|DJI_|DJI-)(\d+)$'
+  label: camera_dji
+  extract_as: camera_seq
+  value_type: code
+  format_str: null
+  keep_token: false

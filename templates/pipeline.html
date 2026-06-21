@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Pipeline — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Pipeline</h1>
+<table class="stage-table">
+  <thead>
+    <tr>
+      <th>Stage</th>
+      <th>Status</th>
+      <th>Last run</th>
+      <th>Files</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for stage in all_stages %}
+    {% set cp = checkpoints.get(stage) %}
+    <tr class="stage-row{% if cp %} stage-row--done{% endif %}">
+      <td class="stage-name">{{ stage }}</td>
+      <td class="stage-status">
+        <span id="badge-{{ stage }}" class="badge {% if cp %}badge-done{% else %}badge-pending{% endif %}">
+          {{ 'done' if cp else 'pending' }}
+        </span>
+      </td>
+      <td class="stage-date">{{ cp.last_run_at if cp else '—' }}</td>
+      <td class="stage-files">{{ cp.files_processed if cp else '—' }}</td>
+      <td class="stage-actions">
+        <button id="btn-run-{{ stage }}" class="btn btn--run"
+                onclick="runStage('{{ stage }}', '{{ kb }}')">Run</button>
+        <button id="btn-cancel-{{ stage }}" class="btn btn--cancel"
+                style="display:none"
+                onclick="cancelStage('{{ stage }}')">Cancel</button>
+        <span id="progress-{{ stage }}" class="stage-progress"></span>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<script src="/static/js/pipeline.js"></script>
+{% endblock %}

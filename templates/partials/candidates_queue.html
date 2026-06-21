@@ -1,0 +1,63 @@
+{% if candidates %}
+<table class="token-table">
+  <tbody>
+  {% for c in candidates %}
+  <tr class="token-row" id="candidate-row-{{ c.id }}">
+    <td class="token-name">
+      {{ c.term }}
+      <span class="badge badge--{{ c.source }}">{{ c.source }}</span>
+      {% if c.cluster_id %}
+      <span class="cluster-badge">cluster {{ c.cluster_id }}</span>
+      {% endif %}
+    </td>
+    <td class="token-actions">
+      <form class="action-form"
+            hx-post="/review/suggest/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="candidate_id" value="{{ c.id }}">
+        <input type="hidden" name="action" value="accept">
+        <button type="submit" class="btn btn--capture">Accept</button>
+      </form>
+
+      <form class="action-form"
+            hx-post="/review/suggest/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="candidate_id" value="{{ c.id }}">
+        <input type="hidden" name="action" value="ignore">
+        <button type="submit" class="btn btn--ignore">Ignore</button>
+      </form>
+
+      <form class="action-form"
+            hx-post="/review/suggest/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="candidate_id" value="{{ c.id }}">
+        <input type="hidden" name="action" value="correct">
+        <input type="text" name="corrected_to" placeholder="Correct to…" class="input-text" required>
+        <button type="submit" class="btn btn--correct">Correct</button>
+      </form>
+
+      <form class="action-form"
+            hx-post="/review/suggest/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="candidate_id" value="{{ c.id }}">
+        <input type="hidden" name="action" value="reject">
+        <button type="submit" class="btn btn--reject">Reject</button>
+      </form>
+    </td>
+  </tr>
+  {% if c.source == 'level_c' and c.notes %}
+  <tr class="notes-row">
+    <td colspan="2">
+      <details class="level-c-notes">
+        <summary>Reasoning</summary>
+        <p class="notes-text">{{ c.notes }}</p>
+      </details>
+    </td>
+  </tr>
+  {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No pending candidates. Run <code>enrich pipeline suggest</code> to generate suggestions.</p>
+{% endif %}

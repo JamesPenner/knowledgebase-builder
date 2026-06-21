@@ -1,0 +1,29 @@
+{% if decisions %}
+<table class="decisions-table">
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>Token</th>
+      <th>Details</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for d in decisions %}
+  <tr class="decision-row">
+    <td><span class="badge badge--{{ d.action }}">{{ d.action }}</span></td>
+    <td class="decision-token">{{ d.token }}</td>
+    <td class="decision-detail">{{ d.detail or '' }}</td>
+    <td>
+      <form hx-delete="/review/normalise/decisions/{{ d.id }}?kb={{ kb }}"
+            hx-swap="none">
+        <button type="submit" class="btn btn--remove">Remove</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No decisions made yet.</p>
+{% endif %}

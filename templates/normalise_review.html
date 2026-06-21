@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Normalise Review — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Normalisation Review</h1>
+
+<div id="pending-groups"
+     hx-get="/review/normalise/partials/pending?kb={{ kb }}"
+     hx-trigger="pendingChanged from:body"
+     hx-swap="innerHTML">
+  {% include "partials/pending_groups.html" %}
+</div>
+
+<section class="decisions-section">
+  <h2 class="section-title">Decisions Made</h2>
+  <div id="decisions-panel"
+       hx-get="/review/normalise/partials/decisions?kb={{ kb }}"
+       hx-trigger="decisionsChanged from:body"
+       hx-swap="innerHTML">
+    {% include "partials/decisions_panel.html" %}
+  </div>
+</section>
+{% endblock %}

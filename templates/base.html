@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}KB Builder{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+</head>
+<body>
+  <nav class="nav">
+    <span class="nav-brand">KB Builder</span>
+    {% if kb %}
+    <span class="nav-sep">›</span>
+    <select class="nav-kb-select" id="kb-switcher" data-current="{{ kb }}">
+      <option value="{{ kb }}">{{ kb }}</option>
+    </select>
+    <a class="nav-link" href="/pipeline?kb={{ kb }}">Pipeline</a>
+    <a class="nav-link" href="/review/normalise?kb={{ kb }}">Normalise</a>
+    <a class="nav-link" href="/review/suggest?kb={{ kb }}">Suggest <span id="suggest-badge" class="nav-badge" data-kb="{{ kb }}" style="display:none"></span></a>
+    <a class="nav-link" href="/review/new-terms?kb={{ kb }}">New Terms</a>
+    <a class="nav-link" href="/review/speakers?kb={{ kb }}">Speakers</a>
+    <a class="nav-link" href="/corpus-stats?kb={{ kb }}">Stats</a>
+    <a class="nav-link" href="/health?kb={{ kb }}">Health</a>
+    {% endif %}
+  </nav>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/static/js/kb_switcher.js"></script>
+  <script src="/static/js/suggest_badge.js"></script>
+</body>
+</html>

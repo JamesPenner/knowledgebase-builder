@@ -1,0 +1,27 @@
+{% if not pending %}
+<p class="empty-state">No unassigned speaker clusters.</p>
+{% else %}
+{% for c in pending %}
+<div class="token-group" style="margin-bottom:1.5rem">
+  <h3 style="margin:0 0 .4rem">Cluster #{{ c.id }} — {{ c.member_count }} segment(s){% if c.spread is not none %} · spread {{ "%.2f"|format(c.spread) }}{% endif %}</h3>
+  {% if c.sample_path %}
+  <p style="font-size:.85em;color:#666;margin:.2rem 0">{{ c.sample_path }} · {{ c.sample_start_ms }}–{{ c.sample_end_ms }} ms</p>
+  <audio controls style="width:100%;max-width:32rem;display:block;margin:.4rem 0"
+         src="/api/review/speakers/clip?kb={{ kb }}&file_id={{ c.sample_file_id }}&start_ms={{ c.sample_start_ms }}&end_ms={{ c.sample_end_ms }}"></audio>
+  {% endif %}
+  <form hx-post="/review/speakers/decide?kb={{ kb }}" hx-swap="none" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.5rem">
+    <input type="hidden" name="cluster_id" value="{{ c.id }}">
+    <input type="hidden" name="action" value="assign">
+    <select name="person_id" style="min-width:12rem">
+      <option value="">— existing person —</option>
+      {% for p in people %}
+      <option value="{{ p.id }}">{{ p.preferred_name }}</option>
+      {% endfor %}
+    </select>
+    <span style="color:#999">or</span>
+    <input type="text" name="new_name" placeholder="New person name…" style="width:14em">
+    <button type="submit" class="btn-primary">Assign</button>
+  </form>
+</div>
+{% endfor %}
+{% endif %}

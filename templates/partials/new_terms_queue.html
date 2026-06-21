@@ -1,0 +1,55 @@
+{% if items %}
+<table class="token-table">
+  <thead>
+    <tr>
+      <th>Term</th>
+      <th>Files</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+  <tr class="token-row">
+    <td class="token-name">{{ item.term }}</td>
+    <td class="token-count">{{ item.file_count }}</td>
+    <td class="token-actions">
+      <form class="action-form"
+            hx-post="/review/new-terms/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="term" value="{{ item.term }}">
+        <input type="hidden" name="action" value="accept">
+        <button type="submit" class="btn btn--capture">Accept</button>
+      </form>
+
+      <form class="action-form"
+            hx-post="/review/new-terms/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="term" value="{{ item.term }}">
+        <input type="hidden" name="action" value="ignore">
+        <button type="submit" class="btn btn--ignore">Ignore</button>
+      </form>
+
+      <form class="action-form"
+            hx-post="/review/new-terms/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="term" value="{{ item.term }}">
+        <input type="hidden" name="action" value="correct">
+        <input type="text" name="corrected_to" placeholder="Correct to…" class="input-text" required>
+        <button type="submit" class="btn btn--correct">Correct</button>
+      </form>
+
+      <form class="action-form"
+            hx-post="/review/new-terms/decide?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="term" value="{{ item.term }}">
+        <input type="hidden" name="action" value="reject">
+        <button type="submit" class="btn btn--reject">Reject</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No new terms proposed. Run <code>enrich retag</code> to generate suggestions.</p>
+{% endif %}

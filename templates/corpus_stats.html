@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Corpus Statistics — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Corpus Statistics</h1>
+
+{% if stats.files.total == 0 %}
+<p class="empty-state">No files ingested yet. Run <code>enrich pipeline ingest</code> to populate the corpus.</p>
+{% else %}
+
+<h2 class="section-title">Files</h2>
+<table class="stage-table">
+  <tbody>
+    <tr class="stage-row">
+      <td class="stage-name">Total</td>
+      <td class="stage-files">{{ stats.files.total }}</td>
+    </tr>
+    {% for ftype, count in stats.files.by_type.items() | sort %}
+    <tr class="stage-row">
+      <td class="stage-name">{{ ftype }}</td>
+      <td class="stage-files">{{ count }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="stage-row">
+      <td class="stage-name">Duplicates</td>
+      <td class="stage-files">{{ stats.files.duplicates }}</td>
+    </tr>
+    <tr class="stage-row">
+      <td class="stage-name">Sources</td>
+      <td class="stage-files">{{ stats.files.sources }}</td>
+    </tr>
+  </tbody>
+</table>
+
+{% endif %}
+
+<h2 class="section-title">Stage Coverage</h2>
+<table class="stage-table">
+  <thead>
+    <tr>
+      <th>Stage</th>
+      <th>Covered</th>
+      <th>Eligible</th>
+      <th>Elig%</th>
+      <th>Total</th>
+      <th>Total%</th>
+      <th>Last Run</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% set ingest = stats.stages.ingest %}
+    <tr class="stage-row{% if ingest.last_run_at %} stage-row--done{% endif %}">
+      <td class="stage-name">ingest</td>
+      <td class="stage-files">—</td>
+      <td class="stage-files">—</td>
+      <td class="stage-files">—</td>
+      <td class="stage-files">{{ ingest.files_processed }}</td>
+      <td class="stage-files">—</td>
+      <td class="stage-date">{{ ingest.last_run_at or '—' }}</td>
+    </tr>
+    {% for stage_name in ['hash', 'describe', 'transcribe', 'retag'] %}
+    {% set st = stats.stages[stage_name] %}
+    <tr class="stage-row{% if st.covered > 0 %} stage-row--done{% endif %}">
+      <td class="stage-name">{{ stage_name }}</td>
+      <td class="stage-files">{{ st.covered }}</td>
+      <td class="stage-files">{{ st.eligible }}</td>
+      <td class="stage-files">
+        <span class="badge {% if st.eligible_pct >= 90 %}badge-done{% else %}badge-pending{% endif %}">
+          {{ "%.1f"|format(st.eligible_pct) }}%
+        </span>
+      </td>
+      <td class="stage-files">{{ st.total }}</td>
+      <td class="stage-files">{{ "%.1f"|format(st.total_pct) }}%</td>
+      <td class="stage-date">{{ st.last_run_at or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2 class="section-title">Vocabulary &amp; Aesthetic</h2>
+<p class="review-counts">
+  Vocabulary: <strong>{{ stats.vocabulary.terms }}</strong> terms
+  · <strong>{{ stats.vocabulary.with_synonyms }}</strong> with synonyms
+</p>
+<p class="review-counts">
+  Aesthetic: NIMA <strong>{{ stats.aesthetic.nima_scored }}</strong>
+  · CLIP <strong>{{ stats.aesthetic.clip_scored }}</strong>
+  · Combined <strong>{{ stats.aesthetic.combined_rank }}</strong>
+</p>
+
+<h2 class="section-title">Technical Quality</h2>
+<p class="review-counts">
+  Quality scored: <strong>{{ stats.quality.scored }}</strong> files
+</p>
+{% endblock %}

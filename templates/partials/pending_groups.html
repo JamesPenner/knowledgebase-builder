@@ -1,0 +1,85 @@
+<p class="review-counts">
+  <strong>{{ counts.total - counts.reviewed }}</strong> pending
+  · <strong>{{ counts.reviewed }}</strong> decided
+  · {{ counts.total }} total
+</p>
+{% if groups %}
+{% for group in groups %}
+<section class="token-group">
+  <h2 class="group-title">
+    {{ group.label }}
+    <span class="group-stats">{{ group.total_tokens }} tokens · {{ group.total_files }} files</span>
+  </h2>
+
+  {% for sub in group.subgroups %}
+  <div class="subgroup{% if sub.bulk_disabled %} subgroup--mixed{% endif %}">
+    <h3 class="subgroup-title">
+      {{ sub.label }} — {{ sub.token_count }} tokens
+      {% if sub.bulk_disabled %}
+      <span class="warning-badge">⚠ Mixed meanings — review individually</span>
+      {% endif %}
+    </h3>
+    <table class="token-table">
+      <tbody>
+      {% for token in sub.tokens %}
+      <tr class="token-row" id="token-row-{{ token.id }}">
+        <td class="token-name">
+          {{ token.token }}
+          {% if token.is_cross_source %}
+          <span class="star-badge" title="Also in metadata keywords">★</span>
+          {% endif %}
+        </td>
+        <td class="token-freq">{{ token.file_count }} files</td>
+        <td class="token-actions">
+          {% if sub.proposed_pattern and sub.proposed_action and sub.proposed_action != 'none' %}
+          <form class="action-form"
+                hx-post="/review/normalise/decide?kb={{ kb }}"
+                hx-swap="none">
+            <input type="hidden" name="item_id" value="{{ token.id }}">
+            <input type="hidden" name="action" value="capture">
+            <input type="hidden" name="pattern" value="{{ sub.proposed_pattern }}">
+            <input type="hidden" name="extract_as" value="{{ sub.proposed_extract_as or '' }}">
+            <input type="hidden" name="value_type" value="{{ sub.proposed_value_type or 'text' }}">
+            <input type="hidden" name="label" value="{{ sub.proposed_extract_as or '' }}">
+            <button type="submit" class="btn btn--capture">
+              Capture as {{ sub.proposed_extract_as or 'field' }}
+            </button>
+          </form>
+          {% endif %}
+
+          <form class="action-form"
+                hx-post="/review/normalise/decide?kb={{ kb }}"
+                hx-swap="none">
+            <input type="hidden" name="item_id" value="{{ token.id }}">
+            <input type="hidden" name="action" value="ignore">
+            <button type="submit" class="btn btn--ignore">Ignore</button>
+          </form>
+
+          <form class="action-form"
+                hx-post="/review/normalise/decide?kb={{ kb }}"
+                hx-swap="none">
+            <input type="hidden" name="item_id" value="{{ token.id }}">
+            <input type="hidden" name="action" value="correct">
+            <input type="text" name="canonical_term" placeholder="Correct to…" class="input-text" required>
+            <button type="submit" class="btn btn--correct">Correct</button>
+          </form>
+
+          <form class="action-form"
+                hx-post="/review/normalise/decide?kb={{ kb }}"
+                hx-swap="none">
+            <input type="hidden" name="item_id" value="{{ token.id }}">
+            <input type="hidden" name="action" value="reject">
+            <button type="submit" class="btn btn--reject">Reject</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+{% else %}
+<p class="empty-state">All tokens reviewed.</p>
+{% endif %}

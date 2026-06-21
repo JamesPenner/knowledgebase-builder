@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Health — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Health Check</h1>
+
+{% for group in groups %}
+<div class="health-group">
+  <div class="health-group-title">{{ group.label }}</div>
+  {% for chk in group.checks %}
+  {% if chk.ok %}
+    {% set dot = "ok" %}
+  {% elif chk.severity == "error" %}
+    {% set dot = "fail" %}
+  {% elif chk.severity == "warning" %}
+    {% set dot = "warn" %}
+  {% else %}
+    {% set dot = "info" %}
+  {% endif %}
+  <div class="health-row">
+    <span class="health-dot health-dot--{{ dot }}"></span>
+    <span class="health-label">{{ chk.label }}</span>
+    <span class="health-detail">{{ chk.detail }}</span>
+    {% if chk.fix and not chk.ok %}
+    <code class="health-fix">{{ chk.fix }}</code>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endblock %}

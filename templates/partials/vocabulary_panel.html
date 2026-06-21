@@ -1,0 +1,27 @@
+{% if vocabulary %}
+<table class="decisions-table">
+  <thead>
+    <tr>
+      <th>Term</th>
+      <th>Source</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in vocabulary %}
+  <tr class="decision-row">
+    <td class="decision-token">{{ t.term }}</td>
+    <td><span class="badge badge--{{ t.source }}">{{ t.source }}</span></td>
+    <td>
+      <form hx-delete="/review/suggest/decisions/{{ t.term }}?kb={{ kb }}"
+            hx-swap="none">
+        <button type="submit" class="btn btn--remove">Remove</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No vocabulary terms yet. Accept candidates to build vocabulary.</p>
+{% endif %}

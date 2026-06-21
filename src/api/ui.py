@@ -1,0 +1,659 @@
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+
+from src.api.deps import resolve_kb
+from src.pipeline.dag import DEPENDENCIES
+
+router = APIRouter()
+
+_TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+_HX_TRIGGER_BOTH = '{"pendingChanged": null, "decisionsChanged": null}'
+
+
+# ---------------------------------------------------------------------------
+# Page routes
+# ---------------------------------------------------------------------------
+
+@router.get("/", include_in_schema=False)
+def index():
+    from src.db.registry import list_kbs, open_registry
+    reg = open_registry(Path("."))
+    kbs = list_kbs(reg)
+    reg.close()
+    active = next((k for k in kbs if k["is_active"]), None) or (kbs[0] if kbs else None)
+    if active:
+        return RedirectResponse(f"/pipeline?kb={active['name']}")
+    return RedirectResponse("/pipeline")
+
+
+@router.get("/pipeline", include_in_schema=False)
+def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, _ = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_pipeline_checkpoints, open_corpus
+    conn = open_corpus(corpus_path)
+    checkpoint_rows = get_pipeline_checkpoints(conn)
+    conn.close()
+    checkpoints = {r["stage"]: dict(r) for r in checkpoint_rows}
+    return templates.TemplateResponse(request, "pipeline.html", {
+        "kb": kb_name,
+        "checkpoints": checkpoints,
+        "all_stages": list(DEPENDENCIES.keys()),
+    })
+
+
+@router.get("/review/normalise", include_in_schema=False)
+def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import (
+        get_analyse_token_counts,
+        get_grouped_analyse_tokens,
+        open_corpus,
+    )
+    from src.db.kb import get_decisions, open_kb
+    conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    groups = get_grouped_analyse_tokens(conn)
+    counts = get_analyse_token_counts(conn)
+    decisions = get_decisions(kb_conn)
+    conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "normalise_review.html", {
+        "kb": kb_name,
+        "groups": groups,
+        "counts": counts,
+        "decisions": decisions,
+    })
+
+
+@router.get("/corpus-stats", include_in_schema=False)
+def corpus_stats_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_corpus_stats, open_corpus
+    from src.db.kb import open_kb
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    try:
+        stats = get_corpus_stats(corpus_conn, kb_conn)
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
+    return templates.TemplateResponse(request, "corpus_stats.html", {
+        "kb": kb_name,
+        "stats": stats,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Partial routes (HTMX swap targets)
+# ---------------------------------------------------------------------------
+
+@router.get("/review/normalise/partials/pending", include_in_schema=False)
+def pending_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, _ = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import (
+        get_analyse_token_counts,
+        get_grouped_analyse_tokens,
+        open_corpus,
+    )
+    conn = open_corpus(corpus_path)
+    groups = get_grouped_analyse_tokens(conn)
+    counts = get_analyse_token_counts(conn)
+    conn.close()
+    return templates.TemplateResponse(request, "partials/pending_groups.html", {
+        "kb": kb_name,
+        "groups": groups,
+        "counts": counts,
+    })
+
+
+@router.get("/review/normalise/partials/decisions", include_in_schema=False)
+def decisions_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.kb import get_decisions, open_kb
+    kb_conn = open_kb(kb_path)
+    decisions = get_decisions(kb_conn)
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/decisions_panel.html", {
+        "kb": kb_name,
+        "decisions": decisions,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Form action handlers (HTMX form posts)
+# ---------------------------------------------------------------------------
+
+@router.post("/review/normalise/decide", include_in_schema=False)
+async def ui_normalise_decide(
+    item_id: int = Form(...),
+    action: str = Form(...),
+    extract_as: str = Form(""),
+    pattern: str = Form(""),
+    value_type: str = Form(""),
+    keep_token: str = Form("false"),
+    label: str = Form(""),
+    format_str: str = Form(""),
+    canonical_term: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus, set_token_decided
+    from src.db.kb import (
+        add_capture_rule,
+        add_correction,
+        add_reject_token,
+        add_to_stoplist,
+        bump_kb_version,
+        open_kb,
+    )
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    if action == "capture":
+        add_capture_rule(
+            kb_conn,
+            pattern=pattern,
+            label=label or extract_as,
+            extract_as=extract_as,
+            format_str=format_str,
+            value_type=value_type,
+            keep_token=keep_token.lower() == "true",
+        )
+        bump_kb_version(kb_conn, "capture_rule_added")
+    elif action == "ignore":
+        token_row = corpus_conn.execute(
+            "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
+        ).fetchone()
+        if token_row:
+            add_to_stoplist(kb_conn, token_row["token"])
+            bump_kb_version(kb_conn, "stoplist_updated")
+    elif action == "correct":
+        token_row = corpus_conn.execute(
+            "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
+        ).fetchone()
+        if token_row:
+            add_correction(
+                kb_conn,
+                raw_term=token_row["token"],
+                canonical_term=canonical_term,
+                correction_kind="typo",
+            )
+            bump_kb_version(kb_conn, "correction_added")
+    elif action == "reject":
+        token_row = corpus_conn.execute(
+            "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
+        ).fetchone()
+        if token_row:
+            add_reject_token(kb_conn, pattern=token_row["token"], is_regex=False, label=token_row["token"])
+            bump_kb_version(kb_conn, "reject_token_added")
+
+    set_token_decided(corpus_conn, item_id)
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.get("/review/suggest", include_in_schema=False)
+def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_candidate_counts, get_pending_candidates, has_level_b_clusters, open_corpus
+    from src.db.kb import get_vocabulary_terms, open_kb
+
+    conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    candidates = get_pending_candidates(conn, limit=100, offset=0)
+    counts = get_candidate_counts(conn)
+    terms = get_vocabulary_terms(kb_conn)
+    level_b_exists = has_level_b_clusters(conn)
+    conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "suggest_review.html", {
+        "kb": kb_name,
+        "candidates": [dict(c) for c in candidates],
+        "counts": counts,
+        "vocabulary": [dict(t) for t in terms],
+        "has_level_b_clusters": level_b_exists,
+    })
+
+
+@router.get("/review/suggest/partials/queue", include_in_schema=False)
+def suggest_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, _ = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_candidate_counts, get_pending_candidates, open_corpus
+
+    conn = open_corpus(corpus_path)
+    candidates = get_pending_candidates(conn, limit=100, offset=0)
+    counts = get_candidate_counts(conn)
+    conn.close()
+    return templates.TemplateResponse(request, "partials/candidates_queue.html", {
+        "kb": kb_name,
+        "candidates": [dict(c) for c in candidates],
+        "counts": counts,
+    })
+
+
+@router.get("/review/suggest/partials/vocabulary", include_in_schema=False)
+def suggest_vocabulary_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.kb import get_vocabulary_terms, open_kb
+
+    kb_conn = open_kb(kb_path)
+    terms = get_vocabulary_terms(kb_conn)
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_panel.html", {
+        "kb": kb_name,
+        "vocabulary": [dict(t) for t in terms],
+    })
+
+
+@router.post("/review/suggest/decide", include_in_schema=False)
+async def ui_suggest_decide(
+    candidate_id: int = Form(...),
+    action: str = Form(...),
+    corrected_to: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus, set_candidate_status
+    from src.db.kb import add_to_stoplist, add_vocabulary_term, bump_kb_version, open_kb
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    row = corpus_conn.execute(
+        "SELECT term FROM candidates WHERE id=?", (candidate_id,)
+    ).fetchone()
+
+    if row:
+        term = row["term"]
+        if action == "accept":
+            add_vocabulary_term(kb_conn, term)
+            bump_kb_version(kb_conn, "vocabulary_term_added")
+            set_candidate_status(corpus_conn, candidate_id, "accepted")
+        elif action == "ignore":
+            add_to_stoplist(kb_conn, term, source="domain")
+            set_candidate_status(corpus_conn, candidate_id, "rejected")
+        elif action == "correct" and corrected_to:
+            add_vocabulary_term(kb_conn, corrected_to)
+            bump_kb_version(kb_conn, "vocabulary_term_added")
+            set_candidate_status(corpus_conn, candidate_id, "corrected", corrected_to=corrected_to)
+        elif action == "reject":
+            set_candidate_status(corpus_conn, candidate_id, "rejected")
+
+    corpus_conn.commit()
+    kb_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.delete("/review/suggest/decisions/{term}", include_in_schema=False)
+def ui_delete_suggest_decision(
+    term: str,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus, set_candidate_status
+    from src.db.kb import delete_vocabulary_term, open_kb
+
+    corpus_path, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    delete_vocabulary_term(kb_conn, term)
+    kb_conn.commit()
+    kb_conn.close()
+
+    corpus_conn = open_corpus(corpus_path)
+    for row in corpus_conn.execute(
+        "SELECT id FROM candidates WHERE term=? AND status='accepted'", (term,)
+    ).fetchall():
+        set_candidate_status(corpus_conn, row["id"], "pending")
+    corpus_conn.commit()
+    corpus_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.get("/review/new-terms", include_in_schema=False)
+def new_terms_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_new_terms_candidates, open_corpus
+    from src.db.kb import get_vocabulary_terms, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    items = get_new_terms_candidates(corpus_conn, kb_conn)
+    decisions = [dict(t) for t in get_vocabulary_terms(kb_conn) if t["source"] == "new_terms"]
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "new_terms_review.html", {
+        "kb": kb_name,
+        "items": items,
+        "decisions": decisions,
+        "counts": {"pending": len(items), "accepted": len(decisions)},
+    })
+
+
+@router.get("/review/new-terms/partials/queue", include_in_schema=False)
+def new_terms_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_new_terms_candidates, open_corpus
+    from src.db.kb import open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    items = get_new_terms_candidates(corpus_conn, kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/new_terms_queue.html", {
+        "kb": kb_name,
+        "items": items,
+    })
+
+
+@router.get("/review/new-terms/partials/decisions", include_in_schema=False)
+def new_terms_decisions_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.kb import get_vocabulary_terms, open_kb
+
+    kb_conn = open_kb(kb_path)
+    decisions = [dict(t) for t in get_vocabulary_terms(kb_conn) if t["source"] == "new_terms"]
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/new_terms_decisions.html", {
+        "kb": kb_name,
+        "decisions": decisions,
+    })
+
+
+@router.post("/review/new-terms/decide", include_in_schema=False)
+async def ui_new_terms_decide(
+    term: str = Form(...),
+    action: str = Form(...),
+    corrected_to: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import merge_new_term_into_tags, open_corpus
+    from src.db.kb import (
+        add_correction,
+        add_reject_token,
+        add_to_stoplist,
+        add_vocabulary_term,
+        bump_kb_version,
+        open_kb,
+    )
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    if action == "accept":
+        add_vocabulary_term(kb_conn, term, source="new_terms")
+        bump_kb_version(kb_conn, "vocabulary_term_added")
+        kb_conn.commit()
+        merge_new_term_into_tags(corpus_conn, term)
+    elif action == "ignore":
+        add_to_stoplist(kb_conn, term, source="domain")
+        kb_conn.commit()
+    elif action == "reject":
+        add_reject_token(kb_conn, pattern=term, is_regex=False, label=term)
+        kb_conn.commit()
+    elif action == "correct" and corrected_to:
+        add_correction(kb_conn, raw_term=term, canonical_term=corrected_to)
+        add_vocabulary_term(kb_conn, corrected_to)
+        bump_kb_version(kb_conn, "vocabulary_term_added")
+        kb_conn.commit()
+
+    corpus_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.delete("/review/new-terms/decisions/{term}", include_in_schema=False)
+def ui_delete_new_terms_decision(
+    term: str,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import delete_vocabulary_term, open_kb
+
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    delete_vocabulary_term(kb_conn, term)
+    kb_conn.commit()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.delete("/review/normalise/decisions/{decision_id}", include_in_schema=False)
+def ui_delete_decision(
+    decision_id: str,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus, set_token_pending
+    from src.db.kb import delete_decision, get_decisions, open_kb
+
+    corpus_path, kb_path = paths
+
+    try:
+        table, row_id_str = decision_id.rsplit(":", 1)
+        row_id = int(row_id_str)
+    except ValueError:
+        return Response(content="", status_code=400)
+
+    kb_conn = open_kb(kb_path)
+    try:
+        delete_decision(kb_conn, table, row_id)
+    except ValueError:
+        kb_conn.close()
+        return Response(content="", status_code=400)
+    kb_conn.close()
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn2 = open_kb(kb_path)
+    remaining = {d["token"] for d in get_decisions(kb_conn2)}
+    kb_conn2.close()
+
+    for row in corpus_conn.execute(
+        "SELECT id, token FROM analyse_tokens WHERE status='decided'"
+    ).fetchall():
+        if row["token"] not in remaining:
+            set_token_pending(corpus_conn, row["id"])
+    corpus_conn.close()
+
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.get("/health", include_in_schema=False)
+def health_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.config import load_config
+    from src.db.corpus import open_corpus
+    from src.db.kb import open_kb
+    from src.db.registry import get_kb_path, open_registry
+    from src.health import run_checks
+
+    reg = open_registry(Path("."))
+    try:
+        kb_folder = get_kb_path(reg, kb_name)
+    except ValueError:
+        kb_folder = corpus_path.parent
+    reg.close()
+
+    config = load_config(Path("config.yaml"), kb_folder / "config.yaml")
+
+    corpus_conn = kb_conn = None
+    if corpus_path.exists() and kb_path.exists():
+        corpus_conn = open_corpus(corpus_path)
+        kb_conn = open_kb(kb_path)
+
+    checks = run_checks(config, corpus_conn, kb_conn, kb_folder)
+
+    if corpus_conn:
+        corpus_conn.close()
+    if kb_conn:
+        kb_conn.close()
+
+    groups = [
+        {"label": "Environment (Required)", "checks": [c for c in checks if c.severity == "error"]},
+        {"label": "Optional Tools", "checks": [c for c in checks if c.id in {"vision_model", "text_model", "spacy_model", "field_map"}]},
+        {"label": "KB State", "checks": [c for c in checks if c.id in {"sources", "corpus_files", "vocabulary", "focus", "unknown_fields"}]},
+        {"label": "KB Scaffold Files", "checks": [c for c in checks if c.id in {"library_yaml", "exiftool_config", "dates_yaml", "derive_rules_yaml", "taxonomy_yaml"}]},
+    ]
+
+    return templates.TemplateResponse(request, "health.html", {
+        "kb": kb_name,
+        "groups": groups,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Speaker cluster review UI
+# ---------------------------------------------------------------------------
+
+@router.get("/review/speakers", include_in_schema=False)
+def speaker_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import (
+        get_assigned_speaker_clusters,
+        get_pending_speaker_clusters,
+        open_corpus,
+    )
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    pending = get_pending_speaker_clusters(corpus_conn)
+    assigned = get_assigned_speaker_clusters(corpus_conn)
+    people = get_all_people(kb_conn)
+    people_map = {r["id"]: r["preferred_name"] for r in people}
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "speaker_review.html", {
+        "kb": kb_name,
+        "pending": [dict(r) for r in pending],
+        "assigned": [dict(r) for r in assigned],
+        "people": [dict(r) for r in people],
+        "people_map": people_map,
+        "counts": {"pending": len(pending), "assigned": len(assigned)},
+    })
+
+
+@router.get("/review/speakers/partials/queue", include_in_schema=False)
+def speaker_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_pending_speaker_clusters, open_corpus
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    pending = get_pending_speaker_clusters(corpus_conn)
+    people = get_all_people(kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/speaker_clusters_queue.html", {
+        "kb": kb_name,
+        "pending": [dict(r) for r in pending],
+        "people": [dict(r) for r in people],
+    })
+
+
+@router.get("/review/speakers/partials/decisions", include_in_schema=False)
+def speaker_decisions_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_assigned_speaker_clusters, open_corpus
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    assigned = get_assigned_speaker_clusters(corpus_conn)
+    people_map = {r["id"]: r["preferred_name"] for r in get_all_people(kb_conn)}
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/speaker_clusters_decisions.html", {
+        "kb": kb_name,
+        "assigned": [dict(r) for r in assigned],
+        "people_map": people_map,
+    })
+
+
+@router.post("/review/speakers/decide", include_in_schema=False)
+async def ui_speaker_decide(
+    cluster_id: int = Form(...),
+    action: str = Form(...),
+    person_id: str = Form(""),
+    new_name: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import (
+        assign_speaker_cluster,
+        get_voice_speaker_clusters,
+        open_corpus,
+    )
+    from src.db.kb import merge_voice_centroid, open_kb, upsert_person
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    pid: int | None = int(person_id) if person_id.strip() else None
+    label: str = ""
+
+    if action == "assign":
+        if pid is not None:
+            row = kb_conn.execute(
+                "SELECT preferred_name FROM people WHERE id = ?", (pid,)
+            ).fetchone()
+            label = row["preferred_name"] if row else ""
+        elif new_name.strip():
+            pid = upsert_person(kb_conn, new_name.strip())
+            label = new_name.strip()
+        else:
+            corpus_conn.close()
+            kb_conn.close()
+            return Response(content="person_id or new_name required", status_code=400)
+
+        clusters = {r["id"]: r for r in get_voice_speaker_clusters(corpus_conn)}
+        cluster = clusters.get(cluster_id)
+        if cluster is not None and cluster["centroid"] is not None:
+            merge_voice_centroid(kb_conn, pid, bytes(cluster["centroid"]), cluster["member_count"])
+        kb_conn.commit()
+
+        assign_speaker_cluster(corpus_conn, cluster_id, pid, label)
+        corpus_conn.commit()
+
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.delete("/review/speakers/decisions/{cluster_id}", include_in_schema=False)
+def ui_speaker_unassign(
+    cluster_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus, unassign_speaker_cluster
+
+    corpus_path, _ = paths
+    corpus_conn = open_corpus(corpus_path)
+    unassign_speaker_cluster(corpus_conn, cluster_id)
+    corpus_conn.commit()
+    corpus_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})

@@ -1,0 +1,42 @@
+# KB Builder — Global Configuration
+#
+# This file is the committed template. Copy it to config.yaml (gitignored) to
+# configure your local installation. Per-KB config lives in
+# knowledge-bases/<name>/config.yaml and overrides the keys marked "(override)".
+
+server:
+  host: 127.0.0.1    # bind address; use 0.0.0.0 to expose on LAN
+  port: 7700
+
+tools:
+  exiftool: tools/exiftool.exe   # relative to project root, or absolute path, or bare name for PATH lookup
+  ffmpeg:   tools/ffmpeg.exe
+  ffprobe:  tools/ffprobe.exe
+
+models:                            # (override) auto-discovered from tools/models/ if omitted
+  vision: ""                       # path to vision GGUF, or "" for auto-discovery
+  vision_gpu_layers: -1            # -1 = all layers on GPU; 0 = CPU only; N = partial offload
+  text:   ""
+  text_gpu_layers: -1
+  audio:  ""
+  audio_gpu_layers: -1
+
+workers:
+  default: 4                       # (override) thread pool size for CPU-parallel stages
+
+thresholds:                        # (override)
+  npmi_min_weight:   0.1           # minimum NPMI edge weight for Level B graph
+  suggest_min_files: 3             # minimum file count for a Level A candidate to surface
+  phash_threshold:   10            # perceptual hash distance threshold for near-duplicate detection
+  describe_frames:   9             # target frame count for video describe
+  scene_threshold:   0.4           # scene-change detection sensitivity (0–1; higher = less sensitive)
+  deep_seek:         true          # enable deep-seek multi-pass for video frame selection
+  deep_seek_max_iter: 2            # maximum deep-seek iterations
+
+write_back:                        # (override)
+  include_synonyms: false          # write synonym forms to file XMP in addition to canonical term
+  confirm_above:    200            # prompt before write-back when dirty-set exceeds this file count
+  fields:
+    - IPTC:Keywords
+    - XMP:Subject
+    - XMP:Description

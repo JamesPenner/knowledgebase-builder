@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Speaker Review — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Speaker Review</h1>
+<p class="review-counts">
+  <strong>{{ counts.pending }}</strong> pending
+  · <strong>{{ counts.assigned }}</strong> assigned
+</p>
+
+<div id="speaker-queue"
+     hx-get="/review/speakers/partials/queue?kb={{ kb }}"
+     hx-trigger="pendingChanged from:body"
+     hx-swap="innerHTML">
+  {% include "partials/speaker_clusters_queue.html" %}
+</div>
+
+<section class="decisions-section">
+  <h2 class="section-title">Assigned Speakers</h2>
+  <div id="speaker-decisions"
+       hx-get="/review/speakers/partials/decisions?kb={{ kb }}"
+       hx-trigger="decisionsChanged from:body"
+       hx-swap="innerHTML">
+    {% include "partials/speaker_clusters_decisions.html" %}
+  </div>
+</section>
+{% endblock %}

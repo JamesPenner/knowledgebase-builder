@@ -1,0 +1,37 @@
+# User config and runtime data
+config.yaml
+registry.db
+
+# KB data (databases, exports, per-KB configs)
+knowledge-bases/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Bundled tools — user-provided binaries, not tracked in source control
+# See requirements below for download links
+tools/
+
+# Test fixtures (real files for local spot-checking only)
+tests/fixtures/corpus/
+
+# Temporary artefacts
+tmp/
+
+# Editor
+.vscode/
+.idea/
+*.swp

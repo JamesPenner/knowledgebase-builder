@@ -1,0 +1,28 @@
+{% if not assigned %}
+<p class="empty-state">No speakers assigned yet.</p>
+{% else %}
+<table class="token-table">
+  <thead>
+    <tr>
+      <th>Cluster</th>
+      <th>Person</th>
+      <th>Segments</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in assigned %}
+    <tr>
+      <td>#{{ d.id }}</td>
+      <td>{{ people_map.get(d.person_id, d.label or "—") }}</td>
+      <td>{{ d.member_count }}</td>
+      <td>
+        <form hx-delete="/review/speakers/decisions/{{ d.id }}?kb={{ kb }}" hx-swap="none">
+          <button type="submit">Unassign</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

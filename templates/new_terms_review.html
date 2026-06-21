@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}New Terms Review — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">New Terms Review</h1>
+<p class="review-counts">
+  <strong>{{ counts.pending }}</strong> pending
+  · <strong>{{ counts.accepted }}</strong> accepted
+</p>
+
+<div id="new-terms-queue"
+     hx-get="/review/new-terms/partials/queue?kb={{ kb }}"
+     hx-trigger="pendingChanged from:body"
+     hx-swap="innerHTML">
+  {% include "partials/new_terms_queue.html" %}
+</div>
+
+<section class="decisions-section">
+  <h2 class="section-title">Accepted Terms</h2>
+  <div id="new-terms-decisions"
+       hx-get="/review/new-terms/partials/decisions?kb={{ kb }}"
+       hx-trigger="decisionsChanged from:body"
+       hx-swap="innerHTML">
+    {% include "partials/new_terms_decisions.html" %}
+  </div>
+</section>
+{% endblock %}
