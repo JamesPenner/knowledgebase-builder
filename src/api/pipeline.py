@@ -217,6 +217,71 @@ _make_stage_routes("retag", _retag_runner)
 _make_stage_routes("writeback", _writeback_runner)
 
 
+# Summarize has a custom `force` parameter — built manually instead of via _make_stage_routes
+
+class SummarizeRunRequest(BaseModel):
+    kb: str
+    force: bool = False
+
+
+@router.post("/summarize/run", tags=["pipeline"])
+def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    job_id = str(uuid.uuid4())
+    cancel = threading.Event()
+    _active_cancels["summarize"] = cancel
+
+    folder = _get_kb_folder(req.kb)
+    corpus_path = folder / "corpus.db"
+    kb_path = folder / "knowledge.db"
+
+    from pathlib import Path as P
+    from src.config import load_config
+    config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
+    progress = SseProgressReporter("summarize")
+
+    def _runner(corpus_path, kb_path, config, progress, cancel):
+        if req.force:
+            from src.db.corpus import open_corpus, reset_summarize_to_pending
+            conn = open_corpus(corpus_path)
+            reset_summarize_to_pending(conn)
+            conn.close()
+        from src.stages.summarize import run_summarize
+        run_summarize(corpus_path, kb_path, config, progress, cancel)
+
+    background_tasks.add_task(_runner, corpus_path, kb_path, config, progress, cancel)
+    return {"job_id": job_id, "status": "started"}
+
+
+@router.post("/summarize/cancel", tags=["pipeline"])
+def summarize_cancel() -> dict[str, str]:
+    ev = _active_cancels.get("summarize")
+    if ev:
+        ev.set()
+    return {"status": "cancelled"}
+
+
+@router.get("/summarize/status", tags=["pipeline"])
+def summarize_status() -> dict[str, Any]:
+    return get_progress("summarize") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
+
+
+@router.get("/summarize/stream", tags=["pipeline"])
+async def summarize_stream():
+    import asyncio
+    import json
+    from fastapi.responses import StreamingResponse
+
+    async def _gen():
+        state = get_progress("summarize") or {"status": "idle"}
+        yield f"data: {json.dumps(state)}\n\n"
+        while state.get("status") == "running":
+            await asyncio.sleep(0.5)
+            state = get_progress("summarize") or {}
+            yield f"data: {json.dumps(state)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
 # Suggest has a custom `levels` parameter — built manually instead of via _make_stage_routes
 
 class SuggestRunRequest(BaseModel):

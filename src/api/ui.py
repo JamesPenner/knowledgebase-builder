@@ -91,6 +91,20 @@ def corpus_stats_page(request: Request, paths: tuple[Path, Path] = Depends(resol
     })
 
 
+@router.get("/knowledge/locations", include_in_schema=False)
+def knowledge_locations_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, _ = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_gps_clusters, open_corpus
+    conn = open_corpus(corpus_path)
+    clusters = [dict(c) for c in get_gps_clusters(conn)]
+    conn.close()
+    return templates.TemplateResponse(request, "locations.html", {
+        "kb": kb_name,
+        "clusters": clusters,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Partial routes (HTMX swap targets)
 # ---------------------------------------------------------------------------
@@ -126,6 +140,106 @@ def decisions_partial(request: Request, paths: tuple[Path, Path] = Depends(resol
     return templates.TemplateResponse(request, "partials/decisions_panel.html", {
         "kb": kb_name,
         "decisions": decisions,
+    })
+
+
+@router.get("/knowledge/locations/registry", include_in_schema=False)
+def knowledge_registry_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    return templates.TemplateResponse(request, "location_registry.html", {"kb": kb_name})
+
+
+@router.get("/knowledge/locations/registry/partials/entry-list", include_in_schema=False)
+def registry_entry_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.kb import (
+        find_location_near_duplicates,
+        get_entity_location_tables,
+        get_entity_table_entries,
+        open_kb,
+    )
+    kb_conn = open_kb(kb_path)
+    raw_tables = get_entity_location_tables(kb_conn)
+    tables = []
+    for t in raw_tables:
+        entries = [dict(e) for e in get_entity_table_entries(kb_conn, t["name"])]
+        near_dups = find_location_near_duplicates(entries)
+        dup_ids = set()
+        dup_partners: dict[int, list[dict]] = {}
+        for d in near_dups:
+            dup_ids.add(d["a_id"])
+            dup_ids.add(d["b_id"])
+            dup_partners.setdefault(d["a_id"], []).append({"id": d["b_id"], "score": d["score"]})
+            dup_partners.setdefault(d["b_id"], []).append({"id": d["a_id"], "score": d["score"]})
+        tables.append({
+            "name": t["name"],
+            "match_type": t["match_type"],
+            "entries": entries,
+            "dup_ids": dup_ids,
+            "dup_partners": dup_partners,
+        })
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/registry_entry_list.html", {
+        "kb": kb_name,
+        "tables": tables,
+    })
+
+
+@router.get("/knowledge/locations/registry/partials/edit-form", include_in_schema=False)
+def registry_edit_form_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    table = request.query_params.get("table", "")
+    entry_id_str = request.query_params.get("id", "")
+    merge_with_str = request.query_params.get("merge_with", "")
+    from src.db.kb import get_entity_table_entries, open_kb
+    kb_conn = open_kb(kb_path)
+    try:
+        entry_id = int(entry_id_str) if entry_id_str else None
+        merge_with_id = int(merge_with_str) if merge_with_str else None
+        entry = None
+        merge_target = None
+        if entry_id is not None:
+            rows = get_entity_table_entries(kb_conn, table)
+            for r in rows:
+                if r["id"] == entry_id:
+                    entry = dict(r)
+                if merge_with_id is not None and r["id"] == merge_with_id:
+                    merge_target = dict(r)
+    except (ValueError, TypeError):
+        entry = None
+        merge_target = None
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/registry_edit_form.html", {
+        "kb": kb_name,
+        "table": table,
+        "entry": entry,
+        "merge_target": merge_target,
+    })
+
+
+@router.get("/knowledge/locations/partials/cluster-list", include_in_schema=False)
+def cluster_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_gps_clusters, open_corpus
+    from src.db.kb import get_entity_table_keys, open_kb
+    corpus_conn = open_corpus(corpus_path)
+    clusters = [dict(c) for c in get_gps_clusters(corpus_conn)]
+    corpus_conn.close()
+    kb_conn = open_kb(kb_path)
+    try:
+        promoted_labels = set(get_entity_table_keys(kb_conn, "gps_cluster_locations", "location"))
+    except Exception:
+        promoted_labels = set()
+    kb_conn.close()
+    for c in clusters:
+        c["promoted"] = c["label"] in promoted_labels
+    return templates.TemplateResponse(request, "partials/cluster_list.html", {
+        "kb": kb_name,
+        "clusters": clusters,
     })
 
 
@@ -526,32 +640,10 @@ def health_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)
 # ---------------------------------------------------------------------------
 
 @router.get("/review/speakers", include_in_schema=False)
-def speaker_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
-    corpus_path, kb_path = paths
-    kb_name = request.query_params.get("kb", "")
-    from src.db.corpus import (
-        get_assigned_speaker_clusters,
-        get_pending_speaker_clusters,
-        open_corpus,
-    )
-    from src.db.kb import get_all_people, open_kb
-
-    corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
-    pending = get_pending_speaker_clusters(corpus_conn)
-    assigned = get_assigned_speaker_clusters(corpus_conn)
-    people = get_all_people(kb_conn)
-    people_map = {r["id"]: r["preferred_name"] for r in people}
-    corpus_conn.close()
-    kb_conn.close()
-    return templates.TemplateResponse(request, "speaker_review.html", {
-        "kb": kb_name,
-        "pending": [dict(r) for r in pending],
-        "assigned": [dict(r) for r in assigned],
-        "people": [dict(r) for r in people],
-        "people_map": people_map,
-        "counts": {"pending": len(pending), "assigned": len(assigned)},
-    })
+def _speaker_review_301(request: Request):
+    kb = request.query_params.get("kb", "")
+    url = f"/knowledge/people/speakers?kb={kb}" if kb else "/knowledge/people/speakers"
+    return RedirectResponse(url=url, status_code=301)
 
 
 @router.get("/review/speakers/partials/queue", include_in_schema=False)
@@ -646,6 +738,529 @@ async def ui_speaker_decide(
 
 @router.delete("/review/speakers/decisions/{cluster_id}", include_in_schema=False)
 def ui_speaker_unassign(
+    cluster_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus, unassign_speaker_cluster
+
+    corpus_path, _ = paths
+    corpus_conn = open_corpus(corpus_path)
+    unassign_speaker_cluster(corpus_conn, cluster_id)
+    corpus_conn.commit()
+    corpus_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+_HX_TRIGGER_REGISTRY = '{"registryChanged": null}'
+
+
+@router.post("/knowledge/locations/registry/update", include_in_schema=False)
+async def ui_registry_update(
+    table: str = Form(...),
+    entry_id: int = Form(...),
+    location: str = Form(""),
+    latitude: str = Form(""),
+    longitude: str = Form(""),
+    threshold_m: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import open_kb, update_entity_table_entry
+    _, kb_path = paths
+    fields: dict = {}
+    if location:
+        fields["location"] = location
+    if latitude:
+        fields["latitude"] = latitude
+    if longitude:
+        fields["longitude"] = longitude
+    if threshold_m:
+        fields["threshold_m"] = threshold_m
+    if not fields:
+        return Response(content="<p style='color:#f87171'>No fields provided.</p>",
+                        media_type="text/html")
+    kb_conn = open_kb(kb_path)
+    try:
+        update_entity_table_entry(kb_conn, table, entry_id, fields)
+    except ValueError as exc:
+        kb_conn.close()
+        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+    kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Saved.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_REGISTRY},
+    )
+
+
+@router.post("/knowledge/locations/registry/delete", include_in_schema=False)
+async def ui_registry_delete(
+    table: str = Form(...),
+    entry_id: int = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import delete_entity_table_entry, open_kb
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    try:
+        delete_entity_table_entry(kb_conn, table, entry_id)
+    except ValueError as exc:
+        kb_conn.close()
+        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+    kb_conn.close()
+    return Response(
+        content="<p class='empty-state'>Entry deleted.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_REGISTRY},
+    )
+
+
+@router.post("/knowledge/locations/registry/merge", include_in_schema=False)
+async def ui_registry_merge(
+    table: str = Form(...),
+    keep_id: int = Form(...),
+    drop_id: int = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import merge_entity_table_entries, open_kb
+    _, kb_path = paths
+    if keep_id == drop_id:
+        return Response(content="<p style='color:#f87171'>keep_id and drop_id must differ.</p>",
+                        media_type="text/html")
+    kb_conn = open_kb(kb_path)
+    try:
+        merge_entity_table_entries(kb_conn, table, keep_id, drop_id)
+    except ValueError as exc:
+        kb_conn.close()
+        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+    kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Merged.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_REGISTRY},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Face cluster review (KB.Q3)
+# ---------------------------------------------------------------------------
+
+@router.get("/knowledge/people/faces", include_in_schema=False)
+def face_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import (
+        get_assigned_face_clusters,
+        get_pending_face_clusters,
+        open_corpus,
+    )
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    pending = get_pending_face_clusters(corpus_conn)
+    assigned = get_assigned_face_clusters(corpus_conn)
+    people = get_all_people(kb_conn)
+    people_map = {r["id"]: r["preferred_name"] for r in people}
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "face_review.html", {
+        "kb": kb_name,
+        "pending": [dict(r) for r in pending],
+        "assigned": [dict(r) for r in assigned],
+        "people": [dict(r) for r in people],
+        "people_map": people_map,
+        "counts": {"pending": len(pending), "assigned": len(assigned)},
+    })
+
+
+@router.get("/knowledge/people/faces/partials/queue", include_in_schema=False)
+def face_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_pending_face_clusters, open_corpus
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    pending = get_pending_face_clusters(corpus_conn)
+    people = get_all_people(kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/face_clusters_queue.html", {
+        "kb": kb_name,
+        "pending": [dict(r) for r in pending],
+        "people": [dict(r) for r in people],
+    })
+
+
+@router.get("/knowledge/people/faces/partials/assigned", include_in_schema=False)
+def face_assigned_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_assigned_face_clusters, open_corpus
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    assigned = get_assigned_face_clusters(corpus_conn)
+    people_map = {r["id"]: r["preferred_name"] for r in get_all_people(kb_conn)}
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/face_clusters_assigned.html", {
+        "kb": kb_name,
+        "assigned": [dict(r) for r in assigned],
+        "people_map": people_map,
+    })
+
+
+@router.post("/review/faces/decide", include_in_schema=False)
+async def ui_face_decide(
+    cluster_id: int = Form(...),
+    action: str = Form(...),
+    person_id: str = Form(""),
+    new_name: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import assign_face_cluster, open_corpus, unassign_face_cluster
+    from src.db.kb import open_kb, upsert_person
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    if action == "assign":
+        pid: int | None = int(person_id) if person_id.strip() else None
+        label: str = ""
+
+        if pid is not None:
+            row = kb_conn.execute(
+                "SELECT preferred_name FROM people WHERE id = ?", (pid,)
+            ).fetchone()
+            label = row["preferred_name"] if row else ""
+        elif new_name.strip():
+            pid = upsert_person(kb_conn, new_name.strip())
+            label = new_name.strip()
+        else:
+            corpus_conn.close()
+            kb_conn.close()
+            return Response(content="person_id or new_name required", status_code=400)
+
+        assign_face_cluster(corpus_conn, cluster_id, pid, label)
+        corpus_conn.commit()
+
+    elif action == "unassign":
+        unassign_face_cluster(corpus_conn, cluster_id)
+        corpus_conn.commit()
+
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+# ---------------------------------------------------------------------------
+# People registry (KB.Q4)
+# ---------------------------------------------------------------------------
+
+@router.get("/knowledge/people", include_in_schema=False)
+def people_registry_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import open_corpus
+    from src.db.kb import get_people_with_cluster_counts, open_kb
+
+    kb_conn = open_kb(kb_path)
+    corpus_conn = open_corpus(corpus_path)
+    people = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    kb_conn.close()
+    corpus_conn.close()
+    return templates.TemplateResponse(request, "people_registry.html", {
+        "kb": kb_name,
+        "people": people,
+    })
+
+
+@router.get("/knowledge/people/partials/person-list", include_in_schema=False)
+def people_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import open_corpus
+    from src.db.kb import get_people_with_cluster_counts, open_kb
+
+    kb_conn = open_kb(kb_path)
+    corpus_conn = open_corpus(corpus_path)
+    people = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    kb_conn.close()
+    corpus_conn.close()
+    return templates.TemplateResponse(request, "partials/person_list.html", {
+        "kb": kb_name,
+        "people": people,
+    })
+
+
+@router.get("/knowledge/people/partials/person-detail/{person_id}", include_in_schema=False)
+def person_detail_partial(
+    request: Request,
+    person_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import open_corpus
+    from src.db.kb import get_all_people, get_people_with_cluster_counts, open_kb
+
+    kb_conn = open_kb(kb_path)
+    corpus_conn = open_corpus(corpus_path)
+    people_with_counts = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    all_people = get_all_people(kb_conn)
+    kb_conn.close()
+    corpus_conn.close()
+    person = next((p for p in people_with_counts if p["id"] == person_id), None)
+    others = [dict(p) for p in all_people if p["id"] != person_id]
+    return templates.TemplateResponse(request, "partials/person_detail.html", {
+        "kb": kb_name,
+        "person": person,
+        "others": others,
+    })
+
+
+_HX_TRIGGER_PEOPLE = '{"peopleChanged": null}'
+
+
+@router.post("/knowledge/people/add", include_in_schema=False)
+async def ui_person_add(
+    preferred_name: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import open_kb
+    name = preferred_name.strip()
+    if not name:
+        return Response(content="<p style='color:#f87171'>Name is required.</p>", media_type="text/html")
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    existing = kb_conn.execute("SELECT id FROM people WHERE preferred_name = ?", (name,)).fetchone()
+    if existing:
+        kb_conn.close()
+        return Response(content="<p style='color:#f87171'>Name already exists.</p>", media_type="text/html")
+    kb_conn.execute("INSERT INTO people (preferred_name) VALUES (?)", (name,))
+    kb_conn.commit()
+    kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Added.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
+    )
+
+
+@router.post("/knowledge/people/{person_id}/edit", include_in_schema=False)
+async def ui_person_edit(
+    person_id: int,
+    preferred_name: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import open_kb
+    name = preferred_name.strip()
+    if not name:
+        return Response(content="<p style='color:#f87171'>Name is required.</p>", media_type="text/html")
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    row = kb_conn.execute("SELECT id FROM people WHERE id = ?", (person_id,)).fetchone()
+    if row is None:
+        kb_conn.close()
+        return Response(content="<p style='color:#f87171'>Person not found.</p>", media_type="text/html")
+    kb_conn.execute("UPDATE people SET preferred_name = ? WHERE id = ?", (name, person_id))
+    kb_conn.commit()
+    kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Saved.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
+    )
+
+
+@router.post("/knowledge/people/{person_id}/delete", include_in_schema=False)
+async def ui_person_delete(
+    person_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    corpus_path, kb_path = paths
+    from src.db.corpus import open_corpus
+    from src.db.kb import delete_person, open_kb
+    kb_conn = open_kb(kb_path)
+    corpus_conn = open_corpus(corpus_path)
+    try:
+        delete_person(kb_conn, corpus_conn, person_id)
+    except KeyError:
+        kb_conn.close()
+        corpus_conn.close()
+        return Response(content="<p style='color:#f87171'>Person not found.</p>", media_type="text/html")
+    except ValueError as exc:
+        kb_conn.close()
+        corpus_conn.close()
+        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+    kb_conn.close()
+    corpus_conn.close()
+    return Response(
+        content="<p class='empty-state'>Deleted.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
+    )
+
+
+@router.post("/knowledge/people/{person_id}/merge", include_in_schema=False)
+async def ui_person_merge(
+    person_id: int,
+    merge_from_id: int = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    corpus_path, kb_path = paths
+    from src.db.corpus import open_corpus
+    from src.db.kb import merge_people, open_kb
+    kb_conn = open_kb(kb_path)
+    corpus_conn = open_corpus(corpus_path)
+    try:
+        merge_people(kb_conn, corpus_conn, person_id, merge_from_id)
+    except ValueError as exc:
+        kb_conn.close()
+        corpus_conn.close()
+        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+    except KeyError as exc:
+        kb_conn.close()
+        corpus_conn.close()
+        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+    kb_conn.close()
+    corpus_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Merged.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Speaker review at new Knowledge section URL (KB.Q4)
+# ---------------------------------------------------------------------------
+
+@router.get("/knowledge/people/speakers", include_in_schema=False)
+def speaker_review_page_new(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import (
+        get_assigned_speaker_clusters,
+        get_pending_speaker_clusters,
+        open_corpus,
+    )
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    pending = get_pending_speaker_clusters(corpus_conn)
+    assigned = get_assigned_speaker_clusters(corpus_conn)
+    people = get_all_people(kb_conn)
+    people_map = {r["id"]: r["preferred_name"] for r in people}
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "speaker_review.html", {
+        "kb": kb_name,
+        "pending": [dict(r) for r in pending],
+        "assigned": [dict(r) for r in assigned],
+        "people": [dict(r) for r in people],
+        "people_map": people_map,
+        "counts": {"pending": len(pending), "assigned": len(assigned)},
+    })
+
+
+@router.get("/knowledge/people/speakers/partials/queue", include_in_schema=False)
+def speaker_queue_partial_new(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_pending_speaker_clusters, open_corpus
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    pending = get_pending_speaker_clusters(corpus_conn)
+    people = get_all_people(kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/speaker_clusters_queue.html", {
+        "kb": kb_name,
+        "pending": [dict(r) for r in pending],
+        "people": [dict(r) for r in people],
+    })
+
+
+@router.get("/knowledge/people/speakers/partials/decisions", include_in_schema=False)
+def speaker_decisions_partial_new(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_assigned_speaker_clusters, open_corpus
+    from src.db.kb import get_all_people, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    assigned = get_assigned_speaker_clusters(corpus_conn)
+    people_map = {r["id"]: r["preferred_name"] for r in get_all_people(kb_conn)}
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/speaker_clusters_decisions.html", {
+        "kb": kb_name,
+        "assigned": [dict(r) for r in assigned],
+        "people_map": people_map,
+    })
+
+
+@router.post("/knowledge/people/speakers/decide", include_in_schema=False)
+async def ui_speaker_decide_new(
+    cluster_id: int = Form(...),
+    action: str = Form(...),
+    person_id: str = Form(""),
+    new_name: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import (
+        assign_speaker_cluster,
+        get_voice_speaker_clusters,
+        open_corpus,
+    )
+    from src.db.kb import merge_voice_centroid, open_kb, upsert_person
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    pid: int | None = int(person_id) if person_id.strip() else None
+    label: str = ""
+
+    if action == "assign":
+        if pid is not None:
+            row = kb_conn.execute(
+                "SELECT preferred_name FROM people WHERE id = ?", (pid,)
+            ).fetchone()
+            label = row["preferred_name"] if row else ""
+        elif new_name.strip():
+            pid = upsert_person(kb_conn, new_name.strip())
+            label = new_name.strip()
+        else:
+            corpus_conn.close()
+            kb_conn.close()
+            return Response(content="person_id or new_name required", status_code=400)
+
+        clusters = {r["id"]: r for r in get_voice_speaker_clusters(corpus_conn)}
+        cluster = clusters.get(cluster_id)
+        if cluster is not None and cluster["centroid"] is not None:
+            merge_voice_centroid(kb_conn, pid, bytes(cluster["centroid"]), cluster["member_count"])
+        kb_conn.commit()
+
+        assign_speaker_cluster(corpus_conn, cluster_id, pid, label)
+        corpus_conn.commit()
+
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.delete("/knowledge/people/speakers/decisions/{cluster_id}", include_in_schema=False)
+def ui_speaker_unassign_new(
     cluster_id: int,
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:

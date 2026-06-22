@@ -57,6 +57,10 @@ class Config:
     # write-back (face)
     unknown_face_clusters: bool = False
     export_biometric: bool = False
+    # summarize (Stage 3c)
+    summarize_target_words: int = 150
+    summarize_max_transcript_tokens: int = 18000
+    summarize_output_field: str = ""
     # per-KB only
     sources: tuple = ()
     focus: str = ""
@@ -134,6 +138,11 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
     fields["gps_cluster_eps_km"] = _typed(thresholds.get("gps_cluster_eps_km", defaults.gps_cluster_eps_km), float, defaults.gps_cluster_eps_km, "thresholds.gps_cluster_eps_km")
     fields["gps_cluster_min_samples"] = _typed(thresholds.get("gps_cluster_min_samples", defaults.gps_cluster_min_samples), int, defaults.gps_cluster_min_samples, "thresholds.gps_cluster_min_samples")
 
+    summarize = raw.get("summarize", {}) or {}
+    fields["summarize_target_words"] = _typed(summarize.get("target_words", defaults.summarize_target_words), int, defaults.summarize_target_words, "summarize.target_words")
+    fields["summarize_max_transcript_tokens"] = _typed(summarize.get("max_transcript_tokens", defaults.summarize_max_transcript_tokens), int, defaults.summarize_max_transcript_tokens, "summarize.max_transcript_tokens")
+    fields["summarize_output_field"] = _typed(summarize.get("output_field", defaults.summarize_output_field), str, defaults.summarize_output_field, "summarize.output_field")
+
     write_back = raw.get("write_back", {}) or {}
     fields["include_synonyms"] = _typed(write_back.get("include_synonyms", defaults.include_synonyms), bool, defaults.include_synonyms, "write_back.include_synonyms")
     fields["confirm_above"] = _typed(write_back.get("confirm_above", defaults.confirm_above), int, defaults.confirm_above, "write_back.confirm_above")
@@ -205,6 +214,14 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
     for yaml_key, (field_name, expected) in _threshold_map.items():
         if yaml_key in thresholds:
             fields[field_name] = _typed(thresholds[yaml_key], expected, _fallback(field_name), f"thresholds.{yaml_key}")
+
+    summarize = raw.get("summarize", {}) or {}
+    if "target_words" in summarize:
+        fields["summarize_target_words"] = _typed(summarize["target_words"], int, _fallback("summarize_target_words"), "summarize.target_words")
+    if "max_transcript_tokens" in summarize:
+        fields["summarize_max_transcript_tokens"] = _typed(summarize["max_transcript_tokens"], int, _fallback("summarize_max_transcript_tokens"), "summarize.max_transcript_tokens")
+    if "output_field" in summarize:
+        fields["summarize_output_field"] = _typed(summarize["output_field"], str, _fallback("summarize_output_field"), "summarize.output_field")
 
     write_back = raw.get("write_back", {}) or {}
     if "include_synonyms" in write_back:

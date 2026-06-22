@@ -1,0 +1,50 @@
+{% if not person %}
+<p class="empty-state">Person not found.</p>
+{% else %}
+<div style="border:1px solid #334155;border-radius:6px;padding:1rem;background:#1e293b">
+  <h3 style="margin:0 0 .75rem;font-size:1rem;font-weight:600">Edit Person</h3>
+  <p style="color:#64748b;font-size:.8rem;margin-bottom:.75rem">
+    id {{ person.id }} · {{ person.voice_cluster_count }} voice cluster(s) · {{ person.face_cluster_count }} face cluster(s)
+  </p>
+
+  <form hx-post="/knowledge/people/{{ person.id }}/edit?kb={{ kb }}"
+        hx-target="#person-detail-panel"
+        hx-swap="innerHTML"
+        style="display:flex;flex-direction:column;gap:.6rem">
+    <label style="font-size:.85rem;color:#94a3b8">Preferred name
+      <input type="text" name="preferred_name" value="{{ person.preferred_name }}" required
+             style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+    </label>
+    <button type="submit" class="btn-primary">Save</button>
+  </form>
+
+  <form hx-post="/knowledge/people/{{ person.id }}/delete?kb={{ kb }}"
+        hx-target="#person-detail-panel"
+        hx-swap="innerHTML"
+        hx-confirm="Delete {{ person.preferred_name }}?"
+        style="margin-top:.5rem">
+    <button type="submit" class="btn btn--remove" style="width:100%">Delete</button>
+  </form>
+
+  {% if others %}
+  <div style="margin-top:1.25rem;border-top:1px solid #334155;padding-top:.75rem">
+    <h4 style="margin:0 0 .5rem;font-size:.9rem;font-weight:600;color:#f59e0b">Merge into this person</h4>
+    <p style="font-size:.8rem;color:#94a3b8;margin-bottom:.6rem">
+      Keep <strong style="color:#e2e8f0">{{ person.preferred_name }}</strong>, discard the selected person and reassign their clusters here.
+    </p>
+    <form hx-post="/knowledge/people/{{ person.id }}/merge?kb={{ kb }}"
+          hx-target="#person-detail-panel"
+          hx-swap="innerHTML">
+      <select name="merge_from_id" required
+              style="width:100%;margin-bottom:.5rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+        <option value="">Select person to merge in…</option>
+        {% for other in others %}
+        <option value="{{ other.id }}">{{ other.preferred_name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn--correct" style="width:100%">Merge</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endif %}

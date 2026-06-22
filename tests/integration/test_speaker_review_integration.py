@@ -340,7 +340,7 @@ class TestSpeakerReviewUIRoutes:
 
     def test_nav_link_present_in_base(self):
         base = Path("D:/Python_Environments/kb-builder/templates/base.html").read_text()
-        assert "/review/speakers" in base
+        assert "/knowledge/people/speakers" in base
 
     def test_ui_decide_assign_existing(self, tmp_path):
         corpus_conn, kb_conn, corpus_path, kb_path = _setup(tmp_path)

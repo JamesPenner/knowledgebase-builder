@@ -267,6 +267,15 @@ transcript_segments            ← optional; 1:N per transcription; segment-leve
   text TEXT,
   avg_logprob REAL             -- Whisper's per-segment confidence proxy; low = uncertain
 
+file_summaries                 ← produced by Summarize (Stage 3c); 1:1 per eligible file
+  file_id INTEGER PRIMARY KEY,
+  summary_text TEXT,           -- LLM-synthesised summary combining describe + transcribe outputs
+  model TEXT,                  -- text model used
+  prompt_version TEXT,         -- bump on prompt template changes to enable --force detection
+  processed_at DATETIME,
+  status TEXT                  -- 'pending' | 'done' | 'failed' | 'skipped'
+                               --   skipped = no describe or transcribe output exists for this file
+
 retag_output                   ← produced by Retag (Pass 2); 1:1 per file
   file_id INTEGER PRIMARY KEY,
   tags_json TEXT,
@@ -456,13 +465,15 @@ A failed migration rolls back cleanly and surfaces a clear error rather than lea
                         (gated on Hash to avoid GPU work on duplicates)
 [3b]   TRANSCRIBE       Whisper → transcriptions + transcript_segments
                         (gated on Hash; parallel with Describe; different model, no conflict)
+[3c]   SUMMARIZE        LLM synthesis of describe + transcribe outputs → file_summaries
+                        (runs after 3a and/or 3b complete; skips files where neither has produced output)
          ↓
 [4]    SUGGEST          KB-building pass: Level A (spaCy) → Level B (NPMI graph) → Level C (LLM cluster label)
                         → candidates table; primary output is vocabulary terms, synonym relationships,
                           and taxonomy hints — not per-file keyword assignments (that is Stage 5 Retag).
                         Reads file_metadata_fields + file_metadata_keywords + descriptions +
-                        transcriptions for text pool (transcriptions omitted per-file if Transcribe
-                        has not run for that file; Level A continues without error).
+                        transcriptions + file_summaries for text pool (each source omitted per-file if
+                        the upstream stage has not run for that file; Level A continues without error).
                         Level B/C candidates have file_id = NULL; they are corpus-level observations.
          ↓
      ★  SUGGESTION REVIEW (human touchpoint)
@@ -500,6 +511,37 @@ enrich aesthetic --kb <name> --writeback  # score + write XMP:Rating to files
 ```
 
 Scores are stored in `file_aesthetic` (one row per model per file; `model_name` values: `nima_mobilenet`, `clip_vit_b32`, `combined_rank`). For XMP:Rating write-back, `combined_rank` maps to 1–5 stars via `max(1, ceil(combined_rank_score × 5))` (clamping ensures 0.0 maps to 1, not 0, which is outside the valid XMP:Rating range).
+
+**Stage capability matrix** — which stages apply to which file types:
+
+| Stage | Image | Video | Audio | Notes |
+|---|:---:|:---:|:---:|---|
+| ingest | ✓ | ✓ | ✓ | All file types |
+| analyse | ✓ | ✓ | ✓ | Operates on filenames/paths only |
+| normalize | ✓ | ✓ | ✓ | Text rules; file content not read |
+| extract_meta | ✓ | ✓ | ✓ | ExifTool supports all formats |
+| extract_fields | ✓ | ✓ | ✓ | Parses extracted metadata |
+| entity_match | ✓ | ✓ | ✓ | Text + GPS matching on metadata |
+| classify | ✓ | ✓ | ✓ | Rule-based; uses captured fields |
+| hash | ✓ | ✓ | ✓ | SHA-256 all; pHash/area_hash images only |
+| describe | ✓ | ✓ | — | Vision model; no visual content in audio |
+| transcribe | — | ✓ | ✓ | Speech-to-text; images have no audio |
+| diarize | — | ✓ | ✓ | Speaker separation; requires audio stream |
+| voice | — | ✓ | ✓ | Speaker fingerprinting; requires audio |
+| face | ✓ | ✓ | — | Face detection; requires visual content |
+| aesthetic | ✓ | ✓ | — | NIMA/CLIP scoring; requires visual content |
+| summarize | ✓* | ✓ | ✓* | LLM summary from available text; skips files with no describe or transcribe output |
+| suggest | ✓ | ✓ | ✓ | Corpus-level; pools whatever text exists per file |
+| retag | ✓ | ✓ | ✓ | LLM re-tags against vocabulary |
+| writeback | ✓ | ✓ | ✓ | ExifTool writes to all supported formats |
+| export | ✓ | ✓ | ✓ | CSV/bundle output regardless of file type |
+
+`*` Summarize runs on images if describe output exists; runs on audio if transcribe output exists. Files with neither are skipped. The pipeline UI should inform the user that summarize produces the best result when all applicable upstream stages (describe for images/video, transcribe for video/audio) have completed.
+
+The matrix is the authoritative reference for:
+- Stage implementations deciding which files to process (`WHERE file_type IN (...)` in stage queries)
+- The pipeline UI deciding which stage run buttons to enable or grey out per corpus composition
+- The health checker flagging coverage gaps (e.g. "corpus contains audio files but transcribe has never run")
 
 ---
 
@@ -887,6 +929,139 @@ They are **sequential refinements**: Normalization runs first → cleaner text �
 
 ---
 
+## Summarize Stage (3c)
+
+Stage 3c takes the outputs of Describe (3a) and Transcribe (3b) and synthesises them into a single, coherent per-file summary using a text LLM. It is optional but recommended for corpora that contain video (which has both visual and audio content) and for any corpus where the final metadata should reflect domain context and vocabulary rather than raw model output.
+
+Files are skipped (`status = 'skipped'`) if neither a description nor a transcript exists. The stage does not block if only one is present — it summarises whatever is available.
+
+### Prerequisites
+
+- Stage 3a (Describe) must have completed for image and video files before Summarize can produce a meaningful result for those files. Summarize will process audio-only files without it.
+- Stage 3b (Transcribe) must have completed for audio and video files before Summarize can incorporate transcript content. Summarize will process image-only files without it.
+- Running Summarize before both 3a and 3b have completed is permitted; the stage simply works with whatever is available. Re-running with `--force` after both complete will produce richer summaries.
+
+### Configuration (`library.yaml`)
+
+```yaml
+summarize:
+  output_field: "Caption"        # CanonicalName from field_map.csv; determines which XMP tag
+                                 # write-back targets. Defaults to the KB's primary description field.
+  target_words: 150              # target summary length; the LLM is instructed but not hard-capped
+  max_transcript_tokens: 18000   # token threshold above which transcript is chunked before synthesis
+                                 # (hierarchical path); set by 'enrich calibrate' for the current hardware
+  corpus_context: >              # free-text description of the collection's subject domain;
+    British Columbia              # injected as system context into every summary prompt.
+    transportation infrastructure # also used by Describe (3a) when set here rather than in describe config.
+```
+
+`output_field` maps to the same CanonicalName → ExifTool tag lookup used by write-back. When set, Stage 6 (Write-back) reads `file_summaries.summary_text` and writes it to the specified field alongside the vocabulary keyword tags. If `output_field` is omitted, summaries are stored in `file_summaries` and available to Suggest but are not written to file metadata.
+
+`corpus_context` is shared with Describe: if set under `summarize:` it is also injected into Describe prompts. This avoids duplicating the same string in two config keys.
+
+### Inputs Assembled Per File
+
+Before calling the LLM, the stage assembles a context block for each file:
+
+| Input | Source | Included when |
+|---|---|---|
+| Normalized description | `descriptions.description_normalized` | Describe has run for this file |
+| Attributed transcript | `transcript_segments` with `speaker_label` | Transcribe + Diarize have run |
+| Flat transcript | `transcriptions.transcript_text` | Transcribe has run; no diarization |
+| Derived classification tags | `file_derived_tags` | Classify has run |
+| Entity matches | `file_entity_matches` | Entity Match has run |
+| Normalized filename | `files.normalized_filename` | Always available after Analyse |
+| Captured date / location | `file_metadata_fields` | Extract Fields has run |
+| Accepted vocabulary terms | `vocabulary` in knowledge.db | Included as soft guidance when non-empty |
+
+When diarized transcript segments are available (speaker labels from KB.P19 attribution), the stage reconstructs an attributed transcript string ("Speaker A: [said X]. Speaker B: [said Y].") rather than using the flat `transcript_text`. This produces richer summaries for interviews and multi-person recordings.
+
+### Prompt Structure
+
+The prompt varies by the inputs available. All cases share the same system prefix and context block; the task instruction differs.
+
+**System prefix (all cases):**
+```
+You are summarizing a media file from a collection. {corpus_context if set}
+```
+
+**Context block (assembled from available inputs):**
+```
+File: {normalized_filename}
+Date: {captured date, if available}
+Location: {entity match, if available}
+People: {assigned face/voice labels, if available}
+Tags: {derived classification tags, if any}
+Relevant collection vocabulary (use where genuinely present): {accepted terms, if any}
+```
+
+**Case 1 — description only (images; videos where transcribe has not run):**
+```
+Visual description:
+{description_normalized}
+
+Write a {target_words}-word summary of this file for use as searchable metadata.
+Focus on what is shown, drawing on the file context above.
+Use precise terminology relevant to the collection where it applies.
+```
+
+**Case 2 — transcript only (audio files; video where describe has not run):**
+```
+Audio transcript:
+{transcript_text or attributed segments}
+
+Write a {target_words}-word summary of this file for use as searchable metadata.
+Focus on what is said, who is speaking (if known), and the subject of the recording.
+Use precise terminology relevant to the collection where it applies.
+```
+
+**Case 3 — description and transcript (video with both stages complete):**
+```
+Visual description:
+{description_normalized}
+
+Audio transcript:
+{transcript_text or attributed segments}
+
+Write a {target_words}-word summary that integrates both the visual and audio content.
+Where they tell complementary parts of the story, combine them into a coherent account.
+Where they are independent or in tension, note both.
+Use precise terminology relevant to the collection where it applies.
+```
+
+### Context Window Strategy
+
+**Single-window (default):** The full assembled context is sent in one prompt. This is appropriate for the large majority of archival files — typical transcripts (meetings, interviews up to ~1 hour) are well within modern context windows even after the context block and prompt overhead are added.
+
+**Hierarchical path (long transcripts):** When the transcript alone exceeds `max_transcript_tokens`, the stage switches to a two-pass approach:
+1. The transcript is split into overlapping chunks (10% overlap to preserve sentence context across boundaries).
+2. Each chunk is summarized independently with a condensed prompt ("Summarize this segment in 2–3 sentences.").
+3. The chunk summaries are concatenated and fed into the standard Case 2 or Case 3 prompt as the transcript input.
+
+The `max_transcript_tokens` threshold is a quality setting, not a capability limit. Even when the model's context window could technically hold the full transcript, very long single-window inputs produce lower-quality summaries for most models. `enrich calibrate` derives a recommended value based on the configured model's context window and available VRAM; the default (18,000 tokens) is conservative enough to work safely on a 32K-context model.
+
+### Vocabulary Injection
+
+Accepted vocabulary terms from `knowledge.db` are injected as soft guidance, not hard constraints. The prompt instructs the LLM to "use where genuinely present" — not to force terms in where they do not apply. This avoids hallucination pressure while still steering output toward established domain terminology.
+
+Vocabulary is only injected if Suggest has run and terms have been accepted. On a first run (before any Suggestion Review has taken place), the vocabulary list will be empty and the injection is simply omitted. Re-running Summarize with `--force` after completing a Suggestion Review cycle will produce domain-enriched summaries.
+
+### Write-Back Integration
+
+When `output_field` is set in `library.yaml`, Stage 6 (Write-back) picks up `file_summaries.summary_text` and writes it to the resolved ExifTool tag alongside vocabulary keyword tags. The write-back dirty-set logic marks a file dirty when `file_summaries.summary_text` changes, exactly as it does for `retag_output`.
+
+If `output_field` resolves to the same tag as `descriptions` (e.g., both targeting `XMP:Description`), the summary takes precedence — it is the final synthesised output, not the raw vision model output.
+
+### Export
+
+`enrich export` includes `summaries.csv` in the export bundle when `file_summaries` contains at least one `done` row:
+
+```
+summaries.csv  — columns: path, summary_text, model, processed_at
+```
+
+---
+
 ## Three Shared Resources (in knowledge.db)
 
 All three are read and written by both the Normalization review and the Suggestion review:
@@ -968,7 +1143,7 @@ The Suggest stage is primarily a **KB-building pass**, not a file-tagging pass. 
 
 ### Level A — Linguistic (spaCy POS)
 
-Fast, no GPU. Loads `en_core_web_sm`, assembles per-file text from all available sources (path components, filename stem, canonical metadata fields flagged `enrichment_text=true`, vision descriptions, and transcript text where available), and extracts lemmatised nouns and noun chunks. If Describe has not yet run for a file, `descriptions` is omitted without error. Produces a frequency table — term → file count — filtered by a configurable minimum file threshold (default: 3 files). Terms already in vocabulary or stoplist are excluded. Runs in seconds across thousands of files.
+Fast, no GPU. Loads `en_core_web_sm`, assembles per-file text from all available sources (path components, filename stem, canonical metadata fields flagged `enrichment_text=true`, vision descriptions, transcript text, and summaries where available), and extracts lemmatised nouns and noun chunks. Each source is omitted per-file if the upstream stage has not run for that file; Level A continues without error. Summaries are included when present because synthesis often surfaces compound terms (e.g. "ferry terminal access road") that do not appear verbatim in either the description or transcript alone. Produces a frequency table — term → file count — filtered by a configurable minimum file threshold (default: 3 files). Terms already in vocabulary or stoplist are excluded. Runs in seconds across thousands of files.
 
 ### Level B — Co-occurrence Graph (NPMI)
 
@@ -1415,7 +1590,7 @@ def run_describe(corpus_path, kb_path, config, progress, cancel_event):
 
 **Partial offload.** On a machine with 8 GB VRAM trying to run a 12B model, setting `vision_gpu_layers: 20` (out of ~40 total layers) offloads 20 layers to GPU and runs the rest on CPU RAM. Inference is slower than full GPU but significantly faster than full CPU.
 
-### GPU/LLM Stages (3a, 3b, 5) — Keep the GPU Saturated
+### GPU/LLM Stages (3a, 3b, 3c, 5) — Keep the GPU Saturated
 
 **Producer-consumer prefetch:** While the GPU is running inference on file N, a background thread preprocesses file N+1. Two-slot pipeline: one GPU slot, one CPU prefetch slot (depth of 2 — hardcoded, not user-configurable).
 
@@ -1474,6 +1649,7 @@ enrich hash           --kb bc-transportation   # Stage 2: SHA-256 + pHash + dHas
 enrich describe       --kb bc-transportation   # Stage 3a: vision model (images + video frames)
 enrich transcribe     --kb bc-transportation   # Stage 3b: Whisper audio transcription
                       --retranscribe-model <name>  # re-transcribe only files previously processed with <name>
+enrich summarize      --kb bc-transportation   # Stage 3c: LLM synthesis of describe + transcribe outputs
 enrich suggest        --kb bc-transportation --level a --level b --level c
 enrich retag          --kb bc-transportation   # Stage 5: text-only LLM re-tag
 enrich writeback      --kb bc-transportation   # Stage 6: ExifTool write-back
@@ -1499,6 +1675,13 @@ enrich kb create <name> --import-kb path/to/other
 enrich kb delete <name>                        # remove from registry (never deletes disk files)
 enrich kb set-active <name>
 enrich kb health <name>
+```
+
+**System calibration:**
+```
+enrich calibrate                               # capability assessment; print recommendations
+               --apply                         # also write recommended values to library.yaml
+               --kb <name>                     # add KB-specific checks (corpus composition, stage runtime estimates)
 ```
 
 **Source management:**
@@ -1530,6 +1713,7 @@ enrich source purge   --kb bc-transportation ./old-folder   # hard-delete file r
 | 2 Hash | skip files where `sha256` is not NULL | re-hash all files; rebuild `canonical_id` relationships |
 | 3a Describe | skip `done`; retry `failed` + `skipped` | reset all canonical files to `pending`; re-run |
 | 3b Transcribe | skip `done` + `no_audio`; retry `failed` | reset all eligible files to `pending`; re-run. `--retranscribe-model <name>` limits reset to files where `transcriptions.model = <name>` |
+| 3c Summarize | skip `done`; retry `failed` + `skipped` | reset all eligible files to `pending`; re-run. Use after changing `corpus_context`, vocabulary, or prompt template. |
 | 4 Suggest | regenerate `pending` candidates only | delete all `pending` candidates; regenerate from current text pool |
 | 5 Retag | skip `done`; retry `failed` + `skipped` | reset all to `pending`; re-run |
 | 6 Write-back | dirty set only (`writeback_kb_version` mismatch) | write to all files regardless |
@@ -1537,7 +1721,8 @@ enrich source purge   --kb bc-transportation ./old-folder   # hard-delete file r
 
 **Three cases that print an explicit warning before proceeding:**
 
-- `--force describe` — *"Re-describing will not automatically clear Suggest or Retag results. Run `enrich suggest --force` afterward to refresh candidates if descriptions changed."*
+- `--force describe` — *"Re-describing will not automatically clear Summarize, Suggest, or Retag results. Run `enrich summarize --force` and `enrich suggest --force` afterward to refresh if descriptions changed."*
+- `--force summarize` — *"Re-summarizing will not automatically clear Suggest or Retag results. Run `enrich suggest --force` afterward to refresh candidates if summaries changed."*
 - `--force hash` — *"Re-hashing will rebuild duplicate relationships. `canonical_id` assignments may change if files were added, moved, or replaced since last hash run."*
 - `--force suggest` — only deletes `pending` candidates; `accepted`, `rejected`, and `corrected` candidates are never touched. **Exception when re-running Level B specifically:** Level B cluster IDs are unstable across re-runs (Louvain community detection is non-deterministic). If `enrich suggest --level b --force` is run, all Level C candidates are also deleted (since their `cluster_id` references are now invalid) — a warning is printed: *"Re-running Level B will delete all existing Level C candidates. Level A candidates are unaffected."*
 
@@ -1600,6 +1785,105 @@ enrich quick-transcribe <path>             # single audio/video file or folder
 3. **One-off analysis** — produce a description or transcript CSV for files that don't belong in any KB
 
 **Implementation:** `src/cli/quick.py` calls the same underlying functions as the pipeline stages — `run_describe_file()` from `stages/describe.py` and `run_transcribe_file()` from `stages/transcribe.py`. These functions accept an optional `db` parameter: `None` for quick mode (stateless), a live connection for pipeline mode (writes to corpus.db). No duplicated logic.
+
+---
+
+## System Calibration
+
+`enrich calibrate` performs a capability assessment of the host machine and configured models, then derives recommended values for performance-sensitive settings in `library.yaml`. It is a companion to the health checker: the health checker reports pass/fail status on required components; calibrate provides quantitative guidance for tuning.
+
+**Scope — capability assessment only (no inference).** Calibrate reads static properties (GPU memory, RAM, model file metadata) without running any inference. An optional inference benchmark mode (measuring actual tokens/second) is deferred — it requires models fully loaded, produces results that vary too much by content type to generalise reliably, and can take minutes. The static assessment covers the large majority of useful guidance.
+
+### Assessment Checks
+
+| Check | Source | Purpose |
+|---|---|---|
+| GPU presence and VRAM | `nvidia-smi` / `torch.cuda` | Determines which stages can run on GPU vs. CPU |
+| System RAM | `psutil.virtual_memory` | GPU overflow headroom; partial offload budget |
+| CPU core count | `os.cpu_count()` | Recommend `--workers` default for CPU stages |
+| Vision model present | Scan `tools/models/vision/` for GGUF files | Required for Describe (3a), Summarize (3c) |
+| Text model present | Scan `tools/models/text/` for GGUF files | Required for Retag (5), Summarize (3c) |
+| Model parameter count | GGUF header or `config.json` | Estimate VRAM requirement (~0.5 GB per billion parameters for Q4) |
+| Model context window | GGUF metadata or `config.json` | Hard cap for single-window summarization |
+| ExifTool and ffmpeg | PATH / `tools/` | Mirrors health checker required-tools check |
+
+### Output Format
+
+```
+System Calibration — enrich
+──────────────────────────────────────────────────────
+Hardware
+  GPU:  NVIDIA RTX 3070 (8 192 MB VRAM)
+  RAM:  32 GB
+  CPU:  12 cores
+
+Models
+  Vision model:  llava-v1.6-mistral-7b.Q4_K_M.gguf
+    Parameters:  7B  |  Est. VRAM: 5.5 GB  |  Context: 32 768 tokens
+  Text model:    mistral-7b-instruct.Q4_K_M.gguf
+    Parameters:  7B  |  Est. VRAM: 5.5 GB  |  Context: 32 768 tokens
+
+Recommendations for library.yaml
+  describe:
+    n_gpu_layers: 28          # leaves ~2.5 GB headroom for KV cache and OS
+  summarize:
+    max_transcript_tokens: 18000   # conservative; model context window is 32 768
+    target_words: 150
+  stages:
+    workers: 11               # os.cpu_count() - 1
+
+Warnings
+  ⚠  Running Describe and Summarize concurrently would require ~11 GB VRAM.
+     Stages must run sequentially on this hardware, or reduce n_gpu_layers on one.
+  ⚠  No text model found in tools/models/text/.
+     Retag (Stage 5) and Summarize (Stage 3c) cannot run until a model is placed there.
+
+Run 'enrich calibrate --apply' to write recommended values to library.yaml.
+```
+
+`--apply` writes only the keys listed under Recommendations. It does not modify any user-set values outside that scope. The command prints a before/after diff and confirms the write succeeded.
+
+### Warning Conditions
+
+| Condition | Severity | Message |
+|---|---|---|
+| Est. VRAM > available VRAM | Error | Stage cannot run on GPU. Use `n_gpu_layers` for partial offload or switch to a smaller model. |
+| Est. VRAM > 75% of available VRAM | Warning | Limited KV-cache headroom. Recommended `n_gpu_layers` accounts for this. |
+| Two GPU stages run concurrently | Warning | Combined VRAM estimate exceeds available. Run stages sequentially. |
+| No GPU detected | Info | All LLM stages will run on CPU. Estimated time per file is shown per stage. |
+| `max_transcript_tokens` > model context window | Error | Setting exceeds model capability; hierarchical path will always trigger. Reduce threshold or use a model with a larger context window. |
+| No vision model found | Warning | Describe (3a) and Summarize (3c for images/video) cannot run. |
+| No text model found | Warning | Retag (5) and Summarize (3c) cannot run. |
+| Whisper not installed | Warning | Transcribe (3b) cannot run. Install via `pip install openai-whisper`. |
+
+### KB-Specific Mode (`--kb <name>`)
+
+When a KB is specified, calibrate adds a second section reporting corpus composition and projected stage runtimes. Requires the corpus to have been ingested.
+
+```
+KB: bc-transportation
+  Files:   1 847 total  (1 203 images, 512 video, 132 audio)
+  Est. audio duration: 14.2 hours  (from transcriptions.duration_ms where available)
+
+Stage Runtime Estimates (at current hardware)
+  Describe (3a):    ~1 715 files × 8 s/file  ≈  3.8 hours
+  Transcribe (3b):  ~644 files; 14.2 h audio × 0.12× realtime  ≈  1.7 hours
+  Summarize (3c):   ~1 715 files × 4 s/file  ≈  1.9 hours  (text-only LLM; faster than Describe)
+  Retag (5):        ~1 715 files × 3 s/file  ≈  1.4 hours
+```
+
+Runtime estimates use the heuristic: `model_parameter_count × 0.5 GB / VRAM_GB × base_rate`. They are rough guidance, not commitments.
+
+### Relationship to Health Checker
+
+| | Health checker (`enrich kb health`) | Calibrate (`enrich calibrate`) |
+|---|---|---|
+| Scope | Per-KB | System-wide (optionally per-KB) |
+| Output | Pass / warn / fail per check | Quantitative recommendations |
+| Question answered | Is everything in place to run? | Are settings well-tuned for this hardware? |
+| When to run | After KB setup; before first pipeline run | After installing models; when changing hardware |
+
+Neither subsumes the other. A KB that passes all health checks may still have settings that calibrate would flag as poorly matched to the hardware.
 
 ---
 

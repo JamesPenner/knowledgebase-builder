@@ -1,0 +1,42 @@
+{% if not people %}
+<p class="empty-state">No people in the registry yet.</p>
+{% else %}
+<table class="data-table" style="width:100%">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th style="text-align:center">Voice clusters</th>
+      <th style="text-align:center">Face clusters</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for person in people %}
+    <tr>
+      <td>{{ person.preferred_name }}</td>
+      <td style="text-align:center">{{ person.voice_cluster_count }}</td>
+      <td style="text-align:center">{{ person.face_cluster_count }}</td>
+      <td>
+        <button class="btn btn--small"
+                hx-get="/knowledge/people/partials/person-detail/{{ person.id }}?kb={{ kb }}"
+                hx-target="#person-detail-panel"
+                hx-swap="innerHTML">Edit</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div style="margin-top:1rem;border-top:1px solid #334155;padding-top:.75rem">
+  <h3 style="margin:0 0 .5rem;font-size:.9rem;font-weight:600">Add person</h3>
+  <form hx-post="/knowledge/people/add?kb={{ kb }}"
+        hx-target="#person-detail-panel"
+        hx-swap="innerHTML"
+        hx-on::after-request="if(event.detail.successful && event.detail.xhr.status===200 && event.detail.xhr.getResponseHeader('HX-Trigger')){htmx.trigger(document.body,'peopleChanged');this.reset()}"
+        style="display:flex;gap:.5rem;align-items:center">
+    <input type="text" name="preferred_name" placeholder="Preferred name" required
+           style="flex:1;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+    <button type="submit" class="btn-primary">Add</button>
+  </form>
+</div>

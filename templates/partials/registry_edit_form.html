@@ -1,0 +1,70 @@
+{% if not entry %}
+<p class="empty-state">Entry not found.</p>
+{% else %}
+<div style="border:1px solid #334155;border-radius:6px;padding:1rem;background:#1e293b">
+  <h3 style="margin:0 0 .75rem;font-size:1rem;font-weight:600">Edit Entry</h3>
+  <p style="color:#64748b;font-size:.8rem;margin-bottom:.75rem">{{ table }} / id {{ entry.id }}</p>
+
+  <form hx-post="/knowledge/locations/registry/update?kb={{ kb }}"
+        hx-target="#registry-form-panel"
+        hx-swap="innerHTML"
+        style="display:flex;flex-direction:column;gap:.6rem">
+    <input type="hidden" name="table" value="{{ table }}">
+    <input type="hidden" name="entry_id" value="{{ entry.id }}">
+    <label style="font-size:.85rem;color:#94a3b8">Location name
+      <input type="text" name="location" value="{{ entry.location or '' }}"
+             style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+    </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem">
+      <label style="font-size:.85rem;color:#94a3b8">Latitude
+        <input type="number" name="latitude" step="any"
+               value="{{ entry.latitude if entry.latitude is not none else '' }}"
+               style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+      </label>
+      <label style="font-size:.85rem;color:#94a3b8">Longitude
+        <input type="number" name="longitude" step="any"
+               value="{{ entry.longitude if entry.longitude is not none else '' }}"
+               style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+      </label>
+    </div>
+    <label style="font-size:.85rem;color:#94a3b8">Threshold (m)
+      <input type="number" name="threshold_m" step="any"
+             value="{{ entry.threshold_m if entry.threshold_m is not none else '' }}"
+             style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+    </label>
+    <div style="display:flex;gap:.5rem;margin-top:.25rem">
+      <button type="submit" class="btn-primary" style="flex:1">Save</button>
+    </div>
+  </form>
+
+  <form hx-post="/knowledge/locations/registry/delete?kb={{ kb }}"
+        hx-target="#registry-form-panel"
+        hx-swap="innerHTML"
+        hx-confirm="Delete this entry?"
+        style="margin-top:.5rem">
+    <input type="hidden" name="table" value="{{ table }}">
+    <input type="hidden" name="entry_id" value="{{ entry.id }}">
+    <button type="submit" class="btn btn--remove" style="width:100%">Delete entry</button>
+  </form>
+
+  {% if merge_target %}
+  <div style="margin-top:1.25rem;border-top:1px solid #334155;padding-top:.75rem">
+    <h4 style="margin:0 0 .5rem;font-size:.9rem;font-weight:600;color:#f59e0b">Near-Duplicate Merge</h4>
+    <p style="font-size:.8rem;color:#94a3b8;margin-bottom:.6rem">
+      Keep <strong style="color:#e2e8f0">{{ entry.location }}</strong> (id {{ entry.id }}),
+      discard <strong style="color:#e2e8f0">{{ merge_target.location }}</strong> (id {{ merge_target.id }})
+    </p>
+    <form hx-post="/knowledge/locations/registry/merge?kb={{ kb }}"
+          hx-target="#registry-form-panel"
+          hx-swap="innerHTML">
+      <input type="hidden" name="table" value="{{ table }}">
+      <input type="hidden" name="keep_id" value="{{ entry.id }}">
+      <input type="hidden" name="drop_id" value="{{ merge_target.id }}">
+      <button type="submit" class="btn btn--correct" style="width:100%">
+        Merge — keep {{ entry.location }}, discard {{ merge_target.location }}
+      </button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endif %}

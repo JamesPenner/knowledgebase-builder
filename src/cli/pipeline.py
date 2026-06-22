@@ -327,6 +327,35 @@ def retag(
     typer.echo("Retag complete.")
 
 
+@app.command("summarize")
+def summarize_cmd(
+    kb: str = typer.Option(..., "--kb", help="KB name"),
+    force: bool = typer.Option(False, "--force", help="Reset done summaries to pending and re-run"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress progress output"),
+) -> None:
+    """Stage 3c: synthesise describe + transcribe outputs into per-file summaries."""
+    from pathlib import Path
+    from src.config import load_config
+    from src.db.corpus import open_corpus, reset_summarize_to_pending
+    from src.pipeline.cancel import make_cancel_event
+    from src.pipeline.progress import NullProgressReporter
+    from src.stages.summarize import run_summarize
+
+    corpus_path, kb_path = _resolve_kb(kb)
+    config = load_config(Path("config.yaml") if Path("config.yaml").exists() else None)
+
+    if force:
+        conn = open_corpus(corpus_path)
+        reset_summarize_to_pending(conn)
+        conn.close()
+
+    if not quiet:
+        typer.echo("Running summarize…")
+    run_summarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
+    if not quiet:
+        typer.echo("Summarize complete.")
+
+
 @app.command("writeback")
 def writeback(
     kb: str | None = typer.Option(None, "--kb", help="KB name"),

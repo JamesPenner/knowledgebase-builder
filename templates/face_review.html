@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Face Review — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Face Review</h1>
+<p class="review-counts">
+  <strong>{{ counts.pending }}</strong> pending
+  · <strong>{{ counts.assigned }}</strong> assigned
+</p>
+
+<div id="face-queue"
+     hx-get="/knowledge/people/faces/partials/queue?kb={{ kb }}"
+     hx-trigger="pendingChanged from:body"
+     hx-swap="innerHTML">
+  {% include "partials/face_clusters_queue.html" %}
+</div>
+
+<section class="decisions-section">
+  <h2 class="section-title">Assigned Faces</h2>
+  <div id="face-assigned"
+       hx-get="/knowledge/people/faces/partials/assigned?kb={{ kb }}"
+       hx-trigger="decisionsChanged from:body"
+       hx-swap="innerHTML">
+    {% include "partials/face_clusters_assigned.html" %}
+  </div>
+</section>
+{% endblock %}

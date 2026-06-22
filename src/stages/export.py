@@ -424,6 +424,25 @@ def _write_geolabels(export_dir: Path, corpus_conn) -> None:
         writer.writerows(dict(r) for r in rows)
 
 
+def _write_summaries(export_dir: Path, corpus_conn) -> None:
+    from src.db.corpus import get_export_summaries
+    rows = get_export_summaries(corpus_conn)
+    if not rows:
+        return
+    with open(export_dir / "summaries.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=["file_path", "summary_text", "model", "processed_at"]
+        )
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({
+                "file_path": r["file_path"],
+                "summary_text": r["summary_text"],
+                "model": r["model"],
+                "processed_at": r["processed_at"],
+            })
+
+
 def _write_transcripts(export_dir: Path, corpus_conn) -> None:
     from src.db.corpus import get_transcript_segments_for_export
 
@@ -595,6 +614,7 @@ def run_export(
             _write_search_text(export_dir, corpus_conn)
             _write_temporal_fields(export_dir, corpus_conn)
             _write_transcripts(export_dir, corpus_conn)
+            _write_summaries(export_dir, corpus_conn)
             _write_coverage(export_dir, corpus_conn)
             _write_near_duplicates(export_dir, corpus_conn, config.near_duplicate_hamming_threshold)
             _write_geolabels(export_dir, corpus_conn)

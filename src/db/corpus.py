@@ -2153,6 +2153,30 @@ def clear_gps_clusters(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def rename_gps_cluster(conn: sqlite3.Connection, cluster_id: int, label: str) -> None:
+    conn.execute("UPDATE gps_clusters SET label=? WHERE id=?", (label, cluster_id))
+    conn.commit()
+
+
+def get_gps_cluster_with_assignments(conn: sqlite3.Connection, cluster_id: int) -> dict:
+    row = conn.execute("SELECT * FROM gps_clusters WHERE id=?", (cluster_id,)).fetchone()
+    if row is None:
+        return {}
+    paths = conn.execute(
+        """
+        SELECT f.path
+        FROM file_gps_cluster_assignments a
+        JOIN files f ON f.id = a.file_id
+        WHERE a.cluster_id = ?
+        ORDER BY f.path
+        """,
+        (cluster_id,),
+    ).fetchall()
+    result = dict(row)
+    result["file_paths"] = [r["path"] for r in paths]
+    return result
+
+
 def get_validation_results_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -2162,6 +2186,152 @@ def get_validation_results_for_export(conn: sqlite3.Connection) -> list[sqlite3.
         JOIN validation_runs vn ON vn.id = vr.run_id
         WHERE vr.run_id = (SELECT MAX(id) FROM validation_runs)
           AND vr.status != 'ok'
+        ORDER BY f.path
+        """
+    ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Face cluster review (KB.Q3)
+# ---------------------------------------------------------------------------
+
+def get_pending_face_clusters(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Face clusters not yet assigned to a person, with representative face info."""
+    return conn.execute(
+        """
+        SELECT
+            c.id,
+            c.member_count,
+            c.spread,
+            m.id        AS rep_member_id,
+            f.path      AS rep_file_path,
+            fr.id       AS rep_face_region_id
+        FROM face_clusters c
+        LEFT JOIN face_cluster_members m
+          ON m.id = (
+              SELECT id FROM face_cluster_members
+              WHERE cluster_id = c.id
+              ORDER BY similarity DESC NULLS LAST
+              LIMIT 1
+          )
+        LEFT JOIN files f ON f.id = m.file_id
+        LEFT JOIN file_face_regions fr
+          ON fr.file_id = m.file_id AND fr.region_index = m.region_index
+        WHERE c.person_id IS NULL
+        ORDER BY c.id
+        """
+    ).fetchall()
+
+
+def get_assigned_face_clusters(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Face clusters assigned to a person."""
+    return conn.execute(
+        "SELECT id, person_id, label, member_count, spread FROM face_clusters WHERE person_id IS NOT NULL ORDER BY id"
+    ).fetchall()
+
+
+def assign_face_cluster(
+    conn: sqlite3.Connection,
+    cluster_id: int,
+    person_id: int,
+    label: str,
+) -> None:
+    conn.execute(
+        "UPDATE face_clusters SET person_id = ?, label = ? WHERE id = ?",
+        (person_id, label, cluster_id),
+    )
+
+
+def unassign_face_cluster(conn: sqlite3.Connection, cluster_id: int) -> None:
+    conn.execute(
+        "UPDATE face_clusters SET person_id = NULL, label = NULL WHERE id = ?",
+        (cluster_id,),
+    )
+
+
+def get_face_region_for_thumbnail(
+    conn: sqlite3.Connection, face_region_id: int
+) -> sqlite3.Row | None:
+    """Return file path and bbox JSON for a single face region."""
+    return conn.execute(
+        """
+        SELECT fr.id, fr.bbox, f.path AS file_path
+        FROM file_face_regions fr
+        JOIN files f ON f.id = fr.file_id
+        WHERE fr.id = ?
+        """,
+        (face_region_id,),
+    ).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Summarize (Stage 3c)
+# ---------------------------------------------------------------------------
+
+def reset_summarize_to_pending(conn: sqlite3.Connection) -> None:
+    conn.execute("UPDATE file_summaries SET status='pending' WHERE status='done'")
+    conn.commit()
+
+
+def get_pending_summarize_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Files eligible for summarize: have a done description or transcription,
+    no done summary, canonical files only."""
+    return conn.execute(
+        """
+        SELECT f.id
+        FROM files f
+        WHERE f.canonical_id IS NULL
+          AND (
+              EXISTS (SELECT 1 FROM descriptions d
+                      WHERE d.file_id = f.id AND d.pass1_status = 'done')
+           OR EXISTS (SELECT 1 FROM transcriptions t
+                      WHERE t.file_id = f.id AND t.transcribe_status = 'done')
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM file_summaries s
+              WHERE s.file_id = f.id AND s.status = 'done'
+          )
+        ORDER BY f.id
+        """
+    ).fetchall()
+
+
+def upsert_file_summary(
+    conn: sqlite3.Connection,
+    file_id: int,
+    summary_text: str | None,
+    model: str,
+    prompt_version: str,
+    status: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO file_summaries
+            (file_id, summary_text, model, prompt_version, processed_at, status)
+        VALUES (?, ?, ?, ?, datetime('now'), ?)
+        """,
+        (file_id, summary_text, model, prompt_version, status),
+    )
+
+
+def get_file_summary(
+    conn: sqlite3.Connection,
+    file_id: int,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM file_summaries WHERE file_id = ?",
+        (file_id,),
+    ).fetchone()
+
+
+def get_export_summaries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return done summaries joined to file path."""
+    return conn.execute(
+        """
+        SELECT f.path AS file_path, s.summary_text, s.model, s.processed_at
+        FROM file_summaries s
+        JOIN files f ON f.id = s.file_id
+        WHERE s.status = 'done'
         ORDER BY f.path
         """
     ).fetchall()

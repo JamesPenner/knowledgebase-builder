@@ -59,6 +59,24 @@ def _resolve_keywords(
     return sorted(result)
 
 
+def _resolve_summarize_field(kb_folder: Path, canonical_name: str) -> dict | None:
+    """Look up ExifTool field_name for canonical_name in field_map.csv."""
+    if not canonical_name:
+        return None
+    field_map = kb_folder / "reference" / "field_map.csv"
+    if not field_map.exists():
+        return None
+    with open(field_map, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if row.get("canonical_name", "").strip() == canonical_name:
+                return {
+                    "field_name": row["field_name"],
+                    "canonical_name": row["canonical_name"],
+                    "value_type": "text",
+                }
+    return None
+
+
 def _build_tag_set(
     corpus_conn,
     kb_conn,
@@ -147,6 +165,8 @@ def run_writeback(
             f for f in write_fields
             if f.get("value_type") == "text" and f.get("canonical_name") == "description"
         ]
+        summary_field = _resolve_summarize_field(kb_folder, config.summarize_output_field) if config.summarize_output_field else None
+        desc_field_names = {f["field_name"] for f in desc_fields}
 
         total = len(stale)
         processed = skipped = errors = 0
@@ -202,6 +222,17 @@ def run_writeback(
                 for df in desc_fields:
                     if description:
                         tags.append((df["field_name"], description))
+
+                if summary_field:
+                    sum_row = corpus_conn.execute(
+                        "SELECT summary_text FROM file_summaries WHERE file_id=? AND status='done'",
+                        (file_id,),
+                    ).fetchone()
+                    if sum_row and sum_row["summary_text"]:
+                        sf_name = summary_field["field_name"]
+                        if sf_name in desc_field_names:
+                            tags = [(fn, v) for fn, v in tags if fn != sf_name]
+                        tags.append((sf_name, sum_row["summary_text"]))
 
                 # Determine GPS source: proposal takes precedence over original
                 if gps_row:

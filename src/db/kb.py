@@ -351,6 +351,171 @@ def get_entity_table_keys(
 
 
 # ---------------------------------------------------------------------------
+# Entity location registry helpers (KB.Q2)
+# ---------------------------------------------------------------------------
+
+def _loc_table_safe(conn: sqlite3.Connection, table: str) -> str:
+    """Validate full entity table name (entity_<name>) against registry. Returns safe SQL name.
+
+    Raises ValueError for unknown or unregistered tables.
+    """
+    import re as _re
+    if not table.startswith("entity_"):
+        raise ValueError(f"Unknown table: {table!r}")
+    registry_name = table[len("entity_"):]
+    safe = _re.sub(r"[^A-Za-z0-9_]", "_", registry_name)
+    row = conn.execute(
+        "SELECT 1 FROM entity_table_registry WHERE table_name=? AND match_type IN ('gps','text')",
+        (registry_name,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown table: {table!r}")
+    return safe
+
+
+def get_entity_location_tables(conn: sqlite3.Connection) -> list[dict]:
+    """Return [{name, match_type}] for registered entity tables with match_type in ('gps','text')
+    that contain a 'location' column."""
+    import re as _re
+    rows = conn.execute(
+        "SELECT table_name, match_type FROM entity_table_registry"
+        " WHERE match_type IN ('gps','text') ORDER BY table_name"
+    ).fetchall()
+    result = []
+    for row in rows:
+        safe = _re.sub(r"[^A-Za-z0-9_]", "_", row["table_name"])
+        full = f"entity_{safe}"
+        try:
+            cols = [c["name"] for c in conn.execute(f'PRAGMA table_info("{full}")').fetchall()]
+        except sqlite3.OperationalError:
+            continue
+        if "location" in cols:
+            result.append({"name": full, "match_type": row["match_type"]})
+    return result
+
+
+def get_entity_table_entries(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+    """Return all rows (rowid exposed as id) from a registered location entity table.
+
+    Raises ValueError for unknown or unregistered tables.
+    table must be the full entity table name, e.g. 'entity_gps_cluster_locations'.
+    """
+    safe = _loc_table_safe(conn, table)
+    return conn.execute(
+        f'SELECT rowid AS id, * FROM "entity_{safe}" ORDER BY rowid'
+    ).fetchall()
+
+
+def update_entity_table_entry(
+    conn: sqlite3.Connection, table: str, entry_id: int, fields: dict
+) -> sqlite3.Row:
+    """Update specified fields on a single entry and return the updated row.
+
+    Raises ValueError for unknown table or missing id.
+    """
+    safe = _loc_table_safe(conn, table)
+    row = conn.execute(
+        f'SELECT rowid FROM "entity_{safe}" WHERE rowid=?', (entry_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Entry {entry_id} not found in {table!r}")
+    set_clause = ", ".join(f'"{k}" = ?' for k in fields)
+    values = list(fields.values()) + [entry_id]
+    conn.execute(f'UPDATE "entity_{safe}" SET {set_clause} WHERE rowid=?', values)
+    conn.commit()
+    return conn.execute(
+        f'SELECT rowid AS id, * FROM "entity_{safe}" WHERE rowid=?', (entry_id,)
+    ).fetchone()
+
+
+def delete_entity_table_entry(
+    conn: sqlite3.Connection, table: str, entry_id: int
+) -> None:
+    """Delete a single entry by rowid.
+
+    Raises ValueError for unknown table or missing id.
+    """
+    safe = _loc_table_safe(conn, table)
+    row = conn.execute(
+        f'SELECT rowid FROM "entity_{safe}" WHERE rowid=?', (entry_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Entry {entry_id} not found in {table!r}")
+    conn.execute(f'DELETE FROM "entity_{safe}" WHERE rowid=?', (entry_id,))
+    conn.commit()
+
+
+def merge_entity_table_entries(
+    conn: sqlite3.Connection, table: str, keep_id: int, drop_id: int
+) -> None:
+    """Back-fill null columns in keep row from drop row, then delete drop row.
+
+    Raises ValueError for unknown table, missing ids, or keep_id == drop_id.
+    """
+    if keep_id == drop_id:
+        raise ValueError("keep_id and drop_id must be different")
+    safe = _loc_table_safe(conn, table)
+    keep_row = conn.execute(
+        f'SELECT rowid AS id, * FROM "entity_{safe}" WHERE rowid=?', (keep_id,)
+    ).fetchone()
+    if keep_row is None:
+        raise ValueError(f"Entry {keep_id} not found in {table!r}")
+    drop_row = conn.execute(
+        f'SELECT rowid AS id, * FROM "entity_{safe}" WHERE rowid=?', (drop_id,)
+    ).fetchone()
+    if drop_row is None:
+        raise ValueError(f"Entry {drop_id} not found in {table!r}")
+    updates = {}
+    for col in drop_row.keys():
+        if col == "id":
+            continue
+        keep_val = keep_row[col]
+        drop_val = drop_row[col]
+        if (keep_val is None or keep_val == "") and drop_val is not None and drop_val != "":
+            updates[col] = drop_val
+    if updates:
+        set_clause = ", ".join(f'"{k}" = ?' for k in updates)
+        conn.execute(
+            f'UPDATE "entity_{safe}" SET {set_clause} WHERE rowid=?',
+            list(updates.values()) + [keep_id],
+        )
+    conn.execute(f'DELETE FROM "entity_{safe}" WHERE rowid=?', (drop_id,))
+    conn.commit()
+
+
+def find_location_near_duplicates(
+    entries: list, threshold: float = 0.85
+) -> list[dict]:
+    """Return near-duplicate pairs from a list of entry dicts.
+
+    Each entry must have 'id' and 'location' keys.
+    Returns [{"a_id": int, "b_id": int, "score": float}] for pairs scoring >= threshold.
+    Normalisation: lowercase, strip punctuation, collapse whitespace.
+    """
+    import string
+    from difflib import SequenceMatcher
+
+    def _norm(s: str) -> str:
+        s = s.lower().translate(str.maketrans("", "", string.punctuation))
+        return " ".join(s.split())
+
+    valid = [(e["id"], _norm(str(e.get("location") or ""))) for e in entries if e.get("location")]
+    if len(valid) < 2:
+        return []
+    results = []
+    for i in range(len(valid)):
+        for j in range(i + 1, len(valid)):
+            id_a, n_a = valid[i]
+            id_b, n_b = valid[j]
+            if n_a == n_b:
+                continue
+            score = SequenceMatcher(None, n_a, n_b).ratio()
+            if score >= threshold:
+                results.append({"a_id": id_a, "b_id": id_b, "score": round(score, 4)})
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Classify rules
 # ---------------------------------------------------------------------------
 
@@ -987,4 +1152,101 @@ def get_people_voice_centroids_for_export(conn: sqlite3.Connection) -> list[sqli
         ORDER BY id
         """
     ).fetchall()
+
+
+def get_people_with_cluster_counts(
+    kb_conn: sqlite3.Connection,
+    corpus_conn: sqlite3.Connection,
+) -> list[dict]:
+    people = kb_conn.execute(
+        "SELECT id, preferred_name FROM people ORDER BY preferred_name"
+    ).fetchall()
+    voice_counts = {
+        r[0]: r[1]
+        for r in corpus_conn.execute(
+            "SELECT person_id, COUNT(*) FROM voice_speaker_clusters"
+            " WHERE person_id IS NOT NULL GROUP BY person_id"
+        ).fetchall()
+    }
+    face_counts = {
+        r[0]: r[1]
+        for r in corpus_conn.execute(
+            "SELECT person_id, COUNT(*) FROM face_clusters"
+            " WHERE person_id IS NOT NULL GROUP BY person_id"
+        ).fetchall()
+    }
+    return [
+        {
+            "id": r["id"],
+            "preferred_name": r["preferred_name"],
+            "voice_cluster_count": voice_counts.get(r["id"], 0),
+            "face_cluster_count": face_counts.get(r["id"], 0),
+        }
+        for r in people
+    ]
+
+
+def delete_person(
+    kb_conn: sqlite3.Connection,
+    corpus_conn: sqlite3.Connection,
+    person_id: int,
+) -> None:
+    row = kb_conn.execute("SELECT id FROM people WHERE id = ?", (person_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"Person {person_id} not found")
+    voice_count = corpus_conn.execute(
+        "SELECT COUNT(*) FROM voice_speaker_clusters WHERE person_id = ?", (person_id,)
+    ).fetchone()[0]
+    face_count = corpus_conn.execute(
+        "SELECT COUNT(*) FROM face_clusters WHERE person_id = ?", (person_id,)
+    ).fetchone()[0]
+    if voice_count > 0 or face_count > 0:
+        parts = []
+        if voice_count:
+            parts.append(f"{voice_count} voice cluster(s)")
+        if face_count:
+            parts.append(f"{face_count} face cluster(s)")
+        raise ValueError(f"Cannot delete: person has {' and '.join(parts)} assigned")
+    kb_conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+    kb_conn.commit()
+
+
+def merge_people(
+    kb_conn: sqlite3.Connection,
+    corpus_conn: sqlite3.Connection,
+    keep_id: int,
+    merge_from_id: int,
+) -> None:
+    if keep_id == merge_from_id:
+        raise ValueError("keep_id and merge_from_id must differ")
+    keep_row = kb_conn.execute(
+        "SELECT id, preferred_name FROM people WHERE id = ?", (keep_id,)
+    ).fetchone()
+    if keep_row is None:
+        raise KeyError(f"Person {keep_id} not found")
+    from_row = kb_conn.execute(
+        "SELECT id FROM people WHERE id = ?", (merge_from_id,)
+    ).fetchone()
+    if from_row is None:
+        raise KeyError(f"Person {merge_from_id} not found")
+    keep_label = keep_row["preferred_name"]
+    voice_clusters = corpus_conn.execute(
+        "SELECT id, centroid, member_count FROM voice_speaker_clusters WHERE person_id = ?",
+        (merge_from_id,),
+    ).fetchall()
+    for vc in voice_clusters:
+        if vc["centroid"] is not None:
+            merge_voice_centroid(kb_conn, keep_id, bytes(vc["centroid"]), vc["member_count"] or 0)
+    kb_conn.commit()
+    corpus_conn.execute(
+        "UPDATE face_clusters SET person_id = ?, label = ? WHERE person_id = ?",
+        (keep_id, keep_label, merge_from_id),
+    )
+    corpus_conn.execute(
+        "UPDATE voice_speaker_clusters SET person_id = ?, label = ? WHERE person_id = ?",
+        (keep_id, keep_label, merge_from_id),
+    )
+    corpus_conn.commit()
+    kb_conn.execute("DELETE FROM people WHERE id = ?", (merge_from_id,))
+    kb_conn.commit()
 

@@ -1,0 +1,62 @@
+{% if not tables %}
+<p class="empty-state">No location entity tables found. Promote a GPS cluster first.</p>
+{% else %}
+{% for t in tables %}
+<section style="margin-bottom:1.5rem">
+  <div style="display:flex;align-items:baseline;gap:.6rem;margin-bottom:.4rem">
+    <span class="section-title" style="margin:0">{{ t.name }}</span>
+    <span style="color:#64748b;font-size:.8rem">{{ t.match_type }} · {{ t.entries | length }} entries</span>
+  </div>
+  {% if not t.entries %}
+  <p class="empty-state">No entries.</p>
+  {% else %}
+  <table class="stage-table" style="width:100%">
+    <thead>
+      <tr class="stage-row">
+        <th style="text-align:left;padding:.35rem .5rem">Location</th>
+        <th style="text-align:right;padding:.35rem .5rem">Lat</th>
+        <th style="text-align:right;padding:.35rem .5rem">Lon</th>
+        <th style="text-align:right;padding:.35rem .5rem">Threshold (m)</th>
+        <th style="padding:.35rem .5rem"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in t.entries %}
+      <tr class="stage-row" id="entry-row-{{ entry.id }}">
+        <td style="padding:.35rem .5rem">
+          {{ entry.location }}
+          {% if entry.id in t.dup_ids %}
+          {% for partner in t.dup_partners.get(entry.id, []) %}
+          <button class="btn btn--correct"
+                  style="font-size:.7rem;padding:.1rem .35rem;margin-left:.3rem"
+                  title="Near-duplicate (score={{ partner.score }})"
+                  hx-get="/knowledge/locations/registry/partials/edit-form?kb={{ kb }}&table={{ t.name }}&id={{ entry.id }}&merge_with={{ partner.id }}"
+                  hx-target="#registry-form-panel"
+                  hx-swap="innerHTML">~dup</button>
+          {% endfor %}
+          {% endif %}
+        </td>
+        <td style="text-align:right;padding:.35rem .5rem;color:#94a3b8">
+          {{ "%.5f"|format(entry.latitude) if entry.latitude is not none else "" }}
+        </td>
+        <td style="text-align:right;padding:.35rem .5rem;color:#94a3b8">
+          {{ "%.5f"|format(entry.longitude) if entry.longitude is not none else "" }}
+        </td>
+        <td style="text-align:right;padding:.35rem .5rem;color:#94a3b8">
+          {{ entry.threshold_m | int if entry.threshold_m is not none else "" }}
+        </td>
+        <td style="padding:.35rem .5rem;white-space:nowrap">
+          <button class="btn btn--capture"
+                  style="font-size:.8rem;padding:.2rem .5rem"
+                  hx-get="/knowledge/locations/registry/partials/edit-form?kb={{ kb }}&table={{ t.name }}&id={{ entry.id }}"
+                  hx-target="#registry-form-panel"
+                  hx-swap="innerHTML">Edit</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endfor %}
+{% endif %}

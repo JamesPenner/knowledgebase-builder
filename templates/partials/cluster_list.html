@@ -1,0 +1,43 @@
+{% if not clusters %}
+<p class="empty-state">No clusters — run <code>enrich geolocate cluster</code> first.</p>
+{% else %}
+<table class="stage-table" style="width:100%">
+  <thead>
+    <tr class="stage-row">
+      <th style="text-align:left;padding:.4rem .6rem">Label</th>
+      <th style="text-align:right;padding:.4rem .6rem">Files</th>
+      <th style="padding:.4rem .6rem"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in clusters %}
+    <tr class="stage-row" id="row-{{ c.id }}">
+      <td style="padding:.4rem .6rem">
+        <form hx-post="/api/knowledge/locations/clusters/{{ c.id }}/rename?kb={{ kb }}"
+              hx-swap="none"
+              style="display:flex;gap:.4rem;align-items:center">
+          <input type="text" name="label" value="{{ c.label }}"
+                 style="flex:1;min-width:0;padding:.2rem .4rem;border:1px solid #334155;background:#1e293b;color:#e2e8f0;border-radius:4px">
+          <button type="submit" class="btn-primary" style="white-space:nowrap">Rename</button>
+        </form>
+        <div style="font-size:.75rem;color:#64748b;margin-top:.15rem">
+          {{ "%.4f"|format(c.centroid_lat) }}, {{ "%.4f"|format(c.centroid_lon) }}
+          &nbsp;·&nbsp; eps {{ c.eps_km }} km
+        </div>
+      </td>
+      <td style="text-align:right;padding:.4rem .6rem;color:#94a3b8">{{ c.file_count }}</td>
+      <td style="padding:.4rem .6rem;white-space:nowrap">
+        {% if c.promoted %}
+        <span class="nav-badge" style="background:#1d4ed8;color:#fff">promoted</span>
+        {% else %}
+        <form hx-post="/api/knowledge/locations/clusters/{{ c.id }}/promote?kb={{ kb }}"
+              hx-swap="none">
+          <button type="submit" class="btn-primary">Promote</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

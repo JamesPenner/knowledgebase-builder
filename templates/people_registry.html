@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}People — {{ kb }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">People</h1>
+<div style="display:flex;gap:1.5rem;align-items:flex-start">
+  <div id="person-list"
+       style="flex:1;min-width:0"
+       hx-get="/knowledge/people/partials/person-list?kb={{ kb }}"
+       hx-trigger="load, peopleChanged from:body"
+       hx-swap="innerHTML">
+    <p class="empty-state">Loading…</p>
+  </div>
+  <div id="person-detail-panel" style="width:380px;flex-shrink:0">
+    <p class="empty-state">Select a person to edit.</p>
+  </div>
+</div>
+{% endblock %}

@@ -6,6 +6,7 @@
   <title>{% block title %}KB Builder{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/main.css">
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  {% block head %}{% endblock %}
 </head>
 <body>
   <nav class="nav">
@@ -19,9 +20,15 @@
     <a class="nav-link" href="/review/normalise?kb={{ kb }}">Normalise</a>
     <a class="nav-link" href="/review/suggest?kb={{ kb }}">Suggest <span id="suggest-badge" class="nav-badge" data-kb="{{ kb }}" style="display:none"></span></a>
     <a class="nav-link" href="/review/new-terms?kb={{ kb }}">New Terms</a>
-    <a class="nav-link" href="/review/speakers?kb={{ kb }}">Speakers</a>
     <a class="nav-link" href="/corpus-stats?kb={{ kb }}">Stats</a>
     <a class="nav-link" href="/health?kb={{ kb }}">Health</a>
+    <span class="nav-sep">·</span>
+    <span class="nav-label">Knowledge</span>
+    <a class="nav-link" href="/knowledge/locations?kb={{ kb }}">Locations</a>
+    <a class="nav-link" href="/knowledge/locations/registry?kb={{ kb }}">Registry</a>
+    <a class="nav-link" href="/knowledge/people/faces?kb={{ kb }}">Faces</a>
+    <a class="nav-link" href="/knowledge/people/speakers?kb={{ kb }}">Speakers</a>
+    <a class="nav-link" href="/knowledge/people?kb={{ kb }}">People</a>
     {% endif %}
   </nav>
   <main class="main">

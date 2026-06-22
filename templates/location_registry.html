@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Location Registry — {{ kb }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Location Registry</h1>
+<div style="display:flex;gap:1.5rem;align-items:flex-start">
+  <div id="registry-entry-list"
+       style="flex:1;min-width:0"
+       hx-get="/knowledge/locations/registry/partials/entry-list?kb={{ kb }}"
+       hx-trigger="load, registryChanged from:body"
+       hx-swap="innerHTML">
+    <p class="empty-state">Loading…</p>
+  </div>
+  <div id="registry-form-panel" style="width:380px;flex-shrink:0">
+    <p class="empty-state">Select an entry to edit.</p>
+  </div>
+</div>
+{% endblock %}

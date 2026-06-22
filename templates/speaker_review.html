@@ -8,7 +8,7 @@
 </p>
 
 <div id="speaker-queue"
-     hx-get="/review/speakers/partials/queue?kb={{ kb }}"
+     hx-get="/knowledge/people/speakers/partials/queue?kb={{ kb }}"
      hx-trigger="pendingChanged from:body"
      hx-swap="innerHTML">
   {% include "partials/speaker_clusters_queue.html" %}
@@ -17,7 +17,7 @@
 <section class="decisions-section">
   <h2 class="section-title">Assigned Speakers</h2>
   <div id="speaker-decisions"
-       hx-get="/review/speakers/partials/decisions?kb={{ kb }}"
+       hx-get="/knowledge/people/speakers/partials/decisions?kb={{ kb }}"
        hx-trigger="decisionsChanged from:body"
        hx-swap="innerHTML">
     {% include "partials/speaker_clusters_decisions.html" %}

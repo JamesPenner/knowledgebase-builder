@@ -1,0 +1,28 @@
+{% if not pending %}
+<p class="empty-state">No unassigned face clusters.</p>
+{% else %}
+{% for c in pending %}
+<div class="token-group" style="margin-bottom:1.5rem">
+  <h3 style="margin:0 0 .4rem">Cluster #{{ c.id }} — {{ c.member_count }} face(s){% if c.spread is not none %} · spread {{ "%.2f"|format(c.spread) }}{% endif %}</h3>
+  {% if c.rep_face_region_id %}
+  <img src="/api/knowledge/corpus/face-thumbnail/{{ c.rep_face_region_id }}?kb={{ kb }}"
+       alt="Face cluster {{ c.id }}"
+       width="120" height="120"
+       style="object-fit:cover;border-radius:4px;margin:.4rem 0;display:block">
+  {% endif %}
+  <form hx-post="/review/faces/decide?kb={{ kb }}" hx-swap="none" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.5rem">
+    <input type="hidden" name="cluster_id" value="{{ c.id }}">
+    <input type="hidden" name="action" value="assign">
+    <select name="person_id" style="min-width:12rem">
+      <option value="">— existing person —</option>
+      {% for p in people %}
+      <option value="{{ p.id }}">{{ p.preferred_name }}</option>
+      {% endfor %}
+    </select>
+    <span style="color:#999">or</span>
+    <input type="text" name="new_name" placeholder="New person name…" style="width:14em">
+    <button type="submit" class="btn-primary">Assign</button>
+  </form>
+</div>
+{% endfor %}
+{% endif %}

@@ -82,6 +82,12 @@ def _run_level_a(
         if desc:
             text_parts.append(desc["description_normalized"] or desc["description_raw"] or "")
 
+        summary_row = corpus_conn.execute(
+            "SELECT summary_text FROM file_summaries WHERE file_id=? AND status='done'", (file_id,)
+        ).fetchone()
+        if summary_row and summary_row["summary_text"]:
+            text_parts.append(summary_row["summary_text"])
+
         tag_rows = corpus_conn.execute(
             "SELECT tag FROM file_derived_tags WHERE file_id=?", (file_id,)
         ).fetchall()
