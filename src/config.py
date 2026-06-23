@@ -7,7 +7,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_GLOBAL_ONLY = {"host", "port", "exiftool", "ffmpeg", "ffprobe"}
+_GLOBAL_ONLY = {"host", "port", "exiftool", "ffmpeg", "ffprobe", "whisper_cli"}
 _PER_KB_ONLY = {"sources", "focus", "exiftool_config"}
 
 
@@ -20,6 +20,7 @@ class Config:
     exiftool: str = "tools/exiftool.exe"
     ffmpeg: str = "tools/ffmpeg.exe"
     ffprobe: str = "tools/ffprobe.exe"
+    whisper_cli: str = ""  # optional: path to whisper-cli.exe (Vulkan build); empty = use pywhispercpp
     # workers
     workers: int = 4
     # thresholds
@@ -27,6 +28,8 @@ class Config:
     suggest_min_files: int = 3
     phash_threshold: int = 10
     describe_frames: int = 9
+    describe_min_frame_brightness: float = 30.0
+    describe_min_frame_sharpness: float = 0.0
     scene_threshold: float = 0.4
     deep_seek: bool = True
     deep_seek_max_iter: int = 2
@@ -63,6 +66,8 @@ class Config:
     summarize_target_words: int = 150
     summarize_max_transcript_tokens: int = 18000
     summarize_output_field: str = ""
+    # debug
+    debug_frames_dir: str = ""
     # per-KB only
     sources: tuple = ()
     focus: str = ""
@@ -99,6 +104,7 @@ def _extract_global(raw: dict) -> dict:
     fields["exiftool"] = _typed(tools.get("exiftool", defaults.exiftool), str, defaults.exiftool, "tools.exiftool")
     fields["ffmpeg"] = _typed(tools.get("ffmpeg", defaults.ffmpeg), str, defaults.ffmpeg, "tools.ffmpeg")
     fields["ffprobe"] = _typed(tools.get("ffprobe", defaults.ffprobe), str, defaults.ffprobe, "tools.ffprobe")
+    fields["whisper_cli"] = _typed(tools.get("whisper_cli", defaults.whisper_cli), str, defaults.whisper_cli, "tools.whisper_cli")
 
     workers = raw.get("workers", {}) or {}
     fields["workers"] = _typed(workers.get("default", defaults.workers), int, defaults.workers, "workers.default")
@@ -132,6 +138,8 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
     fields["suggest_min_files"] = _typed(thresholds.get("suggest_min_files", defaults.suggest_min_files), int, defaults.suggest_min_files, "thresholds.suggest_min_files")
     fields["phash_threshold"] = _typed(thresholds.get("phash_threshold", defaults.phash_threshold), int, defaults.phash_threshold, "thresholds.phash_threshold")
     fields["describe_frames"] = _typed(thresholds.get("describe_frames", defaults.describe_frames), int, defaults.describe_frames, "thresholds.describe_frames")
+    fields["describe_min_frame_brightness"] = _typed(thresholds.get("describe_min_frame_brightness", defaults.describe_min_frame_brightness), float, defaults.describe_min_frame_brightness, "thresholds.describe_min_frame_brightness")
+    fields["describe_min_frame_sharpness"] = _typed(thresholds.get("describe_min_frame_sharpness", defaults.describe_min_frame_sharpness), float, defaults.describe_min_frame_sharpness, "thresholds.describe_min_frame_sharpness")
     fields["scene_threshold"] = _typed(thresholds.get("scene_threshold", defaults.scene_threshold), float, defaults.scene_threshold, "thresholds.scene_threshold")
     fields["deep_seek"] = _typed(thresholds.get("deep_seek", defaults.deep_seek), bool, defaults.deep_seek, "thresholds.deep_seek")
     fields["deep_seek_max_iter"] = _typed(thresholds.get("deep_seek_max_iter", defaults.deep_seek_max_iter), int, defaults.deep_seek_max_iter, "thresholds.deep_seek_max_iter")
@@ -155,6 +163,9 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
         fields["writeback_fields"] = tuple(wb_fields) if isinstance(wb_fields, list) else defaults.writeback_fields
     fields["unknown_face_clusters"] = _typed(write_back.get("unknown_face_clusters", defaults.unknown_face_clusters), bool, defaults.unknown_face_clusters, "write_back.unknown_face_clusters")
     fields["export_biometric"] = _typed(write_back.get("export_biometric", defaults.export_biometric), bool, defaults.export_biometric, "write_back.export_biometric")
+
+    debug = raw.get("debug", {}) or {}
+    fields["debug_frames_dir"] = _typed(debug.get("frames_dir", defaults.debug_frames_dir), str, defaults.debug_frames_dir, "debug.frames_dir")
 
     workers = raw.get("workers", {}) or {}
     if "count" in workers:
@@ -244,6 +255,10 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
     if "export_biometric" in write_back:
         fields["export_biometric"] = _typed(write_back["export_biometric"], bool, _fallback("export_biometric"), "write_back.export_biometric")
 
+    debug = raw.get("debug", {}) or {}
+    if "frames_dir" in debug:
+        fields["debug_frames_dir"] = _typed(debug["frames_dir"], str, _fallback("debug_frames_dir"), "debug.frames_dir")
+
     workers = raw.get("workers", {}) or {}
     if "count" in workers:
         fields["workers"] = _typed(workers["count"], int, _fallback("workers"), "workers.count")
@@ -273,5 +288,9 @@ def load_config(global_path: Path | None, kb_path: Path | None = None) -> Config
             _p = Path(global_fields[_key])
             if not _p.is_absolute():
                 global_fields[_key] = str(_p.resolve())
+    if global_fields.get("whisper_cli"):
+        _p = Path(global_fields["whisper_cli"])
+        if not _p.is_absolute():
+            global_fields["whisper_cli"] = str(_p.resolve())
 
     return Config(**global_fields)

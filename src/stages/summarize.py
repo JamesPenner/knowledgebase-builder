@@ -8,13 +8,7 @@ from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "v1"
-
-_SYSTEM_PROMPT = """\
-You are a metadata summarization assistant. Write a factual, searchable summary
-of a media file. Respond with plain text only — no bullet points, no headings,
-no explanation outside the summary itself.\
-"""
+_PROMPT_VERSION = "v3"
 
 
 def _assemble_context(corpus_conn, kb_conn, file_id: int) -> dict:
@@ -99,18 +93,27 @@ def _assemble_context(corpus_conn, kb_conn, file_id: int) -> dict:
 
     if kb_conn is not None:
         vocab_rows = kb_conn.execute(
-            "SELECT term FROM vocabulary WHERE status='accepted' ORDER BY term"
+            "SELECT term FROM vocabulary WHERE source IN ('accepted', 'user') ORDER BY term"
         ).fetchall()
         ctx["vocab_terms"] = [r["term"] for r in vocab_rows]
 
     return ctx
 
 
-def _build_prompt(ctx: dict, focus: str, target_words: int) -> str:
-    system = _SYSTEM_PROMPT
+def _build_system_prompt(focus: str) -> str:
+    lines = [
+        "You are a metadata summarization assistant. Write a factual, searchable summary "
+        "of a media file. Respond with plain text only — no bullet points, no headings, "
+        "no explanation outside the summary itself. "
+        "Preserve all proper nouns (personal names, place names, event names) exactly as "
+        "they appear in the source material — do not paraphrase, normalise, or correct them."
+    ]
     if focus:
-        system = system + f"\nDOMAIN FOCUS: {focus}"
+        lines.append(f"DOMAIN FOCUS: {focus}")
+    return "\n".join(lines)
 
+
+def _build_user_prompt(ctx: dict, target_words: int) -> str:
     context_lines = []
     if ctx.get("normalized_filename"):
         context_lines.append(f"File: {ctx['normalized_filename']}")
@@ -132,28 +135,30 @@ def _build_prompt(ctx: dict, focus: str, target_words: int) -> str:
     transcript_label = "Attributed transcript" if attributed else "Transcript"
 
     if description and transcript:
-        user = (
+        return (
             f"{context_block}\n\n"
-            f"Visual description:\n{description}\n\n"
-            f"{transcript_label}:\n{transcript}\n\n"
-            f"Write a {target_words}-word summary integrating both the visual and audio"
-            " content. Where they are complementary, combine them. Where they diverge,"
-            " note both."
+            f"Visual description (inferred from video frames):\n{description}\n\n"
+            f"{transcript_label} (authoritative record of spoken content):\n{transcript}\n\n"
+            f"Write a {target_words}-word summary. Use the visual description for setting "
+            f"and scene context. Use the transcript as the definitive record of what was "
+            f"said. Combine them into a single coherent summary. "
+            f"If the visual description and transcript describe clearly different scenes or "
+            f"contradict each other, note the discrepancy explicitly rather than reconciling them."
         )
     elif description:
-        user = (
+        return (
             f"{context_block}\n\n"
             f"Visual description:\n{description}\n\n"
-            f"Write a {target_words}-word summary for use as searchable metadata."
+            f"Write a {target_words}-word summary for use as searchable metadata. "
+            f"Describe only what is directly visible; do not infer activity, narrative, "
+            f"or context beyond what can be observed."
         )
     else:
-        user = (
+        return (
             f"{context_block}\n\n"
             f"{transcript_label}:\n{transcript}\n\n"
             f"Write a {target_words}-word summary for use as searchable metadata."
         )
-
-    return f"<s>[INST] <<SYS>>\n{system}\n<</SYS>>\n\n{user} [/INST]"
 
 
 def _chunk_transcript(
@@ -175,28 +180,31 @@ def _chunk_transcript(
     return chunks
 
 
-def _call_llm(llm, prompt: str, max_tokens: int = 512) -> str:
+def _call_llm(llm, system: str, user: str, max_tokens: int = 512) -> str:
     try:
-        output = llm(prompt, max_tokens=max_tokens, temperature=0.2, stop=["</s>"])
-        return output["choices"][0]["text"].strip()
+        output = llm.create_chat_completion(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.2,
+        )
+        return output["choices"][0]["message"]["content"].strip()
     except Exception as exc:
         logger.warning("LLM call failed: %s", exc)
         return ""
 
 
 def _summarize_chunks(llm, chunks: list[str], focus: str) -> str:
-    system = _SYSTEM_PROMPT
-    if focus:
-        system = system + f"\nDOMAIN FOCUS: {focus}"
-
+    system = _build_system_prompt(focus)
     chunk_summaries = []
     for i, chunk in enumerate(chunks):
-        prompt = (
-            f"<s>[INST] <<SYS>>\n{system}\n<</SYS>>\n\n"
+        user = (
             f"Transcript segment {i + 1} of {len(chunks)}:\n{chunk}\n\n"
-            "Write a brief factual summary of this segment. [/INST]"
+            "Write a brief factual summary of this segment."
         )
-        summary = _call_llm(llm, prompt, max_tokens=256)
+        summary = _call_llm(llm, system, user, max_tokens=256)
         if summary:
             chunk_summaries.append(summary)
 
@@ -204,12 +212,11 @@ def _summarize_chunks(llm, chunks: list[str], focus: str) -> str:
         return ""
 
     combined = "\n\n".join(f"Segment {i + 1}: {s}" for i, s in enumerate(chunk_summaries))
-    synthesis_prompt = (
-        f"<s>[INST] <<SYS>>\n{system}\n<</SYS>>\n\n"
+    user = (
         f"Segment summaries:\n{combined}\n\n"
-        "Synthesise the above into a single coherent paragraph summary. [/INST]"
+        "Synthesise the above into a single coherent paragraph summary."
     )
-    return _call_llm(llm, synthesis_prompt, max_tokens=512)
+    return _call_llm(llm, system, user, max_tokens=512)
 
 
 def run_summarize(
@@ -246,6 +253,7 @@ def run_summarize(
         llm = Llama(
             model_path=config.text_model,
             n_gpu_layers=config.text_gpu_layers,
+            n_ctx=config.summarize_max_transcript_tokens + 4096,
             verbose=False,
         )
 
@@ -275,8 +283,9 @@ def run_summarize(
                         chunks = _chunk_transcript(transcript, config.summarize_max_transcript_tokens)
                         ctx["transcript"] = _summarize_chunks(llm, chunks, config.focus)
 
-                prompt = _build_prompt(ctx, config.focus, config.summarize_target_words)
-                summary_text = _call_llm(llm, prompt)
+                system = _build_system_prompt(config.focus)
+                user = _build_user_prompt(ctx, config.summarize_target_words)
+                summary_text = _call_llm(llm, system, user)
                 status = "done" if summary_text else "failed"
                 upsert_file_summary(
                     corpus_conn,

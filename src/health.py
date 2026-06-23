@@ -27,6 +27,7 @@ def run_checks(
     return [
         _check_exiftool(config),
         _check_ffmpeg(config),
+        _check_whisper_cli(config),
         _check_vision_model(config),
         _check_text_model(config),
         _check_audio_model(config),
@@ -79,6 +80,30 @@ def _check_ffmpeg(config) -> HealthCheck:
         ok=found,
         detail=exe if found else f"not found: '{exe}'",
         fix="" if found else f"Place ffmpeg.exe at '{exe}' or add to PATH",
+    )
+
+
+def _check_whisper_cli(config) -> HealthCheck:
+    exe = getattr(config, "whisper_cli", "")
+    if not exe:
+        return HealthCheck(
+            id="whisper_cli",
+            label="whisper-cli binary",
+            severity="info",
+            ok=True,
+            detail="not configured — using pywhispercpp (CPU only)",
+        )
+    found = shutil.which(exe) is not None or Path(exe).exists()
+    return HealthCheck(
+        id="whisper_cli",
+        label="whisper-cli binary",
+        severity="warning",
+        ok=found,
+        detail=exe if found else f"not found: '{exe}'",
+        fix="" if found else (
+            f"Download the Vulkan build of whisper-cli.exe from "
+            f"github.com/ggerganov/whisper.cpp/releases and place at '{exe}'"
+        ),
     )
 
 
@@ -153,14 +178,15 @@ def _check_text_model(config) -> HealthCheck:
 
 
 def _check_audio_model(config) -> HealthCheck:
-    if importlib.util.find_spec("pywhispercpp") is None:
+    use_cli = bool(getattr(config, "whisper_cli", ""))
+    if not use_cli and importlib.util.find_spec("pywhispercpp") is None:
         return HealthCheck(
             id="audio_model",
             label="Whisper audio model",
             severity="warning",
             ok=False,
-            detail="pywhispercpp not installed",
-            fix="pip install pywhispercpp",
+            detail="pywhispercpp not installed and whisper_cli not configured",
+            fix="pip install pywhispercpp  OR  set tools.whisper_cli in config.yaml",
         )
     configured = config.audio_model
     if not configured:

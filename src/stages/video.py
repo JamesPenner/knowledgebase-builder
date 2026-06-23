@@ -114,6 +114,38 @@ def _select_scene_frames(frames: list[bytes], phash_threshold: int) -> list[byte
     return selected if selected else (frames[:1] if frames else [])
 
 
+def _frame_quality(jpeg_bytes: bytes) -> tuple[float, float]:
+    """Return (mean_brightness, sharpness) for a JPEG frame using PIL + numpy only.
+
+    mean_brightness: average grayscale value (0–255); low = dark frame.
+    sharpness: variance of the discrete Laplacian (higher = sharper).
+    """
+    import io
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(io.BytesIO(jpeg_bytes)) as img:
+        arr = np.array(img.convert("L"), dtype=np.float32)
+
+    brightness = float(arr.mean())
+    lap = (
+        arr[:-2, 1:-1] + arr[2:, 1:-1]
+        + arr[1:-1, :-2] + arr[1:-1, 2:]
+        - 4.0 * arr[1:-1, 1:-1]
+    )
+    sharpness = float(lap.var())
+    return brightness, sharpness
+
+
+def _write_debug_frames(file_path: Path, frames: list[bytes], debug_dir: Path, tag: str) -> None:
+    """Write JPEG frames to debug_dir for manual inspection."""
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    stem = file_path.stem
+    for i, jpeg_bytes in enumerate(frames):
+        (debug_dir / f"{stem}_{tag}_{i:02d}.jpg").write_bytes(jpeg_bytes)
+    logger.debug("debug_frames: wrote %d frames to %s (tag=%s)", len(frames), debug_dir, tag)
+
+
 def get_video_frames(
     file_path: Path,
     config: Config,
@@ -148,8 +180,13 @@ def get_video_frames(
     elif mode == "collage":
         cols = math.ceil(math.sqrt(max(1, len(frames))))
         collage = make_collage(frames, cols)
-        return [collage] if collage else []
+        frames = [collage] if collage else []
+        if config.debug_frames_dir and frames:
+            _write_debug_frames(file_path, frames, Path(config.debug_frames_dir), f"{mode}")
+        return frames
 
+    if config.debug_frames_dir and frames:
+        _write_debug_frames(file_path, frames, Path(config.debug_frames_dir), f"{mode}")
     return frames
 
 
@@ -185,8 +222,16 @@ def _aggregate_descriptions(frame_descriptions: list[str], focus: str, model) ->
     for i, desc in enumerate(frame_descriptions, 1):
         parts.append(f"Frame {i}: {desc}")
     parts.append(
-        "Based on these frame descriptions, write a single cohesive description of the video. "
-        "Focus on the overall content, activity, and setting."
+        "Using the frame descriptions above, write a single cohesive description of the video.\n\n"
+        "Rules:\n"
+        "- Prioritise details and themes that appear consistently across multiple frames — "
+        "repeated elements are more reliable than single-frame observations.\n"
+        "- If a detail appears in only one frame and conflicts with what other frames show "
+        "(e.g. a different clothing colour, a person not seen elsewhere), omit it rather than "
+        "including potentially hallucinated content.\n"
+        "- Where frame descriptions agree or reinforce each other, describe those elements "
+        "with confidence.\n"
+        "- Focus on the overall content, activity, and setting."
     )
     prompt = "\n\n".join(parts)
     output = model.create_chat_completion(
@@ -230,6 +275,31 @@ def describe_video(
 
     if not selected:
         selected = [(candidate_timestamps[0], frame_bytes_list[0], None)]
+
+    # Quality pre-screen: drop frames that are too dark or too blurry for the VLM
+    min_brightness = config.describe_min_frame_brightness
+    min_sharpness = config.describe_min_frame_sharpness
+    if min_brightness > 0 or min_sharpness > 0:
+        usable = []
+        for ts_ms, jpeg_bytes, phash in selected:
+            brightness, sharpness = _frame_quality(jpeg_bytes)
+            if brightness >= min_brightness and sharpness >= min_sharpness:
+                usable.append((ts_ms, jpeg_bytes, phash))
+            else:
+                logger.debug(
+                    "describe_video: frame @%dms rejected (brightness=%.1f/%.1f sharpness=%.1f/%.1f) %s",
+                    ts_ms, brightness, min_brightness, sharpness, min_sharpness, file_path.name,
+                )
+        if not usable:
+            logger.info(
+                "describe_video: all %d frame(s) below quality threshold — skipping VLM for %s",
+                len(selected), file_path.name,
+            )
+            return ""
+        selected = usable
+
+    if config.debug_frames_dir:
+        _write_debug_frames(file_path, [b for _, b, _ in selected], Path(config.debug_frames_dir), "describe")
 
     # Describe each selected frame
     frame_descriptions: list[str] = []

@@ -394,7 +394,7 @@ def test_run_checks_returns_24(tmp_path):
     from src.health import run_checks as _run
     cfg = _cfg()
     checks = _run(cfg, None, None, tmp_path)
-    assert len(checks) == 24
+    assert len(checks) == 25
     ids = [c.id for c in checks]
     assert "exiftool" in ids
     assert "audio_model" in ids

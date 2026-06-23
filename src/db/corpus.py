@@ -1057,7 +1057,7 @@ def get_pending_transcribe_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         LEFT JOIN transcriptions t ON t.file_id = f.id
         WHERE f.canonical_id IS NULL
           AND f.file_type IN ('audio', 'video')
-          AND (t.file_id IS NULL OR t.transcribe_status = 'failed')
+          AND (t.file_id IS NULL OR t.transcribe_status IN ('failed', 'pending'))
         ORDER BY f.id
         """
     ).fetchall()

@@ -28,6 +28,12 @@ tools/
 # Test fixtures (real files for local spot-checking only)
 tests/fixtures/corpus/
 
+# Debug frame dumps (written when debug.frames_dir is set in config.yaml)
+tests/debug_output/
+
+# Test mock side-effects
+MagicMock/
+
 # Temporary artefacts
 tmp/
 

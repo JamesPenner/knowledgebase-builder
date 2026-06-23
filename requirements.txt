@@ -55,7 +55,13 @@ shapely>=2.0.0
 llama-cpp-python>=0.3.26
 
 # --- Transcription (Stage 3b) ---
+# Option A: CPU-only Python bindings (default, works out of the box)
 pywhispercpp>=1.2.0
+# Option B: GPU-accelerated via whisper-cli binary (AMD/Intel/NVIDIA via Vulkan, no pip install needed)
+#   1. Download the Vulkan build of whisper-cli.exe from:
+#        github.com/ggerganov/whisper.cpp/releases  (look for whisper-vulkan-*.zip)
+#   2. Place whisper-cli.exe in tools/
+#   3. Set tools.whisper_cli: tools/whisper-cli.exe in config.yaml
 
 # --- Dev / test ---
 pytest>=8.3.0

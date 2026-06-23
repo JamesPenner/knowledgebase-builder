@@ -2,7 +2,8 @@
 from unittest.mock import MagicMock
 
 from src.stages.summarize import (
-    _build_prompt,
+    _build_system_prompt,
+    _build_user_prompt,
     _call_llm,
     _chunk_transcript,
 )
@@ -36,63 +37,63 @@ def _ctx(
 # Prompt building
 # ---------------------------------------------------------------------------
 
-class TestBuildPromptCase1:
+class TestBuildUserPromptCase1:
     def test_description_only_selects_case1(self):
         ctx = _ctx(description="A sunny beach.")
-        prompt = _build_prompt(ctx, focus="", target_words=150)
+        prompt = _build_user_prompt(ctx, target_words=150)
         assert "Visual description:" in prompt
         assert "Transcript:" not in prompt
         assert "Attributed transcript:" not in prompt
 
     def test_description_only_contains_write_instruction(self):
         ctx = _ctx(description="A sunny beach.")
-        prompt = _build_prompt(ctx, focus="", target_words=150)
+        prompt = _build_user_prompt(ctx, target_words=150)
         assert "150-word summary" in prompt
 
 
-class TestBuildPromptCase2:
+class TestBuildUserPromptCase2:
     def test_transcript_only_selects_case2(self):
         ctx = _ctx(transcript="Hello world.")
-        prompt = _build_prompt(ctx, focus="", target_words=100)
+        prompt = _build_user_prompt(ctx, target_words=100)
         assert "Transcript:" in prompt
         assert "Visual description:" not in prompt
 
     def test_attributed_transcript_label(self):
         ctx = _ctx(transcript="Speaker A: hi.", attributed=True)
-        prompt = _build_prompt(ctx, focus="", target_words=100)
+        prompt = _build_user_prompt(ctx, target_words=100)
         assert "Attributed transcript:" in prompt
 
 
-class TestBuildPromptCase3:
+class TestBuildUserPromptCase3:
     def test_combined_selects_case3(self):
         ctx = _ctx(description="A dog runs.", transcript="The dog barks.")
-        prompt = _build_prompt(ctx, focus="", target_words=150)
-        assert "Visual description:" in prompt
-        assert "Transcript:" in prompt
+        prompt = _build_user_prompt(ctx, target_words=150)
+        assert "Visual description" in prompt
+        assert "Transcript" in prompt
 
-    def test_combined_integrate_instruction(self):
+    def test_combined_transcript_is_authoritative(self):
         ctx = _ctx(description="A dog runs.", transcript="The dog barks.")
-        prompt = _build_prompt(ctx, focus="", target_words=150)
-        assert "integrating both" in prompt
+        prompt = _build_user_prompt(ctx, target_words=150)
+        assert "authoritative" in prompt
+
+    def test_combined_description_is_inferred(self):
+        ctx = _ctx(description="A dog runs.", transcript="The dog barks.")
+        prompt = _build_user_prompt(ctx, target_words=150)
+        assert "inferred" in prompt
 
 
-class TestBuildPromptInjections:
-    def test_focus_string_appears(self):
-        ctx = _ctx(description="Party photos.")
-        prompt = _build_prompt(ctx, focus="family events", target_words=150)
-        assert "family events" in prompt
-
+class TestBuildUserPromptInjections:
     def test_vocab_terms_appear_with_soft_guidance(self):
         ctx = _ctx(description="A photo.", vocab_terms=["celebration", "outdoors"])
-        prompt = _build_prompt(ctx, focus="", target_words=150)
+        prompt = _build_user_prompt(ctx, target_words=150)
         assert "celebration" in prompt
         assert "outdoors" in prompt
         assert "Relevant vocabulary" in prompt
 
     def test_attributed_transcript_label_in_combined(self):
         ctx = _ctx(description="A meeting.", transcript="Bob: Hello.", attributed=True)
-        prompt = _build_prompt(ctx, focus="", target_words=150)
-        assert "Attributed transcript:" in prompt
+        prompt = _build_user_prompt(ctx, target_words=150)
+        assert "Attributed transcript" in prompt
 
     def test_empty_context_omits_blank_lines(self):
         ctx = _ctx(
@@ -103,11 +104,25 @@ class TestBuildPromptInjections:
             derived_tags=[],
             vocab_terms=[],
         )
-        prompt = _build_prompt(ctx, focus="", target_words=150)
+        prompt = _build_user_prompt(ctx, target_words=150)
         assert "File: \n" not in prompt
         assert "Date: \n" not in prompt
         assert "Location: \n" not in prompt
         assert "Tags: \n" not in prompt
+
+
+class TestBuildSystemPrompt:
+    def test_focus_string_appears(self):
+        system = _build_system_prompt(focus="family events")
+        assert "family events" in system
+
+    def test_no_focus_omits_domain_line(self):
+        system = _build_system_prompt(focus="")
+        assert "DOMAIN FOCUS" not in system
+
+    def test_always_contains_base_instruction(self):
+        system = _build_system_prompt(focus="")
+        assert "summarization assistant" in system
 
 
 # ---------------------------------------------------------------------------
@@ -145,17 +160,32 @@ class TestChunkTranscript:
 class TestCallLlm:
     def test_returns_stripped_text(self):
         mock_llm = MagicMock()
-        mock_llm.return_value = {"choices": [{"text": "  A nice summary.  "}]}
-        result = _call_llm(mock_llm, "prompt")
+        mock_llm.create_chat_completion.return_value = {
+            "choices": [{"message": {"content": "  A nice summary.  "}}]
+        }
+        result = _call_llm(mock_llm, "system", "user")
         assert result == "A nice summary."
 
     def test_empty_response_returns_empty_string(self):
         mock_llm = MagicMock()
-        mock_llm.return_value = {"choices": [{"text": ""}]}
-        result = _call_llm(mock_llm, "prompt")
+        mock_llm.create_chat_completion.return_value = {
+            "choices": [{"message": {"content": ""}}]
+        }
+        result = _call_llm(mock_llm, "system", "user")
         assert result == ""
 
     def test_exception_returns_empty_string(self):
-        mock_llm = MagicMock(side_effect=RuntimeError("boom"))
-        result = _call_llm(mock_llm, "prompt")
+        mock_llm = MagicMock()
+        mock_llm.create_chat_completion.side_effect = RuntimeError("boom")
+        result = _call_llm(mock_llm, "system", "user")
         assert result == ""
+
+    def test_passes_system_and_user_as_messages(self):
+        mock_llm = MagicMock()
+        mock_llm.create_chat_completion.return_value = {
+            "choices": [{"message": {"content": "ok"}}]
+        }
+        _call_llm(mock_llm, "sys content", "usr content")
+        messages = mock_llm.create_chat_completion.call_args[1]["messages"]
+        assert messages[0] == {"role": "system", "content": "sys content"}
+        assert messages[1] == {"role": "user", "content": "usr content"}

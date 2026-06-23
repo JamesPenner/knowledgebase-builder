@@ -511,7 +511,7 @@ class TestFaceHealthChecks:
         from src.health import run_checks
         config = self._make_config()
         checks = run_checks(config, None, None, tmp_path)
-        assert len(checks) == 24
+        assert len(checks) == 25
 
 
 # ---------------------------------------------------------------------------

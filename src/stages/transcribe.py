@@ -56,6 +56,61 @@ def _extract_audio(file_path: Path, ffmpeg: str) -> tuple[Path | None, int | Non
         return None, None
 
 
+def _transcribe_with_cli(
+    wav_path: Path,
+    whisper_cli: str,
+    model_path: str,
+    language: str = "auto",
+    no_gpu: bool = False,
+) -> tuple[str, str, list[dict]]:
+    """Transcribe via the whisper-cli binary (Vulkan build). Returns (text, lang, segments)."""
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_prefix = Path(tmp_dir) / "out"
+        cmd = [
+            whisper_cli,
+            "-m", model_path,
+            "-f", str(wav_path),
+            "-l", "auto" if language == "auto" else language,
+            "-oj",
+            "-of", str(out_prefix),
+        ]
+        if no_gpu:
+            cmd.append("--no-gpu")
+
+        result = subprocess.run(cmd, capture_output=True, timeout=None)
+        json_path = Path(str(out_prefix) + ".json")
+        if not json_path.exists():
+            stderr = result.stderr.decode(errors="replace")
+            raise RuntimeError(
+                f"whisper-cli produced no JSON output (exit {result.returncode}). "
+                f"stderr: {stderr[:500]}"
+            )
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+    detected_lang = (data.get("result") or {}).get("language") or "und"
+    texts: list[str] = []
+    segments: list[dict] = []
+    for seg in data.get("transcription") or []:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        offsets = seg.get("offsets") or {}
+        start_ms = int(offsets.get("from", 0))
+        end_ms = int(offsets.get("to", 0))
+        texts.append(text)
+        segments.append({
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "text": text,
+            "avg_logprob": None,
+        })
+
+    return " ".join(texts), detected_lang, segments
+
+
 def _transcribe_audio(wav_path: Path, model, language: str = "auto") -> tuple[str, str, list[dict]]:
     """Transcribe a wav file. Returns (transcript_text, detected_language, segments)."""
     lang_arg = None if language == "auto" else language
@@ -129,16 +184,19 @@ def run_transcribe(
         logger.warning("Transcribe: no audio_model configured — stage skipped")
         return
 
-    try:
-        import pywhispercpp  # noqa: F401
-    except ImportError:
-        logger.error("Transcribe: pywhispercpp not installed — stage skipped")
-        return
+    use_cli = bool(config.whisper_cli)
+
+    if not use_cli:
+        try:
+            import pywhispercpp  # noqa: F401
+        except ImportError:
+            logger.error("Transcribe: pywhispercpp not installed and whisper_cli not configured — stage skipped")
+            return
 
     corpus_conn = open_corpus(corpus_path)
 
     try:
-        from pywhispercpp.model import Model as WhisperModel
+        model = None
 
         pending = get_pending_transcribe_files(corpus_conn)
         total = len(pending)
@@ -148,18 +206,21 @@ def run_transcribe(
             progress.done()
             return
 
-        progress.set_message(f"Loading Whisper model… ({total} files pending)", total=total)
-
-        ctx_params = {"use_gpu": False} if config.audio_gpu_layers == 0 else None
-        try:
-            model = WhisperModel(model=config.audio_model, context_params=ctx_params)
-        except Exception as exc:
-            raise ModelLoadError(
-                f"Whisper model failed to load: {exc}\n"
-                f"This is usually caused by insufficient VRAM or an invalid model path.\n"
-                f"Try setting 'audio_gpu_layers: 0' in config.yaml to run on CPU "
-                f"(slower but works on any machine)."
-            ) from exc
+        if use_cli:
+            progress.set_message(f"Transcribing with whisper-cli… ({total} files pending)", total=total)
+        else:
+            from pywhispercpp.model import Model as WhisperModel
+            progress.set_message(f"Loading Whisper model… ({total} files pending)", total=total)
+            ctx_params = {"use_gpu": False} if config.audio_gpu_layers == 0 else None
+            try:
+                model = WhisperModel(model=config.audio_model, context_params=ctx_params)
+            except Exception as exc:
+                raise ModelLoadError(
+                    f"Whisper model failed to load: {exc}\n"
+                    f"This is usually caused by insufficient VRAM or an invalid model path.\n"
+                    f"Try setting 'audio_gpu_layers: 0' in config.yaml to run on CPU "
+                    f"(slower but works on any machine)."
+                ) from exc
 
         processed = skipped = errors = 0
         start = time.monotonic()
@@ -234,7 +295,13 @@ def run_transcribe(
                 else:
                     continue
 
-                transcript_text, detected_lang, segments = _transcribe_audio(wav_path, model)
+                if use_cli:
+                    transcript_text, detected_lang, segments = _transcribe_with_cli(
+                        wav_path, config.whisper_cli, config.audio_model,
+                        no_gpu=(config.audio_gpu_layers == 0),
+                    )
+                else:
+                    transcript_text, detected_lang, segments = _transcribe_audio(wav_path, model)
 
                 batch_tx.append((
                     file_id,
@@ -285,11 +352,14 @@ def run_transcribe_file(
         logger.warning("Transcribe: no audio_model configured")
         return None
 
-    try:
-        from pywhispercpp.model import Model as WhisperModel
-    except ImportError:
-        logger.error("Transcribe: pywhispercpp not installed")
-        return None
+    use_cli = bool(config.whisper_cli)
+
+    if not use_cli:
+        try:
+            from pywhispercpp.model import Model as WhisperModel
+        except ImportError:
+            logger.error("Transcribe: pywhispercpp not installed and whisper_cli not configured")
+            return None
 
     ext = path.suffix.lower()
     is_audio = ext in _AUDIO_EXTS
@@ -298,16 +368,18 @@ def run_transcribe_file(
     if not is_audio and not is_video:
         return None
 
-    ctx_params = {"use_gpu": False} if config.audio_gpu_layers == 0 else None
-    try:
-        model = WhisperModel(model=config.audio_model, context_params=ctx_params)
-    except Exception as exc:
-        raise ModelLoadError(
-            f"Whisper model failed to load: {exc}\n"
-            f"This is usually caused by insufficient VRAM or an invalid model path.\n"
-            f"Try setting 'audio_gpu_layers: 0' in config.yaml to run on CPU "
-            f"(slower but works on any machine)."
-        ) from exc
+    model = None
+    if not use_cli:
+        ctx_params = {"use_gpu": False} if config.audio_gpu_layers == 0 else None
+        try:
+            model = WhisperModel(model=config.audio_model, context_params=ctx_params)
+        except Exception as exc:
+            raise ModelLoadError(
+                f"Whisper model failed to load: {exc}\n"
+                f"This is usually caused by insufficient VRAM or an invalid model path.\n"
+                f"Try setting 'audio_gpu_layers: 0' in config.yaml to run on CPU "
+                f"(slower but works on any machine)."
+            ) from exc
 
     wav_path: Path | None = None
     duration_ms: int | None = None
@@ -324,7 +396,13 @@ def run_transcribe_file(
             if wav_path is None:
                 return None
 
-        transcript_text, detected_lang, _ = _transcribe_audio(wav_path, model)
+        if use_cli:
+            transcript_text, detected_lang, _ = _transcribe_with_cli(
+                wav_path, config.whisper_cli, config.audio_model,
+                no_gpu=(config.audio_gpu_layers == 0),
+            )
+        else:
+            transcript_text, detected_lang, _ = _transcribe_audio(wav_path, model)
 
         import datetime
         return {
