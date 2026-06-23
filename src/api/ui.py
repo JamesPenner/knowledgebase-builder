@@ -35,15 +35,25 @@ def index():
 def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, _ = paths
     kb_name = request.query_params.get("kb", "")
-    from src.db.corpus import get_pipeline_checkpoints, open_corpus
+    from src.db.corpus import (
+        get_describe_counts,
+        get_pipeline_checkpoints,
+        get_transcribe_counts,
+        open_corpus,
+    )
     conn = open_corpus(corpus_path)
     checkpoint_rows = get_pipeline_checkpoints(conn)
+    stage_counts = {
+        "describe": get_describe_counts(conn),
+        "transcribe": get_transcribe_counts(conn),
+    }
     conn.close()
     checkpoints = {r["stage"]: dict(r) for r in checkpoint_rows}
     return templates.TemplateResponse(request, "pipeline.html", {
         "kb": kb_name,
         "checkpoints": checkpoints,
         "all_stages": list(DEPENDENCIES.keys()),
+        "stage_counts": stage_counts,
     })
 
 

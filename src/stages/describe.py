@@ -26,6 +26,54 @@ class ModelLoadError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Multimodal chat handler
+# ---------------------------------------------------------------------------
+
+_CHAT_HANDLER_MAP = {
+    "qwen2_vl":  "Qwen25VLChatHandler",
+    "gemma3":    "Llava16ChatHandler",
+    "moondream": "MoondreamChatHandler",
+    "llava15":   "Llava15ChatHandler",
+    "llava16":   "Llava16ChatHandler",
+    "llava":     "Llava15ChatHandler",
+}
+
+_AUTODETECT_PATTERNS = [
+    ("qwen2",     "qwen2_vl"),
+    ("moondream", "moondream"),
+    ("gemma",     "gemma3"),
+]
+
+
+def _resolve_chat_format(mmproj_path: str, model_path: str) -> str:
+    """Infer chat format from mmproj and model filenames; falls back to 'llava'."""
+    for src in (Path(mmproj_path).name.lower(), Path(model_path).name.lower()):
+        for pattern, fmt in _AUTODETECT_PATTERNS:
+            if pattern in src:
+                return fmt
+    return "llava"
+
+
+def _make_chat_handler(mmproj_path: str, chat_format: str, model_path: str = ""):
+    """Return a llama_cpp chat handler for the given mmproj file."""
+    from llama_cpp import llama_chat_format as _fmt
+
+    if not chat_format:
+        chat_format = _resolve_chat_format(mmproj_path, model_path)
+
+    handler_name = _CHAT_HANDLER_MAP.get(chat_format, "Llava15ChatHandler")
+    handler_cls = getattr(_fmt, handler_name, None)
+    if handler_cls is None:
+        available = [x for x in dir(_fmt) if "ChatHandler" in x]
+        raise ModelLoadError(
+            f"Chat handler '{handler_name}' not found in installed llama_cpp. "
+            f"Available handlers: {available}. "
+            f"Set models.vision_chat_format in config.yaml to one of: {list(_CHAT_HANDLER_MAP)}"
+        )
+    return handler_cls(clip_model_path=mmproj_path, verbose=False)
+
+
+# ---------------------------------------------------------------------------
 # Prompt building
 # ---------------------------------------------------------------------------
 
@@ -111,8 +159,8 @@ def _describe_image(file_path: Path, model, prompt: str) -> str:
 
     with Image.open(file_path) as img:
         img = img.convert("RGB")
-        if max(img.size) > 1024:
-            img.thumbnail((1024, 1024), Image.LANCZOS)
+        if max(img.size) > 512:
+            img.thumbnail((512, 512), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         image_bytes = buf.getvalue()
@@ -126,7 +174,8 @@ def _describe_image(file_path: Path, model, prompt: str) -> str:
         max_tokens=512,
         temperature=0.1,
     )
-    return output["choices"][0]["message"]["content"].strip()
+    raw = output["choices"][0]["message"]["content"]
+    return (raw or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +214,28 @@ def run_describe(
     try:
         import llama_cpp as _llama
 
+        pending = get_pending_describe_files(corpus_conn)
+        total = len(pending)
+
+        if total == 0:
+            logger.info("Describe: no pending files — stage skipped")
+            progress.done()
+            return
+
+        progress.set_message(f"Loading vision model… ({total} files pending)", total=total)
+
         try:
-            model = _llama.Llama(
+            _load_kwargs: dict = dict(
                 model_path=config.vision_model,
                 n_gpu_layers=config.vision_gpu_layers,
-                n_ctx=4096,
+                n_ctx=32768,   # Qwen2.5-VL visual tokens need >> 4096; use recommended 32k
                 verbose=False,
             )
+            if config.vision_mmproj:
+                _load_kwargs["chat_handler"] = _make_chat_handler(
+                    config.vision_mmproj, config.vision_chat_format, config.vision_model
+                )
+            model = _llama.Llama(**_load_kwargs)
         except Exception as exc:
             raise ModelLoadError(
                 f"Vision model failed to load: {exc}\n"
@@ -180,8 +244,6 @@ def run_describe(
                 f"or set it to 0 to run on CPU (slower but works on any machine)."
             ) from exc
 
-        pending = get_pending_describe_files(corpus_conn)
-        total = len(pending)
         processed = skipped = errors = 0
         start = time.monotonic()
 
@@ -198,7 +260,7 @@ def run_describe(
             if cancel_event.is_set():
                 break
 
-            progress.update(i, total, f"Describe: {i + 1}/{total}")
+            progress.update(i, total, f"Describe: {i + 1}/{total} — {Path(file_row['path']).name}")
 
             file_id = file_row["id"]
             file_path = Path(file_row["path"])
@@ -206,8 +268,9 @@ def run_describe(
             ext = (file_row["ext"] or "").lower()
 
             # Determine routing by file_type first, ext as fallback
-            is_image = file_type == "image" or (not file_type and ext in _IMAGE_EXTS)
-            is_video = file_type == "video" or (not file_type and ext in _VIDEO_EXTS)
+            # DB stores "images"/"video" (ingest normalises to those values)
+            is_image = file_type in ("image", "images") or (not file_type and ext in _IMAGE_EXTS)
+            is_video = file_type in ("video", "videos") or (not file_type and ext in _VIDEO_EXTS)
 
             if not is_image and not is_video:
                 # audio or unknown — no visual content
@@ -231,7 +294,19 @@ def run_describe(
                         conn=corpus_conn,
                         prompt=prompt,
                     )
+                    if not description_raw:
+                        # ffprobe/ffmpeg failed or extracted no frames
+                        logger.warning("Describe: video %s produced no frames — marked failed", file_path)
+                        batch.append((file_id, None, None, config.vision_model, "failed"))
+                        errors += 1
+                        if len(batch) >= _BATCH_SIZE:
+                            _flush_batch()
+                        continue
 
+                # Strip leading colon artifact that Qwen2.5-VL sometimes prepends
+                description_raw = description_raw.lstrip(": \n")
+                if not description_raw:
+                    logger.warning("Describe: file_id=%d path=%s returned empty description", file_id, file_path)
                 description_normalized = _normalize_description(description_raw, kb_conn)
                 batch.append((
                     file_id,
@@ -284,19 +359,24 @@ def run_describe_file(
         return None
 
     ext = path.suffix.lower()
-    is_image = ext in _IMAGE_EXTS
+    is_image = ext in _IMAGE_EXTS  # single-file path uses ext only (no DB file_type)
     is_video = ext in _VIDEO_EXTS
 
     if not is_image and not is_video:
         return None
 
     try:
-        model = _llama.Llama(
+        _load_kwargs: dict = dict(
             model_path=config.vision_model,
             n_gpu_layers=config.vision_gpu_layers,
-            n_ctx=4096,
+            n_ctx=32768,
             verbose=False,
         )
+        if config.vision_mmproj:
+            _load_kwargs["chat_handler"] = _make_chat_handler(
+                config.vision_mmproj, config.vision_chat_format, config.vision_model
+            )
+        model = _llama.Llama(**_load_kwargs)
     except Exception as exc:
         raise ModelLoadError(
             f"Vision model failed to load: {exc}\n"

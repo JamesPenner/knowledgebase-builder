@@ -62,6 +62,8 @@ class TestIngestRunEndpoint:
         assert resp.json()["status"] == "cancelled"
 
     def test_status_returns_idle_when_no_job(self):
+        import src.pipeline.progress as _prog
+        _prog._progress.pop("ingest", None)  # clear state from any prior test in this module
         resp = client.get("/api/stages/ingest/status")
         assert resp.status_code == 200
         data = resp.json()

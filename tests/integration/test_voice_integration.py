@@ -255,13 +255,13 @@ class TestVoiceHealthCheck:
         vc = next(c for c in checks if c.id == "voice_model")
         assert vc.severity == "warning"
 
-    def test_total_check_count_is_20(self):
+    def test_total_check_count_is_24(self):
         from src.config import Config
         from src.health import run_checks
 
         config = Config()
         checks = run_checks(config, None, None, Path("."))
-        assert len(checks) == 23
+        assert len(checks) == 24
 
 
 # ---------------------------------------------------------------------------

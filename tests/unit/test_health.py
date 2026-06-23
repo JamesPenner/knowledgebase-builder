@@ -1,9 +1,11 @@
 """Unit tests for src/health.py — each check function in isolation."""
 import sqlite3
+from unittest.mock import patch
 
 from src.config import Config
 from src.health import (
     HealthCheck,
+    _check_audio_model,
     _check_corpus_files,
     _check_dates_yaml,
     _check_derive_rules_yaml,
@@ -93,6 +95,25 @@ def test_check_vision_model_not_configured_no_dir():
     assert chk.id == "vision_model"
 
 
+def test_check_vision_model_with_mmproj_both_present(tmp_path):
+    model = tmp_path / "vision.gguf"
+    model.write_bytes(b"")
+    mmproj = tmp_path / "mmproj-model-f16.gguf"
+    mmproj.write_bytes(b"")
+    chk = _check_vision_model(_cfg(vision_model=str(model), vision_mmproj=str(mmproj)))
+    assert chk.ok
+    assert "mmproj-model-f16.gguf" in chk.detail
+
+
+def test_check_vision_model_with_mmproj_missing(tmp_path):
+    model = tmp_path / "vision.gguf"
+    model.write_bytes(b"")
+    chk = _check_vision_model(_cfg(vision_model=str(model), vision_mmproj="/no/such/mmproj.gguf"))
+    assert not chk.ok
+    assert "mmproj" in chk.detail
+    assert chk.fix
+
+
 def test_check_text_model_configured_and_present(tmp_path):
     model = tmp_path / "text.gguf"
     model.write_bytes(b"")
@@ -103,6 +124,47 @@ def test_check_text_model_configured_and_present(tmp_path):
 def test_check_text_model_missing():
     chk = _check_text_model(_cfg(text_model="/no/such/text.gguf"))
     assert not chk.ok
+
+
+def test_check_audio_model_pywhispercpp_missing():
+    with patch("src.health.importlib.util.find_spec", return_value=None):
+        chk = _check_audio_model(_cfg(audio_model="base"))
+    assert not chk.ok
+    assert chk.id == "audio_model"
+    assert chk.severity == "warning"
+    assert "pywhispercpp" in chk.detail
+    assert chk.fix
+
+
+def test_check_audio_model_not_configured():
+    with patch("src.health.importlib.util.find_spec", return_value=object()):
+        chk = _check_audio_model(_cfg(audio_model=""))
+    assert not chk.ok
+    assert "not configured" in chk.detail
+    assert chk.fix
+
+
+def test_check_audio_model_file_path_present(tmp_path):
+    model = tmp_path / "whisper-large.gguf"
+    model.write_bytes(b"")
+    with patch("src.health.importlib.util.find_spec", return_value=object()):
+        chk = _check_audio_model(_cfg(audio_model=str(model)))
+    assert chk.ok
+    assert chk.severity == "warning"
+
+
+def test_check_audio_model_file_path_missing():
+    with patch("src.health.importlib.util.find_spec", return_value=object()):
+        chk = _check_audio_model(_cfg(audio_model="/no/such/whisper.gguf"))
+    assert not chk.ok
+    assert chk.fix
+
+
+def test_check_audio_model_named_model():
+    with patch("src.health.importlib.util.find_spec", return_value=object()):
+        chk = _check_audio_model(_cfg(audio_model="base"))
+    assert chk.ok
+    assert "base" in chk.detail
 
 
 def test_check_spacy_model():
@@ -328,13 +390,14 @@ def test_check_taxonomy_yaml_ok(tmp_path):
 # run_checks integration — returns all 18 checks
 # ---------------------------------------------------------------------------
 
-def test_run_checks_returns_23(tmp_path):
+def test_run_checks_returns_24(tmp_path):
     from src.health import run_checks as _run
     cfg = _cfg()
     checks = _run(cfg, None, None, tmp_path)
-    assert len(checks) == 23
+    assert len(checks) == 24
     ids = [c.id for c in checks]
     assert "exiftool" in ids
+    assert "audio_model" in ids
     assert "taxonomy_yaml" in ids
     assert "geolocate_data" in ids
     assert "privacy_zones" in ids

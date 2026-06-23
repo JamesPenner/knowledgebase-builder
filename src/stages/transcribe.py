@@ -140,21 +140,27 @@ def run_transcribe(
     try:
         from pywhispercpp.model import Model as WhisperModel
 
+        pending = get_pending_transcribe_files(corpus_conn)
+        total = len(pending)
+
+        if total == 0:
+            logger.info("Transcribe: no pending files — stage skipped")
+            progress.done()
+            return
+
+        progress.set_message(f"Loading Whisper model… ({total} files pending)", total=total)
+
+        ctx_params = {"use_gpu": False} if config.audio_gpu_layers == 0 else None
         try:
-            model = WhisperModel(
-                model=config.audio_model,
-                n_gpu_layers=config.audio_gpu_layers,
-            )
+            model = WhisperModel(model=config.audio_model, context_params=ctx_params)
         except Exception as exc:
             raise ModelLoadError(
                 f"Whisper model failed to load: {exc}\n"
                 f"This is usually caused by insufficient VRAM or an invalid model path.\n"
-                f"Try reducing 'audio_gpu_layers' in config.yaml, "
-                f"or set it to 0 to run on CPU (slower but works on any machine)."
+                f"Try setting 'audio_gpu_layers: 0' in config.yaml to run on CPU "
+                f"(slower but works on any machine)."
             ) from exc
 
-        pending = get_pending_transcribe_files(corpus_conn)
-        total = len(pending)
         processed = skipped = errors = 0
         start = time.monotonic()
 
@@ -184,7 +190,7 @@ def run_transcribe(
             if cancel_event.is_set():
                 break
 
-            progress.update(i, total, f"Transcribe: {i + 1}/{total}")
+            progress.update(i, total, f"Transcribe: {i + 1}/{total} — {Path(file_row['path']).name}")
 
             file_id = file_row["id"]
             file_path = Path(file_row["path"])
@@ -292,15 +298,15 @@ def run_transcribe_file(
     if not is_audio and not is_video:
         return None
 
+    ctx_params = {"use_gpu": False} if config.audio_gpu_layers == 0 else None
     try:
-        model = WhisperModel(
-            model=config.audio_model,
-            n_gpu_layers=config.audio_gpu_layers,
-        )
+        model = WhisperModel(model=config.audio_model, context_params=ctx_params)
     except Exception as exc:
         raise ModelLoadError(
             f"Whisper model failed to load: {exc}\n"
-            f"Try reducing 'audio_gpu_layers' in config.yaml."
+            f"This is usually caused by insufficient VRAM or an invalid model path.\n"
+            f"Try setting 'audio_gpu_layers: 0' in config.yaml to run on CPU "
+            f"(slower but works on any machine)."
         ) from exc
 
     wav_path: Path | None = None

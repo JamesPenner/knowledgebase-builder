@@ -1030,6 +1030,21 @@ def reset_describe_to_pending(conn: sqlite3.Connection) -> int:
     return cur.rowcount
 
 
+def get_describe_counts(conn: sqlite3.Connection) -> dict:
+    row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN d.pass1_status = 'done' THEN 1 ELSE 0 END) AS done,
+            SUM(CASE WHEN d.pass1_status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            COUNT(*) AS total
+        FROM files f
+        LEFT JOIN descriptions d ON d.file_id = f.id
+        WHERE f.canonical_id IS NULL
+        """
+    ).fetchone()
+    return {"done": row["done"] or 0, "failed": row["failed"] or 0, "total": row["total"] or 0}
+
+
 # ---------------------------------------------------------------------------
 # Transcribe (Stage 3b)
 # ---------------------------------------------------------------------------
@@ -1046,6 +1061,22 @@ def get_pending_transcribe_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY f.id
         """
     ).fetchall()
+
+
+def get_transcribe_counts(conn: sqlite3.Connection) -> dict:
+    row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN t.transcribe_status = 'done' THEN 1 ELSE 0 END) AS done,
+            SUM(CASE WHEN t.transcribe_status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            COUNT(*) AS total
+        FROM files f
+        LEFT JOIN transcriptions t ON t.file_id = f.id
+        WHERE f.canonical_id IS NULL
+          AND f.file_type IN ('audio', 'video')
+        """
+    ).fetchone()
+    return {"done": row["done"] or 0, "failed": row["failed"] or 0, "total": row["total"] or 0}
 
 
 def upsert_transcription(

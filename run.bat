@@ -17,7 +17,7 @@ if not exist "%VENV%" (
 )
 
 echo Installing dependencies...
-"%PYTHON%" -m pip install --quiet -e "%ROOT%[dev]"
+"%PYTHON%" -m pip install --quiet -r "%ROOT%requirements.txt" -e "%ROOT%[dev]"
 if errorlevel 1 (
     echo ERROR: pip install failed.
     pause

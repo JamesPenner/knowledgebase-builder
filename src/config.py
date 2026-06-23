@@ -36,6 +36,8 @@ class Config:
     writeback_fields: tuple = ("IPTC:Keywords", "XMP:Subject", "XMP:Description")
     # models
     vision_model: str = ""
+    vision_mmproj: str = ""
+    vision_chat_format: str = ""   # qwen2_vl|gemma3|moondream|llava15|llava16|llava; auto-detected if empty
     vision_gpu_layers: int = -1
     text_model: str = ""
     text_gpu_layers: int = -1
@@ -111,6 +113,8 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
 
     models = raw.get("models", {}) or {}
     fields["vision_model"] = _typed(models.get("vision", defaults.vision_model), str, defaults.vision_model, "models.vision")
+    fields["vision_mmproj"] = _typed(models.get("vision_mmproj", defaults.vision_mmproj), str, defaults.vision_mmproj, "models.vision_mmproj")
+    fields["vision_chat_format"] = _typed(models.get("vision_chat_format", defaults.vision_chat_format), str, defaults.vision_chat_format, "models.vision_chat_format")
     fields["vision_gpu_layers"] = _typed(models.get("vision_gpu_layers", defaults.vision_gpu_layers), int, defaults.vision_gpu_layers, "models.vision_gpu_layers")
     fields["text_model"] = _typed(models.get("text", defaults.text_model), str, defaults.text_model, "models.text")
     fields["text_gpu_layers"] = _typed(models.get("text_gpu_layers", defaults.text_gpu_layers), int, defaults.text_gpu_layers, "models.text_gpu_layers")
@@ -173,6 +177,10 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
     models = raw.get("models", {}) or {}
     if "vision" in models:
         fields["vision_model"] = _typed(models["vision"], str, _fallback("vision_model"), "models.vision")
+    if "vision_mmproj" in models:
+        fields["vision_mmproj"] = _typed(models["vision_mmproj"], str, _fallback("vision_mmproj"), "models.vision_mmproj")
+    if "vision_chat_format" in models:
+        fields["vision_chat_format"] = _typed(models["vision_chat_format"], str, _fallback("vision_chat_format"), "models.vision_chat_format")
     if "vision_gpu_layers" in models:
         fields["vision_gpu_layers"] = _typed(models["vision_gpu_layers"], int, _fallback("vision_gpu_layers"), "models.vision_gpu_layers")
     if "text" in models:
@@ -257,5 +265,13 @@ def load_config(global_path: Path | None, kb_path: Path | None = None) -> Config
 
     global_fields = _extract_global(global_raw)
     global_fields.update(_extract_per_kb(kb_raw, global_fields))
+
+    # Resolve relative tool paths to absolute so subprocess.run works on Windows
+    # (CreateProcess does not search relative paths the way a shell does).
+    for _key in ("exiftool", "ffmpeg", "ffprobe"):
+        if _key in global_fields:
+            _p = Path(global_fields[_key])
+            if not _p.is_absolute():
+                global_fields[_key] = str(_p.resolve())
 
     return Config(**global_fields)

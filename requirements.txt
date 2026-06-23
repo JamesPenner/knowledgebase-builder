@@ -50,7 +50,7 @@ shapely>=2.0.0
 # llama-cpp-python>=0.3.0
 
 # --- Transcription (Stage 3b) ---
-# pywhispercpp>=1.2.0
+pywhispercpp>=1.2.0
 
 # --- Dev / test ---
 pytest>=8.3.0

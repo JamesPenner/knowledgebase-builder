@@ -1,3 +1,4 @@
+import logging
 import threading
 import uuid
 from pathlib import Path
@@ -6,8 +7,9 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 
-from src.pipeline.progress import SseProgressReporter, get_progress
+from src.pipeline.progress import SseProgressReporter, get_progress, init_progress
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _active_cancels: dict[str, threading.Event] = {}
@@ -39,8 +41,16 @@ def _make_stage_routes(stage: str, runner_fn):
         from src.config import load_config
         config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
         progress = SseProgressReporter(stage)
+        init_progress(stage)
 
-        background_tasks.add_task(runner_fn, corpus_path, kb_path, config, progress, cancel)
+        def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel):
+            try:
+                runner_fn(cp, kp, cfg, pr, ce)
+            except Exception as exc:
+                logger.error("Stage %s failed: %s", stage, exc, exc_info=True)
+                pr.failed(str(exc)[:300])
+
+        background_tasks.add_task(_wrapped)
         return {"job_id": job_id, "status": "started"}
 
     @router.post(f"/{stage}/cancel", tags=["pipeline"])
@@ -155,8 +165,16 @@ def export_run(req: ExportRunRequest, background_tasks: BackgroundTasks) -> dict
     from src.stages.export import run_export
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
     progress = SseProgressReporter("export")
+    init_progress("export")
 
-    background_tasks.add_task(run_export, corpus_path, kb_path, config, progress, cancel, req.section)
+    def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel, sec=req.section):
+        try:
+            run_export(cp, kp, cfg, pr, ce, sec)
+        except Exception as exc:
+            logger.error("Stage export failed: %s", exc, exc_info=True)
+            pr.failed(str(exc)[:300])
+
+    background_tasks.add_task(_wrapped)
     return {"status": "started"}
 
 
@@ -238,17 +256,22 @@ def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -
     from src.config import load_config
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
     progress = SseProgressReporter("summarize")
+    init_progress("summarize")
 
-    def _runner(corpus_path, kb_path, config, progress, cancel):
-        if req.force:
-            from src.db.corpus import open_corpus, reset_summarize_to_pending
-            conn = open_corpus(corpus_path)
-            reset_summarize_to_pending(conn)
-            conn.close()
-        from src.stages.summarize import run_summarize
-        run_summarize(corpus_path, kb_path, config, progress, cancel)
+    def _runner(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel):
+        try:
+            if req.force:
+                from src.db.corpus import open_corpus, reset_summarize_to_pending
+                conn = open_corpus(cp)
+                reset_summarize_to_pending(conn)
+                conn.close()
+            from src.stages.summarize import run_summarize
+            run_summarize(cp, kp, cfg, pr, ce)
+        except Exception as exc:
+            logger.error("Stage summarize failed: %s", exc, exc_info=True)
+            pr.failed(str(exc)[:300])
 
-    background_tasks.add_task(_runner, corpus_path, kb_path, config, progress, cancel)
+    background_tasks.add_task(_runner)
     return {"job_id": job_id, "status": "started"}
 
 
@@ -303,8 +326,16 @@ def suggest_run(req: SuggestRunRequest, background_tasks: BackgroundTasks) -> di
     from src.stages.suggest import run_suggest
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
     progress = SseProgressReporter("suggest")
+    init_progress("suggest")
 
-    background_tasks.add_task(run_suggest, corpus_path, kb_path, config, progress, cancel, req.levels)
+    def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel, lv=req.levels):
+        try:
+            run_suggest(cp, kp, cfg, pr, ce, lv)
+        except Exception as exc:
+            logger.error("Stage suggest failed: %s", exc, exc_info=True)
+            pr.failed(str(exc)[:300])
+
+    background_tasks.add_task(_wrapped)
     return {"status": "started"}
 
 
@@ -356,7 +387,16 @@ def ingest_run(req: IngestRunRequest, background_tasks: BackgroundTasks) -> dict
     from src.stages.ingest import run_ingest
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
     progress = SseProgressReporter("ingest")
-    background_tasks.add_task(run_ingest, corpus_path, kb_path, config, progress, cancel, req.incremental)
+    init_progress("ingest")
+
+    def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel, inc=req.incremental):
+        try:
+            run_ingest(cp, kp, cfg, pr, ce, inc)
+        except Exception as exc:
+            logger.error("Stage ingest failed: %s", exc, exc_info=True)
+            pr.failed(str(exc)[:300])
+
+    background_tasks.add_task(_wrapped)
     return {"job_id": str(uuid.uuid4()), "status": "started"}
 
 

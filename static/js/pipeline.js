@@ -5,6 +5,39 @@ function _buildBody(stage, kb) {
   return JSON.stringify({kb});
 }
 
+function _fmtEta(seconds) {
+  if (!seconds || seconds <= 0) return '';
+  if (seconds < 60) return seconds + 's';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m + 'm' + (s > 0 ? ' ' + s + 's' : '');
+}
+
+function _renderProgress(stage, d) {
+  const el = document.getElementById('progress-' + stage);
+  if (!el) return;
+
+  if (d.status === 'done') {
+    el.innerHTML = '';
+    return;
+  }
+  if (d.status !== 'running') return;  // 'failed' handled separately in onmessage
+
+  const indeterminate = !d.total;
+  const pct = indeterminate ? 0 : Math.round(d.current / d.total * 100);
+  const trackClass = 'progress-bar-track' + (indeterminate ? ' progress-bar--indeterminate' : '');
+  const fillStyle = indeterminate ? '' : ` style="width:${pct}%"`;
+
+  const msg    = d.message || 'Starting…';
+  const count  = d.total > 0 ? ` · ${d.current} / ${d.total}` : '';
+  const eta    = _fmtEta(d.eta);
+  const detail = msg + count + (eta ? ' · ETA ' + eta : '');
+
+  el.innerHTML =
+    `<div class="${trackClass}"><div class="progress-bar-fill"${fillStyle}></div></div>` +
+    `<span class="progress-detail">${detail}</span>`;
+}
+
 function runStage(stage, kb) {
   document.getElementById('btn-run-' + stage).disabled = true;
   document.getElementById('btn-cancel-' + stage).style.display = '';
@@ -23,16 +56,23 @@ function runStage(stage, kb) {
 
   es.onmessage = function (e) {
     const d = JSON.parse(e.data);
-    const prog = document.getElementById('progress-' + stage);
-    if (d.total > 0) {
-      prog.textContent = d.current + ' / ' + d.total + (d.eta > 0 ? ' · ' + d.eta + 's' : '');
-    }
+    _renderProgress(stage, d);
     if (d.status === 'done') {
       badge.className = 'badge badge-done';
       badge.textContent = 'done';
       document.getElementById('btn-run-' + stage).disabled = false;
       document.getElementById('btn-cancel-' + stage).style.display = 'none';
-      prog.textContent = '';
+      es.close();
+      delete _sources[stage];
+    } else if (d.status === 'failed') {
+      badge.className = 'badge badge-failed';
+      badge.textContent = 'failed';
+      document.getElementById('btn-run-' + stage).disabled = false;
+      document.getElementById('btn-cancel-' + stage).style.display = 'none';
+      const progEl = document.getElementById('progress-' + stage);
+      if (progEl) progEl.innerHTML =
+        '<span class="progress-detail" style="color:#991b1b">' +
+        (d.message || 'Stage failed — check server logs') + '</span>';
       es.close();
       delete _sources[stage];
     }
@@ -49,5 +89,5 @@ function cancelStage(stage) {
   badge.textContent = 'pending';
   document.getElementById('btn-run-' + stage).disabled = false;
   document.getElementById('btn-cancel-' + stage).style.display = 'none';
-  document.getElementById('progress-' + stage).textContent = '';
+  document.getElementById('progress-' + stage).innerHTML = '';
 }

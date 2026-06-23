@@ -364,7 +364,7 @@ class TestDiarizationHealthCheck:
         dc = next(c for c in checks if c.id == "diarization_model")
         assert dc.severity == "warning"
 
-    def test_total_check_count_is_20(self, tmp_path):
+    def test_total_check_count_is_24(self, tmp_path):
         from src.config import Config
         from src.health import run_checks
-        assert len(run_checks(Config(), None, None, tmp_path)) == 23
+        assert len(run_checks(Config(), None, None, tmp_path)) == 24

@@ -23,7 +23,19 @@
         </span>
       </td>
       <td class="stage-date">{{ cp.last_run_at if cp else '—' }}</td>
-      <td class="stage-files">{{ cp.files_processed if cp else '—' }}</td>
+      <td class="stage-files">
+        {% if stage in stage_counts %}
+          {% set sc = stage_counts[stage] %}
+          {% if sc.total == 0 %}—{% else %}
+            {{ sc.done }} / {{ sc.total }}
+            {% if sc.failed %}<span class="count-failed"> · {{ sc.failed }} failed</span>{% endif %}
+          {% endif %}
+        {% elif cp %}
+          {{ cp.files_processed }}
+        {% else %}
+          —
+        {% endif %}
+      </td>
       <td class="stage-actions">
         <button id="btn-run-{{ stage }}" class="btn btn--run"
                 onclick="runStage('{{ stage }}', '{{ kb }}')">Run</button>

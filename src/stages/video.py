@@ -155,6 +155,16 @@ def get_video_frames(
 
 def _describe_frame(jpeg_bytes: bytes, model, prompt: str) -> str:
     import base64
+    import io as _io
+    from PIL import Image as _Image
+    # Resize to max 512px before CLIP encoding — CPU-side ViT is the bottleneck
+    with _Image.open(_io.BytesIO(jpeg_bytes)) as _img:
+        _img = _img.convert("RGB")
+        if max(_img.size) > 512:
+            _img.thumbnail((512, 512), _Image.LANCZOS)
+        _buf = _io.BytesIO()
+        _img.save(_buf, format="JPEG", quality=85)
+        jpeg_bytes = _buf.getvalue()
     b64 = base64.b64encode(jpeg_bytes).decode()
     output = model.create_chat_completion(
         messages=[{"role": "user", "content": [
@@ -164,7 +174,7 @@ def _describe_frame(jpeg_bytes: bytes, model, prompt: str) -> str:
         max_tokens=256,
         temperature=0.1,
     )
-    return output["choices"][0]["message"]["content"].strip()
+    return output["choices"][0]["message"]["content"].lstrip(": \n").strip()
 
 
 def _aggregate_descriptions(frame_descriptions: list[str], focus: str, model) -> str:
@@ -184,7 +194,7 @@ def _aggregate_descriptions(frame_descriptions: list[str], focus: str, model) ->
         max_tokens=512,
         temperature=0.1,
     )
-    return output["choices"][0]["message"]["content"].strip()
+    return output["choices"][0]["message"]["content"].lstrip(": \n").strip()
 
 
 def describe_video(

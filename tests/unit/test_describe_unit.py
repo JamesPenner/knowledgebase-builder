@@ -1,5 +1,10 @@
 """Unit tests for describe stage helpers (no model, no DB)."""
-from src.stages.describe import _build_describe_prompt, _IMAGE_EXTS, _VIDEO_EXTS
+from src.stages.describe import (
+    _build_describe_prompt,
+    _IMAGE_EXTS,
+    _VIDEO_EXTS,
+    _resolve_chat_format,
+)
 
 
 def test_build_prompt_with_focus_only():
@@ -73,3 +78,42 @@ def test_video_ext_set_contains_common_types():
     assert ".mp4" in _VIDEO_EXTS
     assert ".mov" in _VIDEO_EXTS
     assert ".jpg" not in _VIDEO_EXTS
+
+
+# ---------------------------------------------------------------------------
+# _resolve_chat_format
+# ---------------------------------------------------------------------------
+
+def test_resolve_chat_format_qwen2_from_mmproj():
+    fmt = _resolve_chat_format("mmproj-Qwen2.5-VL-3B-f16.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf")
+    assert fmt == "qwen2_vl"
+
+
+def test_resolve_chat_format_qwen2_from_model_when_mmproj_generic():
+    # mmproj has a generic name; model name carries the clue
+    fmt = _resolve_chat_format("mmproj-model-f16.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf")
+    assert fmt == "qwen2_vl"
+
+
+def test_resolve_chat_format_gemma_from_mmproj():
+    fmt = _resolve_chat_format("mmproj-gemma-4-12B-it-QAT-BF16.gguf", "gemma-4-12B-it-QAT-Q4_0.gguf")
+    assert fmt == "gemma3"
+
+
+def test_resolve_chat_format_moondream():
+    fmt = _resolve_chat_format("moondream2-mmproj-f16.gguf", "moondream2-text-model-f16.gguf")
+    assert fmt == "moondream"
+
+
+def test_resolve_chat_format_fallback_to_llava():
+    fmt = _resolve_chat_format("mmproj-unknown-model-f16.gguf", "mystery-model-Q4_K_M.gguf")
+    assert fmt == "llava"
+
+
+def test_resolve_chat_format_qwen3_does_not_match_qwen2_vl():
+    # Qwen3.5 is a text/vision model but the pattern "qwen2" must not fire on "qwen3"
+    fmt = _resolve_chat_format(
+        "Qwen3.5-9B-Claude-4.6-HighIQ-INSTRUCT.mmproj-f16.gguf",
+        "Qwen3.5-9B-Claude-4.6-HighIQ-INSTRUCT.Q4_K_S.gguf",
+    )
+    assert fmt == "llava"

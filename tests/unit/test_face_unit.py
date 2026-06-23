@@ -507,11 +507,11 @@ class TestFaceHealthChecks:
         assert result.id == "face_embedding_model"
         assert result.ok is False
 
-    def test_run_checks_returns_18(self, tmp_path):
+    def test_run_checks_returns_24(self, tmp_path):
         from src.health import run_checks
         config = self._make_config()
         checks = run_checks(config, None, None, tmp_path)
-        assert len(checks) == 23
+        assert len(checks) == 24
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ def run_checks(
         _check_ffmpeg(config),
         _check_vision_model(config),
         _check_text_model(config),
+        _check_audio_model(config),
         _check_spacy_model(),
         _check_face_detection_model(config),
         _check_face_embedding_model(config),
@@ -89,13 +90,32 @@ def _check_vision_model(config) -> HealthCheck:
     configured = config.vision_model
     if configured:
         found = Path(configured).is_file()
+        if not found:
+            return HealthCheck(
+                id="vision_model",
+                label="Vision model present",
+                severity="warning",
+                ok=False,
+                detail=f"file not found: '{configured}'",
+                fix="Update models.vision in config.yaml",
+            )
+        mmproj = getattr(config, "vision_mmproj", "")
+        if mmproj and not Path(mmproj).is_file():
+            return HealthCheck(
+                id="vision_model",
+                label="Vision model present",
+                severity="warning",
+                ok=False,
+                detail=f"mmproj not found: '{mmproj}'",
+                fix="Update models.vision_mmproj in config.yaml",
+            )
+        detail = f"{Path(configured).name} + {Path(mmproj).name}" if mmproj else configured
         return HealthCheck(
             id="vision_model",
             label="Vision model present",
             severity="warning",
-            ok=found,
-            detail=configured if found else f"file not found: '{configured}'",
-            fix="" if found else "Update models.vision in config.yaml",
+            ok=True,
+            detail=detail,
         )
     # Fall back to auto-discovery
     hits = list(Path("tools/models/vision").glob("*.gguf")) if Path("tools/models/vision").is_dir() else []
@@ -129,6 +149,47 @@ def _check_text_model(config) -> HealthCheck:
         ok=bool(hits),
         detail=hits[0].name if hits else "no .gguf found in tools/models/text/",
         fix="" if hits else "Place a text GGUF in tools/models/text/",
+    )
+
+
+def _check_audio_model(config) -> HealthCheck:
+    if importlib.util.find_spec("pywhispercpp") is None:
+        return HealthCheck(
+            id="audio_model",
+            label="Whisper audio model",
+            severity="warning",
+            ok=False,
+            detail="pywhispercpp not installed",
+            fix="pip install pywhispercpp",
+        )
+    configured = config.audio_model
+    if not configured:
+        return HealthCheck(
+            id="audio_model",
+            label="Whisper audio model",
+            severity="warning",
+            ok=False,
+            detail="not configured — set models.audio in config.yaml",
+            fix="Set models.audio to a model name (e.g. 'base') or a GGUF file path",
+        )
+    p = Path(configured)
+    is_file_ref = p.suffix in (".gguf", ".bin") or len(p.parts) > 1
+    if is_file_ref:
+        found = p.is_file()
+        return HealthCheck(
+            id="audio_model",
+            label="Whisper audio model",
+            severity="warning",
+            ok=found,
+            detail=configured if found else f"file not found: '{configured}'",
+            fix="" if found else "Update models.audio in config.yaml",
+        )
+    return HealthCheck(
+        id="audio_model",
+        label="Whisper audio model",
+        severity="warning",
+        ok=True,
+        detail=f"named model '{configured}' (downloads on first use)",
     )
 
 
