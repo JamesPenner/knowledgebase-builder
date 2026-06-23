@@ -46,8 +46,13 @@ shapely>=2.0.0
 # --- Voice diarization (KB.P17) ---
 # pyannote.audio>=3.3.0
 
-# --- Vision describe / retag (Stage 3a, 5) ---
-# llama-cpp-python>=0.3.0
+# --- Vision describe / retag / summarize (Stage 3a, 3c, 5) ---
+# Vulkan build: GPU acceleration on AMD/Intel/NVIDIA via Vulkan (Windows).
+# The extra-index-url below makes pip prefer the pre-built Vulkan wheel over
+# the CPU-only wheel on PyPI.  Remove the --extra-index-url line to fall back
+# to CPU-only if Vulkan is unavailable on your platform.
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
+llama-cpp-python>=0.3.26
 
 # --- Transcription (Stage 3b) ---
 pywhispercpp>=1.2.0
