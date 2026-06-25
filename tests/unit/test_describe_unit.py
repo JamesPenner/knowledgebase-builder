@@ -3,8 +3,8 @@ from src.stages.describe import (
     _build_describe_prompt,
     _IMAGE_EXTS,
     _VIDEO_EXTS,
-    _resolve_chat_format,
 )
+from src.llm.session import _resolve_chat_format
 
 
 def test_build_prompt_with_focus_only():

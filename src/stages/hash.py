@@ -125,22 +125,29 @@ def _hash_video(conn, file_id: int, file_path: Path, config: Config) -> None:
         import io
         import imagehash
         from PIL import Image
-        from src.stages.video import get_video_frames, make_collage
+        from src.media.frameset import prepare_visual
+        from src.stages.video import make_collage
 
-        n = config.describe_frames or 9
-        frames = get_video_frames(file_path, config, mode="uniform", n_frames=n)
-        if not frames:
+        frameset = prepare_visual(file_path, config, max_frames=config.describe_frames or 9)
+        if frameset is None:
             return
 
-        # Per-frame pHashes
-        frame_phashes: list[str] = []
-        for frame_bytes in frames:
-            with Image.open(io.BytesIO(frame_bytes)) as img:
-                frame_phashes.append(str(imagehash.phash(img)))
+        all_frames = frameset.frames + frameset.rejected
+        if not all_frames:
+            return
 
-        # Collage pHash — reuse already-extracted frames, no second ffmpeg call
-        cols = math.ceil(math.sqrt(len(frames)))
-        collage_bytes = make_collage(frames, cols)
+        # Per-frame pHashes — already computed in prepare_visual; recompute for any None
+        frame_phashes: list[str] = []
+        for frame in all_frames:
+            if frame.phash is not None:
+                frame_phashes.append(frame.phash)
+            else:
+                with Image.open(io.BytesIO(frame.jpeg_bytes)) as img:
+                    frame_phashes.append(str(imagehash.phash(img)))
+
+        # Collage pHash — reuse frame bytes, no second ffmpeg call
+        cols = math.ceil(math.sqrt(len(all_frames)))
+        collage_bytes = make_collage([f.jpeg_bytes for f in all_frames], cols)
         collage_phash: str | None = None
         if collage_bytes:
             with Image.open(io.BytesIO(collage_bytes)) as img:

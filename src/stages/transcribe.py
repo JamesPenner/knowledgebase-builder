@@ -1,12 +1,12 @@
 """Stage 3b — Transcribe: Whisper audio transcription for audio and video files."""
 import logging
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
 
 from src.config import Config
+from src.media.audiotrack import prepare_audio
 from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
@@ -18,42 +18,6 @@ _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".webm", ".m4v", 
 
 class ModelLoadError(Exception):
     pass
-
-
-def _extract_audio(file_path: Path, ffmpeg: str) -> tuple[Path | None, int | None]:
-    """Extract audio stream to a temporary wav file. Returns (wav_path, duration_ms) or (None, None)."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp_path = Path(tmp.name)
-    tmp.close()
-
-    try:
-        result = subprocess.run(
-            [
-                ffmpeg, "-v", "quiet",
-                "-i", str(file_path),
-                "-vn",                      # drop video
-                "-acodec", "pcm_s16le",
-                "-ar", "16000",
-                "-ac", "1",
-                "-y",
-                str(tmp_path),
-            ],
-            capture_output=True,
-            timeout=120,
-        )
-        if result.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
-            tmp_path.unlink(missing_ok=True)
-            return None, None
-
-        # Estimate duration from file size: 16kHz * 2 bytes * 1 channel
-        size = tmp_path.stat().st_size
-        duration_ms = int((size / (16000 * 2)) * 1000)
-        return tmp_path, duration_ms
-
-    except Exception as exc:
-        logger.warning("transcribe: audio extraction failed for %s: %s", file_path, exc)
-        tmp_path.unlink(missing_ok=True)
-        return None, None
 
 
 def _transcribe_with_cli(
@@ -170,11 +134,16 @@ def run_transcribe(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
 ) -> None:
     from src.db.corpus import (
         delete_transcript_segments_for_file,
+        get_has_speech,
         get_pending_transcribe_files,
         open_corpus,
+        set_has_speech,
         update_pipeline_checkpoint,
         upsert_transcript_segment,
         upsert_transcription,
@@ -198,7 +167,7 @@ def run_transcribe(
     try:
         model = None
 
-        pending = get_pending_transcribe_files(corpus_conn)
+        pending = get_pending_transcribe_files(corpus_conn, source_id=source_id, file_type=file_type)
         total = len(pending)
 
         if total == 0:
@@ -256,73 +225,69 @@ def run_transcribe(
             file_id = file_row["id"]
             file_path = Path(file_row["path"])
             file_type = file_row["file_type"] or ""
-            ext = file_path.suffix.lower()
 
-            is_audio = file_type == "audio" or (not file_type and ext in _AUDIO_EXTS)
-            is_video = file_type == "video" or (not file_type and ext in _VIDEO_EXTS)
+            is_video = file_type == "video"
 
-            wav_path: Path | None = None
-            duration_ms: int | None = None
-            owned_tmp = False
+            # Skip files already known to be silent from a previous audio prep run
+            if get_has_speech(corpus_conn, file_id) is False:
+                batch_tx.append((file_id, None, None, None, config.audio_model, "skipped"))
+                skipped += 1
+                if len(batch_tx) >= _BATCH_SIZE:
+                    _flush_batch()
+                continue
 
             try:
-                if is_audio:
-                    # Audio files: extract to wav if not already
-                    if ext == ".wav":
-                        wav_path = file_path
-                        size = file_path.stat().st_size
-                        duration_ms = int((size / (16000 * 2)) * 1000)
-                    else:
-                        wav_path, duration_ms = _extract_audio(file_path, config.ffmpeg)
-                        owned_tmp = wav_path is not None
-                        if wav_path is None:
+                with prepare_audio(file_path, config) as track:
+                    if track is None:
+                        if is_video:
+                            batch_tx.append((file_id, None, None, None, config.audio_model, "no_audio"))
+                            skipped += 1
+                        else:
                             batch_tx.append((file_id, None, None, None, config.audio_model, "failed"))
                             errors += 1
-                            if len(batch_tx) >= _BATCH_SIZE:
-                                _flush_batch()
-                            continue
+                        if len(batch_tx) >= _BATCH_SIZE:
+                            _flush_batch()
+                        continue
 
-                elif is_video:
-                    wav_path, duration_ms = _extract_audio(file_path, config.ffmpeg)
-                    owned_tmp = wav_path is not None
-                    if wav_path is None:
-                        # No audio stream in video
-                        batch_tx.append((file_id, None, None, None, config.audio_model, "no_audio"))
+                    if track.has_speech is not None:
+                        set_has_speech(corpus_conn, file_id, track.has_speech)
+
+                    if track.has_clipping:
+                        logger.warning("transcribe: clipping detected in %s", file_path)
+
+                    if track.has_speech is False:
+                        batch_tx.append((file_id, None, None, None, config.audio_model, "skipped"))
                         skipped += 1
                         if len(batch_tx) >= _BATCH_SIZE:
                             _flush_batch()
                         continue
-                else:
-                    continue
 
-                if use_cli:
-                    transcript_text, detected_lang, segments = _transcribe_with_cli(
-                        wav_path, config.whisper_cli, config.audio_model,
-                        no_gpu=(config.audio_gpu_layers == 0),
-                    )
-                else:
-                    transcript_text, detected_lang, segments = _transcribe_audio(wav_path, model)
+                    if use_cli:
+                        transcript_text, detected_lang, segments = _transcribe_with_cli(
+                            track.wav_path, config.whisper_cli, config.audio_model,
+                            no_gpu=(config.audio_gpu_layers == 0),
+                        )
+                    else:
+                        transcript_text, detected_lang, segments = _transcribe_audio(
+                            track.wav_path, model
+                        )
 
-                batch_tx.append((
-                    file_id,
-                    transcript_text or None,
-                    detected_lang or None,
-                    duration_ms,
-                    config.audio_model,
-                    "done",
-                ))
-                if segments:
-                    batch_segs.append((file_id, segments))
-                processed += 1
+                    batch_tx.append((
+                        file_id,
+                        transcript_text or None,
+                        detected_lang or None,
+                        track.duration_ms,
+                        config.audio_model,
+                        "done",
+                    ))
+                    if segments:
+                        batch_segs.append((file_id, segments))
+                    processed += 1
 
             except Exception as exc:
                 logger.warning("Transcribe: file_id=%d path=%s failed: %s", file_id, file_path, exc)
                 batch_tx.append((file_id, None, None, None, config.audio_model, "failed"))
                 errors += 1
-
-            finally:
-                if owned_tmp and wav_path is not None:
-                    wav_path.unlink(missing_ok=True)
 
             if len(batch_tx) >= _BATCH_SIZE:
                 _flush_batch()
@@ -381,35 +346,25 @@ def run_transcribe_file(
                 f"(slower but works on any machine)."
             ) from exc
 
-    wav_path: Path | None = None
-    duration_ms: int | None = None
-    owned_tmp = False
-
     try:
-        if is_audio and ext == ".wav":
-            wav_path = path
-            size = path.stat().st_size
-            duration_ms = int((size / (16000 * 2)) * 1000)
-        else:
-            wav_path, duration_ms = _extract_audio(path, config.ffmpeg)
-            owned_tmp = wav_path is not None
-            if wav_path is None:
+        with prepare_audio(path, config) as track:
+            if track is None:
                 return None
 
-        if use_cli:
-            transcript_text, detected_lang, _ = _transcribe_with_cli(
-                wav_path, config.whisper_cli, config.audio_model,
-                no_gpu=(config.audio_gpu_layers == 0),
-            )
-        else:
-            transcript_text, detected_lang, _ = _transcribe_audio(wav_path, model)
+            if use_cli:
+                transcript_text, detected_lang, _ = _transcribe_with_cli(
+                    track.wav_path, config.whisper_cli, config.audio_model,
+                    no_gpu=(config.audio_gpu_layers == 0),
+                )
+            else:
+                transcript_text, detected_lang, _ = _transcribe_audio(track.wav_path, model)
 
         import datetime
         return {
             "path": str(path),
             "transcript": transcript_text,
             "language": detected_lang,
-            "duration_ms": duration_ms,
+            "duration_ms": track.duration_ms,
             "model": config.audio_model,
             "processed_at": datetime.datetime.now().isoformat(),
         }
@@ -417,7 +372,3 @@ def run_transcribe_file(
     except Exception as exc:
         logger.warning("Transcribe: %s failed: %s", path, exc)
         return None
-
-    finally:
-        if owned_tmp and wav_path is not None:
-            wav_path.unlink(missing_ok=True)

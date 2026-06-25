@@ -30,6 +30,7 @@ _KB_TABLES = {
     "substitute_rules", "reject_tokens", "kb_version", "ignored_fields",
     "entity_table_registry", "entity_table_links",
     "classify_rules", "people", "people_names", "life_events",
+    "stage_prompts",
 }
 
 

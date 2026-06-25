@@ -1,7 +1,8 @@
 """Integration tests for KB.P16 Voice Stage — mocked embed_voice, real SQLite."""
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -24,6 +25,23 @@ def _fake_embedding(seed: int = 0) -> bytes:
 def _make_config(*, similarity_threshold: float = 0.75):
     from src.config import Config
     return Config(voice_similarity_threshold=similarity_threshold)
+
+
+@contextmanager
+def _mock_audio(has_speech: bool = True, has_clipping: bool = False):
+    """Patch prepare_audio in voice.py to yield a fake AudioTrack."""
+    track = MagicMock()
+    track.wav_path = MagicMock()
+    track.has_speech = has_speech
+    track.has_clipping = has_clipping
+    track.duration_ms = 3000
+
+    @contextmanager
+    def _fake(*args, **kwargs):
+        yield track
+
+    with patch("src.media.audiotrack.prepare_audio", new=_fake):
+        yield track
 
 
 def _ensure_source(corpus_conn) -> int:
@@ -70,7 +88,7 @@ class TestRunVoiceIntegration:
         kb_conn.close()
 
         config = _make_config()
-        with patch("src.stages.voice.embed_voice", return_value=(_fake_embedding(0), 3000)):
+        with _mock_audio(), patch("src.stages.voice.embed_voice", return_value=(_fake_embedding(0), 3000)):
             result = run_voice(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["files_processed"] == 1
@@ -103,7 +121,7 @@ class TestRunVoiceIntegration:
         kb_conn.close()
 
         config = _make_config(similarity_threshold=0.10)
-        with patch("src.stages.voice.embed_voice", return_value=(emb, 4000)):
+        with _mock_audio(), patch("src.stages.voice.embed_voice", return_value=(emb, 4000)):
             result = run_voice(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["files_matched"] == 1
@@ -138,7 +156,7 @@ class TestRunVoiceIntegration:
             cancel1.set()
             return (_fake_embedding(0), 2000)
 
-        with patch("src.stages.voice.embed_voice", side_effect=cancel_after_one):
+        with _mock_audio(), patch("src.stages.voice.embed_voice", side_effect=cancel_after_one):
             run_voice(corpus_path, kb_path, config, NullProgressReporter(), cancel1)
 
         corpus_conn2 = open_corpus(corpus_path)
@@ -156,7 +174,7 @@ class TestRunVoiceIntegration:
             processed_second += 1
             return (_fake_embedding(99), 1000)
 
-        with patch("src.stages.voice.embed_voice", side_effect=count_calls):
+        with _mock_audio(), patch("src.stages.voice.embed_voice", side_effect=count_calls):
             run_voice(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert processed_second == 1
@@ -172,7 +190,7 @@ class TestRunVoiceIntegration:
         kb_conn.close()
 
         config = _make_config()
-        with patch("src.stages.voice.embed_voice", return_value=(None, None)):
+        with _mock_audio(has_speech=False):
             result = run_voice(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["files_skipped"] == 1
@@ -194,7 +212,7 @@ class TestRunVoiceIntegration:
         kb_conn.close()
 
         config = _make_config()
-        with patch("src.stages.voice.embed_voice", side_effect=RuntimeError("codec error")):
+        with _mock_audio(), patch("src.stages.voice.embed_voice", side_effect=RuntimeError("codec error")):
             result = run_voice(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["errors"] == 1

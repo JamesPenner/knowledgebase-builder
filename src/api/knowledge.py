@@ -431,3 +431,97 @@ def merge_registry_entries(
         raise HTTPException(status_code=404, detail=str(exc))
     kb_conn.close()
     return {"merged_into": body.keep_id, "table": body.table}
+
+
+# ---------------------------------------------------------------------------
+# Prompt library (KB.S5)
+# ---------------------------------------------------------------------------
+
+class PromptCreateBody(BaseModel):
+    stage: str
+    prompt_key: str
+    name: str
+    body: str
+
+
+class PromptUpdateBody(BaseModel):
+    body: str
+
+
+@router.post("/prompts", status_code=201)
+def create_prompt(
+    body: PromptCreateBody,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> dict:
+    _, kb_path = paths
+    from src.db.kb import open_kb, upsert_stage_prompt
+    kb_conn = open_kb(kb_path)
+    prompt_id = upsert_stage_prompt(kb_conn, body.stage, body.prompt_key, body.name, body.body)
+    kb_conn.close()
+    return {"id": prompt_id}
+
+
+@router.put("/prompts/{prompt_id}")
+def update_prompt(
+    prompt_id: int,
+    body: PromptUpdateBody,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> dict:
+    _, kb_path = paths
+    from src.db.kb import open_kb
+    kb_conn = open_kb(kb_path)
+    row = kb_conn.execute(
+        "SELECT is_builtin FROM stage_prompts WHERE id=?", (prompt_id,)
+    ).fetchone()
+    if not row:
+        kb_conn.close()
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    if row["is_builtin"]:
+        kb_conn.close()
+        raise HTTPException(status_code=400, detail="Built-in prompts cannot be edited directly — create a variant instead")
+    kb_conn.execute(
+        "UPDATE stage_prompts SET body=? WHERE id=?", (body.body, prompt_id)
+    )
+    kb_conn.commit()
+    kb_conn.close()
+    return {"updated": prompt_id}
+
+
+@router.post("/prompts/{prompt_id}/activate")
+def activate_prompt(
+    prompt_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> dict:
+    _, kb_path = paths
+    from src.db.kb import open_kb, set_active_stage_prompt
+    kb_conn = open_kb(kb_path)
+    row = kb_conn.execute(
+        "SELECT stage, prompt_key FROM stage_prompts WHERE id=?", (prompt_id,)
+    ).fetchone()
+    if not row:
+        kb_conn.close()
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    try:
+        set_active_stage_prompt(kb_conn, row["stage"], row["prompt_key"], prompt_id)
+    except ValueError as exc:
+        kb_conn.close()
+        raise HTTPException(status_code=404, detail=str(exc))
+    kb_conn.close()
+    return {"activated": prompt_id}
+
+
+@router.delete("/prompts/{prompt_id}")
+def delete_prompt(
+    prompt_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> dict:
+    _, kb_path = paths
+    from src.db.kb import delete_stage_prompt, open_kb
+    kb_conn = open_kb(kb_path)
+    try:
+        delete_stage_prompt(kb_conn, prompt_id)
+    except ValueError as exc:
+        kb_conn.close()
+        raise HTTPException(status_code=400, detail=str(exc))
+    kb_conn.close()
+    return {"deleted": prompt_id}

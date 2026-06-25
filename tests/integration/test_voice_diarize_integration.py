@@ -1,7 +1,8 @@
 """Integration tests for KB.P17 Voice Diarization — mocked diarize/embed, real SQLite."""
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -57,6 +58,23 @@ def _fake_segments(n_speakers: int = 2, segs_per_speaker: int = 2) -> list[dict]
     return segs
 
 
+@contextmanager
+def _mock_audio(has_speech: bool = True, has_clipping: bool = False):
+    """Patch prepare_audio in voice.py to yield a fake AudioTrack."""
+    track = MagicMock()
+    track.wav_path = MagicMock()
+    track.has_speech = has_speech
+    track.has_clipping = has_clipping
+    track.duration_ms = 3000
+
+    @contextmanager
+    def _fake(*args, **kwargs):
+        yield track
+
+    with patch("src.media.audiotrack.prepare_audio", new=_fake):
+        yield track
+
+
 @pytest.fixture
 def diarize_dbs(tmp_path):
     corpus_path = tmp_path / "corpus.db"
@@ -84,10 +102,7 @@ class TestRunVoiceDiarizeIntegration:
         config = _make_config()
         segments = _fake_segments(n_speakers=2, segs_per_speaker=2)
 
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=segments),
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=segments), patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)):
             result = run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["files_processed"] == 1
@@ -121,10 +136,7 @@ class TestRunVoiceDiarizeIntegration:
             cancel1.set()
             return segments
 
-        with (
-            patch("src.stages.voice.diarize_audio", side_effect=cancel_after_first),
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", side_effect=cancel_after_first), patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)):
             run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), cancel1)
 
         second_calls = []
@@ -133,10 +145,7 @@ class TestRunVoiceDiarizeIntegration:
             second_calls.append(path)
             return segments
 
-        with (
-            patch("src.stages.voice.diarize_audio", side_effect=track),
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(1)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", side_effect=track), patch("src.stages.voice.embed_voice_segment", return_value=_blob(1)):
             run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert len(second_calls) == 1
@@ -153,10 +162,7 @@ class TestRunVoiceDiarizeIntegration:
         kb_conn.close()
 
         config = _make_config()
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=[]),
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=[]), patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)):
             result = run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["files_processed"] == 1
@@ -182,10 +188,7 @@ class TestRunVoiceDiarizeIntegration:
         config = _make_config(similarity_threshold=0.10)
         segments = [{"start_ms": 0, "end_ms": 3000, "speaker_label": "SPEAKER_00"}]
 
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=segments),
-            patch("src.stages.voice.embed_voice_segment", return_value=emb),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=segments), patch("src.stages.voice.embed_voice_segment", return_value=emb):
             result = run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         assert result["segments_matched"] == 1
@@ -213,10 +216,7 @@ class TestRunVoiceDiarizeIntegration:
         config = _make_config(similarity_threshold=0.99)  # very high — no match
         segments = [{"start_ms": 0, "end_ms": 3000, "speaker_label": "SPEAKER_00"}]
 
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=segments),
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(7)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=segments), patch("src.stages.voice.embed_voice_segment", return_value=_blob(7)):
             run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         corpus_conn2 = open_corpus(corpus_path)
@@ -241,10 +241,7 @@ class TestRunVoiceDiarizeIntegration:
         segments = [{"start_ms": 0, "end_ms": 3000, "speaker_label": "SPEAKER_00"}]
         same_emb = _blob(5)
 
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=segments),
-            patch("src.stages.voice.embed_voice_segment", return_value=same_emb),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=segments), patch("src.stages.voice.embed_voice_segment", return_value=same_emb):
             run_voice_diarize(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
 
         corpus_conn2 = open_corpus(corpus_path)
@@ -291,7 +288,7 @@ class TestRunVoiceDiarizeIntegration:
         corpus_conn.close()
         kb_conn.close()
 
-        with patch("src.stages.voice.diarize_audio", side_effect=RuntimeError("decode error")):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", side_effect=RuntimeError("decode error")):
             result = run_voice_diarize(
                 corpus_path, kb_path, _make_config(), NullProgressReporter(), make_cancel_event()
             )
@@ -313,10 +310,7 @@ class TestRunVoiceDiarizeIntegration:
         kb_conn.close()
 
         # Without force: file already has segments → skipped
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=[]) as mock_d,
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=[]) as mock_d, patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)):
             run_voice_diarize(corpus_path, kb_path, _make_config(), NullProgressReporter(), make_cancel_event())
             assert mock_d.call_count == 0
 
@@ -327,10 +321,7 @@ class TestRunVoiceDiarizeIntegration:
         corpus_conn2.close()
 
         new_segments = [{"start_ms": 0, "end_ms": 2000, "speaker_label": "SPEAKER_00"}]
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=new_segments),
-            patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=new_segments), patch("src.stages.voice.embed_voice_segment", return_value=_blob(0)):
             result = run_voice_diarize(
                 corpus_path, kb_path, _make_config(), NullProgressReporter(), make_cancel_event()
             )
@@ -349,10 +340,7 @@ class TestRunVoiceDiarizeIntegration:
         kb_conn.close()
 
         segments = [{"start_ms": 0, "end_ms": 1000, "speaker_label": "SPEAKER_00"}]
-        with (
-            patch("src.stages.voice.diarize_audio", return_value=segments),
-            patch("src.stages.voice.embed_voice_segment", return_value=None),
-        ):
+        with _mock_audio(), patch("src.stages.voice.diarize_audio", return_value=segments), patch("src.stages.voice.embed_voice_segment", return_value=None):
             result = run_voice_diarize(
                 corpus_path, kb_path, _make_config(), NullProgressReporter(), make_cancel_event()
             )

@@ -1,52 +1,143 @@
 {% extends "base.html" %}
-{% block title %}Pipeline — {{ kb }}{% endblock %}
+{% block title %}Workbench — {{ kb }}{% endblock %}
+{% block head %}
+<script>
+  window.KB_NAME = {{ kb | tojson }};
+  window.KB_CHECKPOINTS = {{ checkpoints_json | tojson }};
+  window.KB_GROUPS = {{ groups | map(attribute='id') | list | tojson }};
+  window.KB_GROUP_STAGES = {
+    {% for grp in groups %}
+    {{ grp.id | tojson }}: {{ grp.stages | map(attribute='name') | list | tojson }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  };
+  window.KB_SOURCES = {{ sources | tojson }};
+</script>
+{% endblock %}
 {% block content %}
-<h1 class="page-title">Pipeline</h1>
-<table class="stage-table">
-  <thead>
-    <tr>
-      <th>Stage</th>
-      <th>Status</th>
-      <th>Last run</th>
-      <th>Files</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-  {% for stage in all_stages %}
-    {% set cp = checkpoints.get(stage) %}
-    <tr class="stage-row{% if cp %} stage-row--done{% endif %}">
-      <td class="stage-name">{{ stage }}</td>
-      <td class="stage-status">
-        <span id="badge-{{ stage }}" class="badge {% if cp %}badge-done{% else %}badge-pending{% endif %}">
-          {{ 'done' if cp else 'pending' }}
-        </span>
-      </td>
-      <td class="stage-date">{{ cp.last_run_at if cp else '—' }}</td>
-      <td class="stage-files">
-        {% if stage in stage_counts %}
-          {% set sc = stage_counts[stage] %}
-          {% if sc.total == 0 %}—{% else %}
-            {{ sc.done }} / {{ sc.total }}
-            {% if sc.failed %}<span class="count-failed"> · {{ sc.failed }} failed</span>{% endif %}
-          {% endif %}
-        {% elif cp %}
-          {{ cp.files_processed }}
-        {% else %}
-          —
+<h1 class="page-title">Workbench</h1>
+
+<div class="wb-scope">
+  <div class="wb-scope-controls">
+    <label class="wb-scope-label" for="scope-mode">Scope:</label>
+    <select id="scope-mode" class="wb-scope-select" onchange="WB.onScopeChange()">
+      <option value="resume">Resume</option>
+      <option value="rerun">Re-run</option>
+      <option value="new_files">New files</option>
+      <option value="by_source">By source</option>
+      <option value="by_type">By file type</option>
+    </select>
+    <select id="scope-source" class="wb-scope-select" style="display:none" onchange="WB.onScopeChange()">
+      <option value="">All sources</option>
+    </select>
+    <span id="scope-type" class="wb-scope-types" style="display:none">
+      <label><input type="checkbox" name="scope_type" value="image" checked onchange="WB.onScopeChange()"> Image</label>
+      <label><input type="checkbox" name="scope_type" value="video" checked onchange="WB.onScopeChange()"> Video</label>
+      <label><input type="checkbox" name="scope_type" value="audio" checked onchange="WB.onScopeChange()"> Audio</label>
+    </span>
+  </div>
+  <div id="scope-summary" class="wb-scope-summary">Processing: all pending files</div>
+</div>
+
+<div class="wb-actions">
+  <button class="btn btn--run-all" onclick="WB.runAll()">Run all</button>
+  <button id="btn-run-selected" class="btn btn--run" onclick="WB.runSelected()" disabled>Run selected</button>
+</div>
+
+{% for grp in groups %}
+  {#
+    Gates that precede the first stage in this group are rendered as banners
+    ABOVE the group card. Gates that precede a mid-group stage are rendered
+    as table rows INSIDE the group.
+  #}
+  {% if grp.stages[0].touchpoint_before %}
+    {% set tp = touchpoints[grp.stages[0].touchpoint_before] %}
+    <div class="wb-gate {% if tp.completed %}wb-gate--done{% else %}wb-gate--pending{% endif %}">
+      <span class="wb-gate-status">{% if tp.completed %}✓{% else %}○{% endif %}</span>
+      <span><strong>{{ tp.label }}</strong> — {{ tp.description }}</span>
+      <a class="wb-gate-link" href="{{ tp.url }}">Go to review →</a>
+    </div>
+  {% endif %}
+
+  <div class="wb-group">
+    <div class="wb-group-header">
+      <span class="wb-group-label">{{ grp.label }}</span>
+      <span class="wb-group-desc">{{ grp.description }}</span>
+      <button class="btn btn--group" onclick="WB.runGroup({{ grp.id | tojson }})">Run group</button>
+    </div>
+    <table class="stage-table" style="margin:0">
+      <tbody>
+      {% for stage in grp.stages %}
+        {% if loop.index0 > 0 and stage.touchpoint_before %}
+          {% set tp = touchpoints[stage.touchpoint_before] %}
+          <tr>
+            <td colspan="6" style="padding:0">
+              <div class="wb-gate {% if tp.completed %}wb-gate--done{% else %}wb-gate--pending{% endif %}" style="margin:0;border-radius:0;border-left:none;border-right:none">
+                <span class="wb-gate-status">{% if tp.completed %}✓{% else %}○{% endif %}</span>
+                <span><strong>{{ tp.label }}</strong> — {{ tp.description }}</span>
+                <a class="wb-gate-link" href="{{ tp.url }}">Go to review →</a>
+              </div>
+            </td>
+          </tr>
         {% endif %}
-      </td>
-      <td class="stage-actions">
-        <button id="btn-run-{{ stage }}" class="btn btn--run"
-                onclick="runStage('{{ stage }}', '{{ kb }}')">Run</button>
-        <button id="btn-cancel-{{ stage }}" class="btn btn--cancel"
-                style="display:none"
-                onclick="cancelStage('{{ stage }}')">Cancel</button>
-        <span id="progress-{{ stage }}" class="stage-progress"></span>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+        <tr class="stage-row stage-row--{{ stage.state }}" id="row-{{ stage.name }}">
+          <td class="stage-check">
+            <input type="checkbox" id="check-{{ stage.name }}"
+                   onchange="WB.onCheckChange()"
+                   {% if stage.state == 'blocked' %}disabled{% endif %}>
+          </td>
+          <td class="stage-name">{{ stage.name }}</td>
+          <td>
+            <span id="badge-{{ stage.name }}" class="badge
+              {%- if stage.state == 'done' %} badge-done
+              {%- elif stage.state == 'ready' %} badge-ready
+              {%- else %} badge-blocked{%- endif %}">
+              {{ stage.state }}
+            </span>
+          </td>
+          <td class="stage-date">
+            {{ stage.checkpoint.last_run_at if stage.checkpoint else '—' }}
+          </td>
+          <td class="stage-files">
+            {% if stage.stage_counts %}
+              {% set sc = stage.stage_counts %}
+              {% if sc.total == 0 %}—{% else %}
+                {{ sc.done }} / {{ sc.total }}
+                {% if sc.failed %}<span class="count-failed"> · {{ sc.failed }} failed</span>{% endif %}
+              {% endif %}
+            {% elif stage.checkpoint %}
+              {{ stage.checkpoint.files_processed }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td class="stage-actions">
+            <button id="btn-run-{{ stage.name }}" class="btn btn--run"
+                    onclick="runStage('{{ stage.name }}', '{{ kb }}')"
+                    {% if stage.state == 'blocked' %}disabled{% endif %}>Run</button>
+            <button id="btn-cancel-{{ stage.name }}" class="btn btn--cancel"
+                    style="display:none"
+                    onclick="cancelStage('{{ stage.name }}')">Cancel</button>
+            <button class="stage-help-toggle" onclick="WB.toggleHelp('{{ stage.name }}')" title="About this stage">▸</button>
+            <span id="progress-{{ stage.name }}" class="stage-progress"></span>
+          </td>
+        </tr>
+        <tr class="stage-help-row" id="help-{{ stage.name }}" style="display:none">
+          <td colspan="6">
+            {{ stage.description }}
+            {% if stage.deps %}
+              <div class="stage-help-deps">Requires: {{ stage.deps | join(', ') }}</div>
+            {% endif %}
+            {% if stage.blocking_dep and stage.state == 'blocked' %}
+              <div class="stage-help-deps" style="color:#dc2626">Blocked by: {{ stage.blocking_dep }}</div>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endfor %}
+
 <script src="/static/js/pipeline.js"></script>
+<script src="/static/js/workbench.js"></script>
 {% endblock %}

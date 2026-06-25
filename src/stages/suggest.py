@@ -9,6 +9,13 @@ from pathlib import Path
 
 from src.config import Config
 from src.pipeline.progress import ProgressReporter
+from src.text.context import FileContext
+
+
+def _build_file_text(ctx: FileContext) -> str:
+    """Assemble per-file text for the Level A frequency analysis."""
+    parts = [ctx.enrichment_text, ctx.description or "", ctx.summary_text or "", " ".join(ctx.derived_tags)]
+    return " ".join(p for p in parts if p)
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +60,9 @@ def _run_level_a(
     cancel_event: threading.Event,
 ) -> None:
     import spacy
-    from src.db.corpus import (
-        get_enrichment_text_for_file,
-        upsert_candidate,
-    )
+    from src.db.corpus import upsert_candidate
     from src.db.kb import get_stoplist_terms, get_vocabulary_terms
+    from src.text.context import build_file_context
 
     nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
@@ -74,27 +79,8 @@ def _run_level_a(
         progress.update(i, total, f"Level A: processing file {i + 1}/{total}")
 
         file_id = row["id"]
-        text_parts = [get_enrichment_text_for_file(corpus_conn, file_id)]
-
-        desc = corpus_conn.execute(
-            "SELECT description_normalized, description_raw FROM descriptions WHERE file_id=?", (file_id,)
-        ).fetchone()
-        if desc:
-            text_parts.append(desc["description_normalized"] or desc["description_raw"] or "")
-
-        summary_row = corpus_conn.execute(
-            "SELECT summary_text FROM file_summaries WHERE file_id=? AND status='done'", (file_id,)
-        ).fetchone()
-        if summary_row and summary_row["summary_text"]:
-            text_parts.append(summary_row["summary_text"])
-
-        tag_rows = corpus_conn.execute(
-            "SELECT tag FROM file_derived_tags WHERE file_id=?", (file_id,)
-        ).fetchall()
-        if tag_rows:
-            text_parts.append(" ".join(r["tag"] for r in tag_rows))
-
-        text = " ".join(p for p in text_parts if p)
+        ctx = build_file_context(corpus_conn, None, file_id)
+        text = _build_file_text(ctx)
         if not text.strip():
             continue
 
@@ -251,7 +237,7 @@ def _run_level_c(
         return
 
     total = len(cluster_rows)
-    from src.db.corpus import get_enrichment_text_for_file
+    from src.text.context import build_file_context
 
     for i, cluster_row in enumerate(cluster_rows):
         if cancel_event.is_set():
@@ -279,14 +265,8 @@ def _run_level_c(
         file_texts: list[str] = []
         for frow in file_id_rows:
             fid = frow["file_id"]
-            parts = [get_enrichment_text_for_file(corpus_conn, fid)]
-            desc = corpus_conn.execute(
-                "SELECT description_normalized, description_raw FROM descriptions WHERE file_id=?",
-                (fid,),
-            ).fetchone()
-            if desc:
-                parts.append(desc["description_normalized"] or desc["description_raw"] or "")
-            text = " ".join(p for p in parts if p).strip()
+            ctx = build_file_context(corpus_conn, None, fid)
+            text = " ".join(p for p in [ctx.enrichment_text, ctx.description or ""] if p).strip()
             if text:
                 file_texts.append(text)
 

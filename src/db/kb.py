@@ -78,6 +78,7 @@ def open_kb(path: Path) -> sqlite3.Connection:
     apply_migrations(conn, _MIGRATIONS_DIR)
     _seed_builtin_stopwords(conn)
     _seed_builtin_classify_rules(conn)
+    seed_stage_prompts(conn)
     return conn
 
 
@@ -634,6 +635,14 @@ def add_vocabulary_term(
 
 def get_vocabulary_terms(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM vocabulary ORDER BY term").fetchall()
+
+
+def get_capture_rule_type(conn: sqlite3.Connection, field_name: str) -> str:
+    row = conn.execute(
+        "SELECT value_type FROM capture_rules WHERE extract_as=? LIMIT 1",
+        (field_name,),
+    ).fetchone()
+    return row["value_type"] if row else "text"
 
 
 def delete_vocabulary_term(conn: sqlite3.Connection, term: str) -> None:
@@ -1248,5 +1257,148 @@ def merge_people(
     )
     corpus_conn.commit()
     kb_conn.execute("DELETE FROM people WHERE id = ?", (merge_from_id,))
+    kb_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Prompt library
+# ---------------------------------------------------------------------------
+
+_BUILTIN_STAGE_PROMPTS = [
+    (
+        "describe", "system", "Default",
+        "Describe this image in detail. Focus on the subjects, setting, "
+        "activity, and any visible text or identifiable objects.",
+    ),
+    (
+        "describe", "aggregate", "Default",
+        "Using the frame descriptions above, write a single cohesive description of the video.\n\n"
+        "Rules:\n"
+        "- Prioritise details and themes that appear consistently across multiple frames — "
+        "repeated elements are more reliable than single-frame observations.\n"
+        "- If a detail appears in only one frame and conflicts with what other frames show "
+        "(e.g. a different clothing colour, a person not seen elsewhere), omit it rather than "
+        "including potentially hallucinated content.\n"
+        "- Where frame descriptions agree or reinforce each other, describe those elements "
+        "with confidence.\n"
+        "- Focus on the overall content, activity, and setting.",
+    ),
+    (
+        "retag", "system", "Default",
+        "You are a metadata tagging assistant. Given a description and a controlled vocabulary, "
+        "identify which vocabulary terms apply to this content. You may also propose new terms "
+        "that would be good additions to the vocabulary.\n\n"
+        "Respond with valid JSON only — no markdown, no explanation. Use this exact schema:\n"
+        '{"tags": ["term1", "term2"], "refined_description": "...", "new_terms_proposed": ["term3"]}\n\n'
+        "Rules:\n"
+        "- tags: only use terms from the vocabulary list; include all that genuinely apply\n"
+        "- refined_description: correct obvious errors; keep it factual; do not change meaning\n"
+        "- new_terms_proposed: terms you consider valuable that are not in the vocabulary; leave empty if none",
+    ),
+    (
+        "summarize", "system", "Default",
+        "You are a metadata summarization assistant. Write a factual, searchable summary "
+        "of a media file. Respond with plain text only — no bullet points, no headings, "
+        "no explanation outside the summary itself. "
+        "Preserve all proper nouns (personal names, place names, event names) exactly as "
+        "they appear in the source material — do not paraphrase, normalise, or correct them.",
+    ),
+]
+
+
+def seed_stage_prompts(kb_conn: sqlite3.Connection) -> None:
+    for stage, prompt_key, name, body in _BUILTIN_STAGE_PROMPTS:
+        kb_conn.execute(
+            """
+            INSERT OR IGNORE INTO stage_prompts (stage, prompt_key, name, body, is_active, is_builtin)
+            VALUES (?, ?, ?, ?, 1, 1)
+            """,
+            (stage, prompt_key, name, body),
+        )
+    kb_conn.commit()
+
+
+def load_stage_prompt(
+    kb_conn: sqlite3.Connection, stage: str, prompt_key: str, default: str
+) -> str:
+    try:
+        row = kb_conn.execute(
+            "SELECT body FROM stage_prompts WHERE stage=? AND prompt_key=? AND is_active=1",
+            (stage, prompt_key),
+        ).fetchone()
+        return row["body"] if row else default
+    except sqlite3.OperationalError:
+        return default
+
+
+def list_stage_prompts(kb_conn: sqlite3.Connection) -> list[dict]:
+    rows = kb_conn.execute(
+        "SELECT * FROM stage_prompts ORDER BY stage, prompt_key, is_builtin DESC, name"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_stage_prompt(
+    kb_conn: sqlite3.Connection,
+    stage: str,
+    prompt_key: str,
+    name: str,
+    body: str,
+) -> int:
+    kb_conn.execute(
+        """
+        INSERT INTO stage_prompts (stage, prompt_key, name, body, is_active, is_builtin)
+        VALUES (?, ?, ?, ?, 0, 0)
+        ON CONFLICT (stage, prompt_key, name) DO UPDATE SET body=excluded.body
+        """,
+        (stage, prompt_key, name, body),
+    )
+    kb_conn.commit()
+    row = kb_conn.execute(
+        "SELECT id FROM stage_prompts WHERE stage=? AND prompt_key=? AND name=?",
+        (stage, prompt_key, name),
+    ).fetchone()
+    return row["id"]
+
+
+def set_active_stage_prompt(
+    kb_conn: sqlite3.Connection, stage: str, prompt_key: str, prompt_id: int
+) -> None:
+    row = kb_conn.execute(
+        "SELECT id FROM stage_prompts WHERE id=?", (prompt_id,)
+    ).fetchone()
+    if not row:
+        raise ValueError(f"No stage_prompt with id={prompt_id}")
+    kb_conn.execute(
+        "UPDATE stage_prompts SET is_active=0 WHERE stage=? AND prompt_key=?",
+        (stage, prompt_key),
+    )
+    kb_conn.execute(
+        "UPDATE stage_prompts SET is_active=1 WHERE id=?",
+        (prompt_id,),
+    )
+    kb_conn.commit()
+
+
+def delete_stage_prompt(kb_conn: sqlite3.Connection, prompt_id: int) -> None:
+    row = kb_conn.execute(
+        "SELECT is_builtin, is_active, stage, prompt_key FROM stage_prompts WHERE id=?",
+        (prompt_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"No stage_prompt with id={prompt_id}")
+    if row["is_builtin"]:
+        raise ValueError("Built-in prompts cannot be deleted")
+    stage, prompt_key, was_active = row["stage"], row["prompt_key"], row["is_active"]
+    kb_conn.execute("DELETE FROM stage_prompts WHERE id=?", (prompt_id,))
+    if was_active:
+        builtin = kb_conn.execute(
+            "SELECT id FROM stage_prompts WHERE stage=? AND prompt_key=? AND is_builtin=1",
+            (stage, prompt_key),
+        ).fetchone()
+        if builtin:
+            kb_conn.execute(
+                "UPDATE stage_prompts SET is_active=1 WHERE id=?", (builtin["id"],)
+            )
     kb_conn.commit()
 

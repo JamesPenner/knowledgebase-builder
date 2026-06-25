@@ -18,6 +18,9 @@ _active_cancels: dict[str, threading.Event] = {}
 class RunRequest(BaseModel):
     kb: str
     workers: int | None = None
+    scope_mode: str = "resume"   # resume | rerun | new_files | by_source | by_type
+    source_id: int | None = None
+    file_type: str | None = None
 
 
 def _get_kb_folder(kb: str) -> Path:
@@ -43,9 +46,15 @@ def _make_stage_routes(stage: str, runner_fn):
         progress = SseProgressReporter(stage)
         init_progress(stage)
 
-        def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel):
+        scope = {
+            "scope_mode": req.scope_mode,
+            "source_id": req.source_id,
+            "file_type": req.file_type,
+        }
+
+        def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel, sc=scope):
             try:
-                runner_fn(cp, kp, cfg, pr, ce)
+                runner_fn(cp, kp, cfg, pr, ce, scope=sc)
             except Exception as exc:
                 logger.error("Stage %s failed: %s", stage, exc, exc_info=True)
                 pr.failed(str(exc)[:300])
@@ -81,67 +90,102 @@ def _make_stage_routes(stage: str, runner_fn):
         return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-def _analyse_runner(corpus_path, kb_path, config, progress, cancel):
+def _analyse_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.analyse import run_analyse
     run_analyse(corpus_path, kb_path, config, progress, cancel)
 
 
-def _normalize_runner(corpus_path, kb_path, config, progress, cancel):
+def _normalize_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.normalize import run_normalize
     run_normalize(corpus_path, kb_path, config, progress, cancel)
 
 
-def _extract_meta_runner(corpus_path, kb_path, config, progress, cancel):
+def _extract_meta_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.extract_meta import run_extract_meta
     run_extract_meta(corpus_path, kb_path, config, progress, cancel)
 
 
-def _extract_fields_runner(corpus_path, kb_path, config, progress, cancel):
+def _extract_fields_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.extract_fields import run_extract_fields
     run_extract_fields(corpus_path, kb_path, config, progress, cancel)
 
 
-def _hash_runner(corpus_path, kb_path, config, progress, cancel):
+def _hash_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.hash import run_hash
     run_hash(corpus_path, kb_path, config, progress, cancel)
 
 
-def _aesthetic_runner(corpus_path, kb_path, config, progress, cancel):
+def _aesthetic_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    mode = sc.get("scope_mode", "resume")
+    source_id = sc.get("source_id")
+    file_type = sc.get("file_type")
+    if mode == "rerun":
+        from src.db.corpus import open_corpus, reset_aesthetic_scores
+        conn = open_corpus(corpus_path)
+        reset_aesthetic_scores(conn)
+        conn.close()
     from src.stages.aesthetic import run_aesthetic
-    run_aesthetic(corpus_path, kb_path, config, progress, cancel)
+    run_aesthetic(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
 
 
-def _describe_runner(corpus_path, kb_path, config, progress, cancel):
+def _describe_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    mode = sc.get("scope_mode", "resume")
+    source_id = sc.get("source_id")
+    file_type = sc.get("file_type")
+    if mode == "rerun":
+        from src.db.corpus import open_corpus, reset_describe_to_pending
+        conn = open_corpus(corpus_path)
+        reset_describe_to_pending(conn)
+        conn.close()
     from src.stages.describe import run_describe
-    run_describe(corpus_path, kb_path, config, progress, cancel)
+    run_describe(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
 
 
-def _transcribe_runner(corpus_path, kb_path, config, progress, cancel):
+def _transcribe_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    mode = sc.get("scope_mode", "resume")
+    source_id = sc.get("source_id")
+    file_type = sc.get("file_type")
+    if mode == "rerun":
+        from src.db.corpus import open_corpus, reset_transcribe_to_pending
+        conn = open_corpus(corpus_path)
+        reset_transcribe_to_pending(conn)
+        conn.close()
     from src.stages.transcribe import run_transcribe
-    run_transcribe(corpus_path, kb_path, config, progress, cancel)
+    run_transcribe(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
 
 
-def _entity_match_runner(corpus_path, kb_path, config, progress, cancel):
+def _entity_match_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.entity_match import run_entity_match
     run_entity_match(corpus_path, kb_path, config, progress, cancel)
 
 
-def _classify_runner(corpus_path, kb_path, config, progress, cancel):
+def _classify_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.classify import run_classify
     run_classify(corpus_path, kb_path, config, progress, cancel)
 
 
-def _temporal_runner(corpus_path, kb_path, config, progress, cancel):
+def _temporal_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.temporal import run_temporal
     run_temporal(corpus_path, kb_path, config, progress, cancel)
 
 
-def _retag_runner(corpus_path, kb_path, config, progress, cancel):
+def _retag_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    mode = sc.get("scope_mode", "resume")
+    source_id = sc.get("source_id")
+    if mode == "rerun":
+        from src.db.corpus import open_corpus, reset_retag_to_pending
+        conn = open_corpus(corpus_path)
+        reset_retag_to_pending(conn)
+        conn.close()
     from src.stages.retag import run_retag
-    run_retag(corpus_path, kb_path, config, progress, cancel)
+    run_retag(corpus_path, kb_path, config, progress, cancel, source_id=source_id)
 
 
-def _writeback_runner(corpus_path, kb_path, config, progress, cancel):
+def _writeback_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.writeback import run_writeback
     run_writeback(corpus_path, kb_path, config, progress, cancel)
 
@@ -208,18 +252,33 @@ async def export_stream():
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-def _quality_runner(corpus_path, kb_path, config, progress, cancel):
+def _quality_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    mode = sc.get("scope_mode", "resume")
+    source_id = sc.get("source_id")
+    file_type = sc.get("file_type")
+    if mode == "rerun":
+        from src.db.corpus import open_corpus, reset_quality_scores
+        conn = open_corpus(corpus_path)
+        reset_quality_scores(conn)
+        conn.close()
     from src.stages.quality import run_quality
-    run_quality(corpus_path, kb_path, config, progress, cancel)
+    run_quality(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
 
 
-def _geolocate_runner(corpus_path, kb_path, config, progress, cancel):
+def _geolocate_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.geolocate import run_geolocate
     run_geolocate(corpus_path, kb_path, config, progress, cancel)
 
 
+def _validate_runner(corpus_path, kb_path, config, progress, cancel, **_):
+    from src.stages.validate import run_validate
+    run_validate(corpus_path, kb_path.parent, progress, cancel)
+
+
 _make_stage_routes("quality", _quality_runner)
 _make_stage_routes("geolocate", _geolocate_runner)
+_make_stage_routes("validate", _validate_runner)
 _make_stage_routes("aesthetic", _aesthetic_runner)
 _make_stage_routes("describe", _describe_runner)
 _make_stage_routes("transcribe", _transcribe_runner)
@@ -240,6 +299,8 @@ _make_stage_routes("writeback", _writeback_runner)
 class SummarizeRunRequest(BaseModel):
     kb: str
     force: bool = False
+    scope_mode: str = "resume"
+    source_id: int | None = None
 
 
 @router.post("/summarize/run", tags=["pipeline"])
@@ -260,13 +321,13 @@ def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -
 
     def _runner(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel):
         try:
-            if req.force:
+            if req.force or req.scope_mode == "rerun":
                 from src.db.corpus import open_corpus, reset_summarize_to_pending
                 conn = open_corpus(cp)
                 reset_summarize_to_pending(conn)
                 conn.close()
             from src.stages.summarize import run_summarize
-            run_summarize(cp, kp, cfg, pr, ce)
+            run_summarize(cp, kp, cfg, pr, ce, source_id=req.source_id)
         except Exception as exc:
             logger.error("Stage summarize failed: %s", exc, exc_info=True)
             pr.failed(str(exc)[:300])
@@ -428,3 +489,31 @@ async def ingest_stream():
             yield f"data: {json.dumps(state)}\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+class ResolvePlanRequest(BaseModel):
+    stages: list[str]
+    completed: list[str] = []
+
+
+@router.post("/resolve-plan", tags=["pipeline"])
+def resolve_plan_endpoint(req: ResolvePlanRequest) -> dict:
+    from fastapi import HTTPException
+    from src.pipeline.dag import resolve_plan
+
+    completed = set(req.completed)
+    merged: list = []
+    seen_entries: set = set()
+
+    for stage in req.stages:
+        try:
+            plan = resolve_plan(stage, completed)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        for entry in plan:
+            key = entry if isinstance(entry, str) else entry["touchpoint"]
+            if key not in seen_entries:
+                seen_entries.add(key)
+                merged.append(entry)
+
+    return {"plan": merged}

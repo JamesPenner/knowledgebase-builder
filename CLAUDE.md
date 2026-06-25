@@ -24,8 +24,9 @@ Before writing any code for a sprint:
 1. **Read** `VISION.md`, `SPEC.md` (relevant sections), `docs/development/ARCHITECTURE.md`, and any sprint file in `docs/development/sprints/active/`.
 2. **Read** the sprint entry for the sprint about to start. Confirm the acceptance criteria are clear. If anything is ambiguous, ask before starting.
 3. **Identify** which previous sprints this one builds on. Read their memory entries to understand the schema and module state at that point.
-4. **Run the test suite** to confirm the current baseline: `python -m pytest tests/ -q`. Record the passing count. Do not start sprint work if existing tests are failing — resolve failures first and confirm with the user.
-5. **State** a one-paragraph summary of what the sprint will build and how it connects to previous work. Wait for confirmation before proceeding if anything is uncertain.
+4. **Review** the sprint plan against the current state of every file it will touch. Note any discrepancies between what the plan describes and what currently exists — renamed functions, already-refactored code, new patterns introduced by intervening sprints. Propose any updates to the plan and wait for confirmation before proceeding.
+5. **Run the test suite** to confirm the current baseline: `python -m pytest tests/ -q`. Record the passing count. Do not start sprint work if existing tests are failing — resolve failures first and confirm with the user.
+6. **State** a one-paragraph summary of what the sprint will build and how it connects to previous work. Wait for confirmation before proceeding if anything is uncertain.
 
 ## During a Sprint
 
@@ -66,6 +67,7 @@ A sprint is not complete until all of the following are true:
 3. **No regressions:** The tests that were passing before the sprint are still passing.
 4. **Sprint memory recorded:** Create or update the sprint status memory entry with: what was built, the final test count, and any issues discovered.
 5. **Issues surfaced:** If any open questions or risks were discovered during the sprint, list them explicitly before declaring the sprint complete. Do not silently defer them.
+6. **Planning docs updated:** Update `docs/development/ROADMAP.md` current state section (test count, last completed sprint, status line). Move the sprint's `.md` file from `sprints/planned/` or `sprints/active/` to `sprints/complete/`. If no sprint file exists, this step is a no-op.
 
 ## Testing Conventions
 

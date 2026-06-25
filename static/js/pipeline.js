@@ -1,8 +1,15 @@
 const _sources = {};
 
 function _buildBody(stage, kb) {
-  if (stage === 'suggest') return JSON.stringify({kb, levels: ['a', 'b']});
-  return JSON.stringify({kb});
+  const scope = window.KB_SCOPE || {};
+  const body = {kb, ...scope};
+  if (stage === 'suggest') {
+    body.levels = ['a', 'b'];
+  }
+  if (stage === 'ingest' && scope.scope_mode === 'new_files') {
+    body.incremental = true;
+  }
+  return JSON.stringify(body);
 }
 
 function _fmtEta(seconds) {

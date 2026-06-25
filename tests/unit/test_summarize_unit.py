@@ -1,36 +1,38 @@
-"""Unit tests for Stage 3c — Summarize: prompt building, chunking, LLM call."""
-from unittest.mock import MagicMock
-
+"""Unit tests for Stage 3c — Summarize: prompt building and chunking."""
 from src.stages.summarize import (
     _build_system_prompt,
     _build_user_prompt,
-    _call_llm,
     _chunk_transcript,
 )
+from src.text.context import FileContext
 
 
 def _ctx(
     description=None,
     transcript=None,
-    attributed=False,
+    transcript_attributed=False,
     derived_tags=None,
     entity_names=None,
-    normalized_filename="photo.jpg",
-    captured_date="2024-01-15",
-    captured_location="Vancouver, BC",
+    filename="photo.jpg",
+    metadata_date="2024-01-15",
+    metadata_location="Vancouver, BC",
     vocab_terms=None,
-):
-    return {
-        "description": description,
-        "transcript": transcript,
-        "attributed": attributed,
-        "derived_tags": derived_tags or [],
-        "entity_names": entity_names or [],
-        "normalized_filename": normalized_filename,
-        "captured_date": captured_date,
-        "captured_location": captured_location,
-        "vocab_terms": vocab_terms or [],
-    }
+) -> FileContext:
+    return FileContext(
+        file_id=1,
+        filename=filename,
+        description=description,
+        transcript=transcript,
+        transcript_attributed=transcript_attributed,
+        summary_text=None,
+        derived_tags=derived_tags or [],
+        entity_names=entity_names or [],
+        captured_fields=[],
+        metadata_date=metadata_date,
+        metadata_location=metadata_location,
+        enrichment_text="",
+        vocab_terms=vocab_terms or [],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +61,7 @@ class TestBuildUserPromptCase2:
         assert "Visual description:" not in prompt
 
     def test_attributed_transcript_label(self):
-        ctx = _ctx(transcript="Speaker A: hi.", attributed=True)
+        ctx = _ctx(transcript="Speaker A: hi.", transcript_attributed=True)
         prompt = _build_user_prompt(ctx, target_words=100)
         assert "Attributed transcript:" in prompt
 
@@ -91,16 +93,16 @@ class TestBuildUserPromptInjections:
         assert "Relevant vocabulary" in prompt
 
     def test_attributed_transcript_label_in_combined(self):
-        ctx = _ctx(description="A meeting.", transcript="Bob: Hello.", attributed=True)
+        ctx = _ctx(description="A meeting.", transcript="Bob: Hello.", transcript_attributed=True)
         prompt = _build_user_prompt(ctx, target_words=150)
         assert "Attributed transcript" in prompt
 
     def test_empty_context_omits_blank_lines(self):
         ctx = _ctx(
             description="Something.",
-            normalized_filename="",
-            captured_date="",
-            captured_location="",
+            filename="",
+            metadata_date="",
+            metadata_location="",
             derived_tags=[],
             vocab_terms=[],
         )
@@ -151,41 +153,3 @@ class TestChunkTranscript:
         c1_words = chunks[1].split()
         overlap = max(1, round(15 * 0.2))
         assert c0_words[-overlap:] == c1_words[:overlap]
-
-
-# ---------------------------------------------------------------------------
-# LLM call wrapper
-# ---------------------------------------------------------------------------
-
-class TestCallLlm:
-    def test_returns_stripped_text(self):
-        mock_llm = MagicMock()
-        mock_llm.create_chat_completion.return_value = {
-            "choices": [{"message": {"content": "  A nice summary.  "}}]
-        }
-        result = _call_llm(mock_llm, "system", "user")
-        assert result == "A nice summary."
-
-    def test_empty_response_returns_empty_string(self):
-        mock_llm = MagicMock()
-        mock_llm.create_chat_completion.return_value = {
-            "choices": [{"message": {"content": ""}}]
-        }
-        result = _call_llm(mock_llm, "system", "user")
-        assert result == ""
-
-    def test_exception_returns_empty_string(self):
-        mock_llm = MagicMock()
-        mock_llm.create_chat_completion.side_effect = RuntimeError("boom")
-        result = _call_llm(mock_llm, "system", "user")
-        assert result == ""
-
-    def test_passes_system_and_user_as_messages(self):
-        mock_llm = MagicMock()
-        mock_llm.create_chat_completion.return_value = {
-            "choices": [{"message": {"content": "ok"}}]
-        }
-        _call_llm(mock_llm, "sys content", "usr content")
-        messages = mock_llm.create_chat_completion.call_args[1]["messages"]
-        assert messages[0] == {"role": "system", "content": "sys content"}
-        assert messages[1] == {"role": "user", "content": "usr content"}

@@ -1,0 +1,1 @@
+ALTER TABLE files ADD COLUMN has_speech INTEGER;

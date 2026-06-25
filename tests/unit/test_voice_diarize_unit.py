@@ -1,7 +1,9 @@
 """Unit tests for KB.P17 Voice Diarization — no pyannote inference, no filesystem."""
 import sqlite3
+import struct
 import types
 import unittest.mock as mock
+import wave
 
 import numpy as np
 import pytest
@@ -162,17 +164,6 @@ class TestDiarizeAudio:
 # embed_voice_segment
 # ---------------------------------------------------------------------------
 
-def _make_fake_librosa(audio: np.ndarray, sr: int = 16000, load_error=None):
-    mod = types.ModuleType("librosa")
-    if load_error is not None:
-        mod.load = lambda *a, **kw: (_ for _ in ()).throw(load_error)
-    else:
-        def _load(*a, **kw):
-            return audio, sr
-        mod.load = _load
-    return mod
-
-
 def _make_fake_resemblyzer():
     mod = types.ModuleType("resemblyzer")
     class _FakeEncoder:
@@ -184,14 +175,23 @@ def _make_fake_resemblyzer():
     return mod
 
 
+def _write_wav(path, n_samples: int = 32000, amplitude: int = 4096, sr: int = 16000):
+    """Write a minimal 16 kHz mono PCM WAV file."""
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(struct.pack(f"<{n_samples}h", *([amplitude] * n_samples)))
+    return path
+
+
 class TestEmbedVoiceSegment:
     def test_returns_bytes_for_valid_slice(self, tmp_path):
         from src.stages.voice import _EMBEDDING_DIM, embed_voice_segment
-        audio = np.ones(32000, dtype=np.float32)
-        fake_lib = _make_fake_librosa(audio)
+        wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s
         fake_res = _make_fake_resemblyzer()
-        with mock.patch.dict("sys.modules", {"librosa": fake_lib, "resemblyzer": fake_res}):
-            result = embed_voice_segment(tmp_path / "a.wav", 0, 2000)
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            result = embed_voice_segment(wav, 0, 2000)
         assert result is not None
         assert len(result) == _EMBEDDING_DIM * 4
 
@@ -207,20 +207,21 @@ class TestEmbedVoiceSegment:
 
     def test_returns_none_on_load_error(self, tmp_path):
         from src.stages.voice import embed_voice_segment
-        fake_lib = _make_fake_librosa(np.zeros(1), load_error=Exception("no audio"))
+        corrupt = tmp_path / "corrupt.wav"
+        corrupt.write_bytes(b"\x00\xFF" * 50)
         fake_res = _make_fake_resemblyzer()
-        with mock.patch.dict("sys.modules", {"librosa": fake_lib, "resemblyzer": fake_res}):
-            result = embed_voice_segment(tmp_path / "a.wav", 0, 2000)
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            result = embed_voice_segment(corrupt, 0, 2000)
         assert result is None
 
     def test_returns_none_for_too_short_slice(self, tmp_path):
-        """Loaded slice shorter than _MIN_DURATION_S returns None."""
+        """Slice < _MIN_DURATION_S (1 s) returns None."""
         from src.stages.voice import embed_voice_segment
-        short_audio = np.zeros(100, dtype=np.float32)  # ~6ms at 16kHz
-        fake_lib = _make_fake_librosa(short_audio)
+        wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s WAV
         fake_res = _make_fake_resemblyzer()
-        with mock.patch.dict("sys.modules", {"librosa": fake_lib, "resemblyzer": fake_res}):
-            result = embed_voice_segment(tmp_path / "a.wav", 0, 2000)
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            # Request only 100 ms — below 1 s minimum
+            result = embed_voice_segment(wav, 0, 100)
         assert result is None
 
 

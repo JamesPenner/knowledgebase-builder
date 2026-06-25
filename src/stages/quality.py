@@ -96,6 +96,9 @@ def run_quality(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
 ) -> dict:
     from src.db.corpus import (
         get_pending_quality_files,
@@ -104,14 +107,14 @@ def run_quality(
         upsert_quality_score,
         compute_quality_rank_scores,
     )
-    from src.stages.video import get_video_frames
+    from src.media.frameset import prepare_visual
 
     corpus_conn = open_corpus(corpus_path)
     scored = errors = 0
     start = time.monotonic()
 
     try:
-        pending = get_pending_quality_files(corpus_conn)
+        pending = get_pending_quality_files(corpus_conn, source_id=source_id, file_type=file_type)
         total = len(pending)
 
         for i, row in enumerate(pending):
@@ -124,14 +127,20 @@ def run_quality(
 
             try:
                 if file_type == "images":
-                    metrics = _analyze_frame(Path(row["path"]))
-                    frame_count = 1
-                elif file_type == "video":
-                    frames_bytes = get_video_frames(Path(row["path"]), config, mode="uniform")
-                    if not frames_bytes:
+                    frameset = prepare_visual(Path(row["path"]), config)
+                    if frameset is None:
                         errors += 1
                         continue
-                    frame_metrics = [_analyze_frame(b) for b in frames_bytes]
+                    src = frameset.frames[0] if frameset.frames else frameset.rejected[0]
+                    metrics = _analyze_frame(src.jpeg_bytes)
+                    frame_count = 1
+                elif file_type == "video":
+                    frameset = prepare_visual(Path(row["path"]), config)
+                    if frameset is None:
+                        errors += 1
+                        continue
+                    all_frames = frameset.frames + frameset.rejected
+                    frame_metrics = [_analyze_frame(f.jpeg_bytes) for f in all_frames]
                     metrics = _aggregate_frame_metrics(frame_metrics)
                     frame_count = len(frame_metrics)
                 else:

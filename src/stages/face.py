@@ -9,7 +9,7 @@ class ModelLoadError(Exception):
     pass
 
 
-def detect_faces(img_path: Path, detection_model_path: str) -> list[dict]:
+def detect_faces(img_bytes: bytes, detection_model_path: str) -> list[dict]:
     """Run SCRFD ONNX face detection on an image.
 
     Returns list of dicts with keys 'bbox' ([x1, y1, x2, y2]) and 'score'.
@@ -25,6 +25,7 @@ def detect_faces(img_path: Path, detection_model_path: str) -> list[dict]:
         raise ModelLoadError(f"Face detection model not found: {detection_model_path}")
 
     try:
+        import io as _io
         from PIL import Image
     except ImportError as exc:
         raise ModelLoadError(f"Pillow not installed: {exc}") from exc
@@ -35,7 +36,7 @@ def detect_faces(img_path: Path, detection_model_path: str) -> list[dict]:
     except Exception as exc:
         raise ModelLoadError(f"Could not load face detection model: {exc}") from exc
 
-    img = Image.open(img_path).convert("RGB")
+    img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
     orig_w, orig_h = img.size
     input_size = (640, 640)
     img_resized = img.resize(input_size, Image.BILINEAR)
@@ -82,7 +83,7 @@ def detect_faces(img_path: Path, detection_model_path: str) -> list[dict]:
     return faces
 
 
-def embed_face(img_path: Path, bbox: list, embedding_model_path: str) -> bytes:
+def embed_face(img_bytes: bytes, bbox: list, embedding_model_path: str) -> bytes:
     """Crop a face region and run ArcFace ONNX embedding.
 
     Returns 512D float32 embedding as raw bytes.
@@ -98,6 +99,7 @@ def embed_face(img_path: Path, bbox: list, embedding_model_path: str) -> bytes:
         raise ModelLoadError(f"Face embedding model not found: {embedding_model_path}")
 
     try:
+        import io as _io
         from PIL import Image
     except ImportError as exc:
         raise ModelLoadError(f"Pillow not installed: {exc}") from exc
@@ -108,7 +110,7 @@ def embed_face(img_path: Path, bbox: list, embedding_model_path: str) -> bytes:
     except Exception as exc:
         raise ModelLoadError(f"Could not load face embedding model: {exc}") from exc
 
-    img = Image.open(img_path).convert("RGB")
+    img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
     x1, y1, x2, y2 = (int(v) for v in bbox)
     # Clamp to image bounds
     w, h = img.size
@@ -231,84 +233,99 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
             img_path = Path(row["path"])
             file_id = row["id"]
 
-            try:
-                faces = detect_faces(img_path, config.face_detection_model)
-            except ModelLoadError:
-                raise
-            except Exception as exc:
-                logger.warning("Face detection failed for %s: %s", img_path, exc)
+            from src.media.frameset import prepare_visual
+            frameset = prepare_visual(img_path, config)
+            if frameset is None:
+                logger.warning("Face: prepare_visual returned None for %s", img_path)
                 error_count += 1
                 progress.update(i + 1, total)
                 continue
 
-            for region_index, face in enumerate(faces):
-                faces_detected += 1
-                bbox = face["bbox"]
+            region_index = 0
+            file_detection_error = False
+            for frame in frameset.frames:
+                if not frame.passed_quality:
+                    logger.debug("Face: skipping low-quality frame for %s", img_path)
+                    continue
+
                 try:
-                    embedding = embed_face(img_path, bbox, config.face_embedding_model)
+                    faces = detect_faces(frame.jpeg_bytes, config.face_detection_model)
                 except ModelLoadError:
                     raise
                 except Exception as exc:
-                    logger.warning("Face embedding failed for %s face %d: %s", img_path, region_index, exc)
+                    logger.warning("Face detection failed for %s: %s", img_path, exc)
                     error_count += 1
+                    file_detection_error = True
                     continue
 
-                # Match against known people centroids
-                best_person_id = None
-                best_similarity = 0.0
-                for person_id, cent in centroids.items():
-                    sim = cosine_similarity(embedding, cent["blob"])
-                    if sim > best_similarity:
-                        best_similarity = sim
-                        best_person_id = person_id
+                for face in faces:
+                    faces_detected += 1
+                    bbox = face["bbox"]
+                    try:
+                        embedding = embed_face(frame.jpeg_bytes, bbox, config.face_embedding_model)
+                    except ModelLoadError:
+                        raise
+                    except Exception as exc:
+                        logger.warning("Face embedding failed for %s face %d: %s", img_path, region_index, exc)
+                        error_count += 1
+                        region_index += 1
+                        continue
 
-                matched_person_id = None
-                matched_similarity = None
-                if best_person_id is not None and best_similarity >= config.face_similarity_threshold:
-                    matched_person_id = best_person_id
-                    matched_similarity = best_similarity
-                    faces_matched += 1
-                    # Update centroid in memory
-                    old = centroids[best_person_id]
-                    new_blob, new_count = update_centroid(old["blob"], old["count"], embedding)
-                    centroids[best_person_id] = {"blob": new_blob, "count": new_count}
-                    update_face_centroid(kb_conn, best_person_id, new_blob, new_count)
-                elif config.unknown_face_clusters:
-                    # Assign to nearest cluster or create new one
-                    best_cluster_idx = None
-                    best_cluster_sim = 0.0
-                    for ci, cl in enumerate(cluster_centroids):
-                        sim = cosine_similarity(embedding, cl["blob"])
-                        if sim > best_cluster_sim:
-                            best_cluster_sim = sim
-                            best_cluster_idx = ci
+                    # Match against known people centroids
+                    best_person_id = None
+                    best_similarity = 0.0
+                    for person_id, cent in centroids.items():
+                        sim = cosine_similarity(embedding, cent["blob"])
+                        if sim > best_similarity:
+                            best_similarity = sim
+                            best_person_id = person_id
 
-                    if best_cluster_idx is None or best_cluster_sim < config.face_similarity_threshold:
-                        # New cluster
-                        cid = upsert_face_cluster(corpus_conn, None, embedding, 1, 0.0)
-                        cluster_centroids.append({"id": cid, "blob": embedding, "count": 1})
-                        insert_face_cluster_member(corpus_conn, cid, file_id, region_index, None)
-                    else:
-                        cl = cluster_centroids[best_cluster_idx]
-                        new_blob, new_count = update_centroid(cl["blob"], cl["count"], embedding)
-                        spread = 1.0 - best_cluster_sim
-                        cid = upsert_face_cluster(corpus_conn, cl["id"], new_blob, new_count, spread)
-                        cluster_centroids[best_cluster_idx] = {"id": cid, "blob": new_blob, "count": new_count}
-                        insert_face_cluster_member(corpus_conn, cid, file_id, region_index, best_cluster_sim)
+                    matched_person_id = None
+                    matched_similarity = None
+                    if best_person_id is not None and best_similarity >= config.face_similarity_threshold:
+                        matched_person_id = best_person_id
+                        matched_similarity = best_similarity
+                        faces_matched += 1
+                        old = centroids[best_person_id]
+                        new_blob, new_count = update_centroid(old["blob"], old["count"], embedding)
+                        centroids[best_person_id] = {"blob": new_blob, "count": new_count}
+                        update_face_centroid(kb_conn, best_person_id, new_blob, new_count)
+                    elif config.unknown_face_clusters:
+                        best_cluster_idx = None
+                        best_cluster_sim = 0.0
+                        for ci, cl in enumerate(cluster_centroids):
+                            sim = cosine_similarity(embedding, cl["blob"])
+                            if sim > best_cluster_sim:
+                                best_cluster_sim = sim
+                                best_cluster_idx = ci
 
-                upsert_face_region(
-                    corpus_conn,
-                    file_id,
-                    region_index,
-                    json.dumps(bbox),
-                    embedding,
-                    matched_person_id,
-                    matched_similarity,
-                )
+                        if best_cluster_idx is None or best_cluster_sim < config.face_similarity_threshold:
+                            cid = upsert_face_cluster(corpus_conn, None, embedding, 1, 0.0)
+                            cluster_centroids.append({"id": cid, "blob": embedding, "count": 1})
+                            insert_face_cluster_member(corpus_conn, cid, file_id, region_index, None)
+                        else:
+                            cl = cluster_centroids[best_cluster_idx]
+                            new_blob, new_count = update_centroid(cl["blob"], cl["count"], embedding)
+                            spread = 1.0 - best_cluster_sim
+                            cid = upsert_face_cluster(corpus_conn, cl["id"], new_blob, new_count, spread)
+                            cluster_centroids[best_cluster_idx] = {"id": cid, "blob": new_blob, "count": new_count}
+                            insert_face_cluster_member(corpus_conn, cid, file_id, region_index, best_cluster_sim)
+
+                    upsert_face_region(
+                        corpus_conn,
+                        file_id,
+                        region_index,
+                        json.dumps(bbox),
+                        embedding,
+                        matched_person_id,
+                        matched_similarity,
+                    )
+                    region_index += 1
 
             corpus_conn.commit()
             kb_conn.commit()
-            files_processed += 1
+            if not file_detection_error:
+                files_processed += 1
             progress.update(i + 1, total)
 
         progress.done()

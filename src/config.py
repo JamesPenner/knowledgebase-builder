@@ -62,6 +62,10 @@ class Config:
     # write-back (face)
     unknown_face_clusters: bool = False
     export_biometric: bool = False
+    # audio preparation (Stage 3b / voice / diarize)
+    vad_silence_threshold: float = -50.0
+    audio_profile: str = "default"
+    visual_profile: str = "default"
     # summarize (Stage 3c)
     summarize_target_words: int = 150
     summarize_max_transcript_tokens: int = 18000
@@ -149,6 +153,9 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
     fields["near_duplicate_hamming_threshold"] = _typed(thresholds.get("near_duplicate_hamming_threshold", defaults.near_duplicate_hamming_threshold), int, defaults.near_duplicate_hamming_threshold, "thresholds.near_duplicate_hamming_threshold")
     fields["gps_cluster_eps_km"] = _typed(thresholds.get("gps_cluster_eps_km", defaults.gps_cluster_eps_km), float, defaults.gps_cluster_eps_km, "thresholds.gps_cluster_eps_km")
     fields["gps_cluster_min_samples"] = _typed(thresholds.get("gps_cluster_min_samples", defaults.gps_cluster_min_samples), int, defaults.gps_cluster_min_samples, "thresholds.gps_cluster_min_samples")
+    fields["vad_silence_threshold"] = _typed(thresholds.get("vad_silence_threshold", defaults.vad_silence_threshold), float, defaults.vad_silence_threshold, "thresholds.vad_silence_threshold")
+    fields["audio_profile"] = _typed(thresholds.get("audio_profile", defaults.audio_profile), str, defaults.audio_profile, "thresholds.audio_profile")
+    fields["visual_profile"] = _typed(thresholds.get("visual_profile", defaults.visual_profile), str, defaults.visual_profile, "thresholds.visual_profile")
 
     summarize = raw.get("summarize", {}) or {}
     fields["summarize_target_words"] = _typed(summarize.get("target_words", defaults.summarize_target_words), int, defaults.summarize_target_words, "summarize.target_words")
@@ -229,6 +236,9 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
         "voice_diarization_min_segment_ms": ("voice_diarization_min_segment_ms", int),
         "gps_cluster_eps_km": ("gps_cluster_eps_km", float),
         "gps_cluster_min_samples": ("gps_cluster_min_samples", int),
+        "vad_silence_threshold": ("vad_silence_threshold", float),
+        "audio_profile": ("audio_profile", str),
+        "visual_profile": ("visual_profile", str),
     }
     for yaml_key, (field_name, expected) in _threshold_map.items():
         if yaml_key in thresholds:

@@ -11,6 +11,10 @@ def _make_config():
     cfg.phash_threshold = 10
     cfg.ffmpeg = "ffmpeg"
     cfg.ffprobe = "ffprobe"
+    cfg.describe_min_frame_brightness = 30.0
+    cfg.describe_min_frame_sharpness = 0.0
+    cfg.visual_profile = "default"
+    cfg.debug_frames_dir = ""
     return cfg
 
 

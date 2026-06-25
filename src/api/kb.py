@@ -36,6 +36,28 @@ def kb_stats(name: str) -> dict[str, Any]:
         kb_conn.close()
 
 
+@router.get("/{name}/sources", tags=["kb"])
+def kb_sources(name: str) -> list[dict[str, Any]]:
+    from src.db.corpus import get_sources, open_corpus
+    from src.db.registry import get_kb_path, open_registry
+
+    try:
+        reg = open_registry(Path("."))
+        folder = get_kb_path(reg, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    conn = open_corpus(folder / "corpus.db")
+    try:
+        rows = get_sources(conn)
+        return [
+            {"id": r["id"], "path": r["path"], "file_count": r["file_count_ingested"]}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 @router.get("/{name}/health", tags=["kb"])
 def kb_health(name: str) -> dict[str, Any]:
     from src.config import load_config

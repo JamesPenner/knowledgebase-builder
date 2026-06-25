@@ -26,6 +26,9 @@ src/
     field_map.py        /api/field-map/* routes
     aesthetic.py        /api/aesthetic/* routes
     ui.py               page routes
+  llm/                  LLM invocation layer (one-way: stages import from here; llm/ never imports from stages or db/)
+    __init__.py         package marker
+    session.py          TextSession and VisionSession context managers; ModelLoadError; chat format helpers
   stages/               one module per pipeline stage; each independently invokable
     ingest.py           Stage 0
     analyse.py          Stage 0.5

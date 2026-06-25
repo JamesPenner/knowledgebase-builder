@@ -17,12 +17,12 @@ def _fake_embedding(seed: int = 0) -> bytes:
     return v.tobytes()
 
 
-def _fake_detect(img_path, detection_model_path):
+def _fake_detect(img_bytes, detection_model_path):
     """Return one synthetic face bbox per call."""
     return [{"bbox": [10.0, 10.0, 50.0, 50.0], "score": 0.99}]
 
 
-def _fake_embed(img_path, bbox, embedding_model_path, *, _seed=0):
+def _fake_embed(img_bytes, bbox, embedding_model_path, *, _seed=0):
     return _fake_embedding(seed=_seed)
 
 
@@ -143,12 +143,12 @@ class TestRunFaceIntegration:
         cancel1 = threading.Event()
         call_count = 0
 
-        def detecting_with_cancel(img_path, det_model):
+        def detecting_with_cancel(img_bytes, det_model):
             nonlocal call_count
             call_count += 1
             if call_count >= 3:
                 cancel1.set()
-            return _fake_detect(img_path, det_model)
+            return _fake_detect(img_bytes, det_model)
 
         with (
             patch("src.stages.face.detect_faces", side_effect=detecting_with_cancel),

@@ -1,7 +1,9 @@
 """Unit tests for KB.P16 Voice Stage — no Resemblyzer inference, no filesystem."""
 import sqlite3
+import struct
 import types
 import unittest.mock as mock
+import wave
 
 import numpy as np
 import pytest
@@ -292,19 +294,6 @@ class TestGetPeopleVoiceCentroidsForExport:
 # Helpers for mocking lazy imports in embed_voice
 # ---------------------------------------------------------------------------
 
-def _make_fake_librosa(audio: np.ndarray, sr: int = 16000, load_error=None):
-    """Build a minimal fake librosa module."""
-    mod = types.ModuleType("librosa")
-    if load_error is not None:
-        def _load(*a, **kw):
-            raise load_error
-    else:
-        def _load(*a, **kw):
-            return audio, sr
-    mod.load = _load
-    return mod
-
-
 def _make_fake_resemblyzer(embedding: np.ndarray | None = None):
     """Build a minimal fake resemblyzer module."""
     mod = types.ModuleType("resemblyzer")
@@ -321,49 +310,49 @@ def _make_fake_resemblyzer(embedding: np.ndarray | None = None):
     return mod
 
 
+def _write_wav(path, n_samples: int = 32000, amplitude: int = 4096, sr: int = 16000):
+    """Write a minimal 16 kHz mono PCM WAV file."""
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(struct.pack(f"<{n_samples}h", *([amplitude] * n_samples)))
+    return path
+
+
 # ---------------------------------------------------------------------------
-# embed_voice — mocked Resemblyzer (sys.modules patching)
+# embed_voice — mocked Resemblyzer, real WAV files
 # ---------------------------------------------------------------------------
 
 class TestEmbedVoiceMocked:
     def test_returns_none_for_short_audio(self, tmp_path):
-        """Audio shorter than _MIN_DURATION_S returns (None, None)."""
+        """WAV shorter than _MIN_DURATION_S (1 s) returns (None, None)."""
         from src.stages.voice import embed_voice
-
-        short_audio = np.zeros(100, dtype=np.float32)  # ~6ms at 16kHz
-        fake_lib = _make_fake_librosa(short_audio, 16000)
+        wav = _write_wav(tmp_path / "short.wav", n_samples=100)  # ~6 ms
         fake_res = _make_fake_resemblyzer()
-
-        with mock.patch.dict("sys.modules", {"librosa": fake_lib, "resemblyzer": fake_res}):
-            result, dur = embed_voice(tmp_path / "short.wav")
-
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            result, dur = embed_voice(wav)
         assert result is None
         assert dur is None
 
     def test_returns_bytes_for_valid_audio(self, tmp_path):
         from src.stages.voice import _EMBEDDING_DIM, embed_voice
-
-        audio = np.ones(32000, dtype=np.float32)  # 2 seconds at 16kHz
         embedding = np.ones(256, dtype=np.float32)
         embedding = embedding / float(np.linalg.norm(embedding))
-        fake_lib = _make_fake_librosa(audio, 16000)
+        wav = _write_wav(tmp_path / "valid.wav", n_samples=32000)  # 2 s
         fake_res = _make_fake_resemblyzer(embedding)
-
-        with mock.patch.dict("sys.modules", {"librosa": fake_lib, "resemblyzer": fake_res}):
-            result, dur = embed_voice(tmp_path / "fake.wav")
-
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            result, dur = embed_voice(wav)
         assert result is not None
-        assert len(result) == _EMBEDDING_DIM * 4  # float32, 4 bytes each
+        assert len(result) == _EMBEDDING_DIM * 4
         assert dur == pytest.approx(2000, abs=50)
 
-    def test_load_failure_returns_none(self, tmp_path):
+    def test_returns_none_for_corrupt_file(self, tmp_path):
         from src.stages.voice import embed_voice
-
-        fake_lib = _make_fake_librosa(np.zeros(1), load_error=Exception("codec error"))
+        corrupt = tmp_path / "corrupt.wav"
+        corrupt.write_bytes(b"\x00\xFF" * 50)
         fake_res = _make_fake_resemblyzer()
-
-        with mock.patch.dict("sys.modules", {"librosa": fake_lib, "resemblyzer": fake_res}):
-            result, dur = embed_voice(tmp_path / "bad.wav")
-
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            result, dur = embed_voice(corrupt)
         assert result is None
         assert dur is None

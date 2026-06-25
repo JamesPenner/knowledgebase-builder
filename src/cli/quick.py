@@ -48,11 +48,12 @@ def quick_describe(
     path: str = typer.Argument(help="File or directory to describe"),
     focus: str = typer.Option("", "--focus", help="Domain guidance string injected into prompts"),
     model_override: str | None = typer.Option(None, "--model", help="Override vision model path"),
+    kb: str | None = typer.Option(None, "--kb", help="Path to KB directory; loads its active describe prompt"),
     output: Path | None = typer.Option(None, "--output", help="Write results to file (CSV or JSON)"),
     fmt: str = typer.Option("csv", "--format", help="Output format: csv or json"),
     recursive: bool = typer.Option(False, "--recursive", help="Recurse into subdirectories"),
 ) -> None:
-    """Stateless vision describe — no KB or corpus.db required."""
+    """Vision describe — uses the active KB prompt when --kb is given."""
     from src.config import load_config
     from src.stages.describe import ModelLoadError, run_describe_file
 
@@ -73,11 +74,18 @@ def quick_describe(
         typer.echo("Error: no vision_model configured. Set models.vision in config.yaml or use --model.", err=True)
         raise typer.Exit(1)
 
+    kb_path: Path | None = None
+    if kb:
+        kb_path = Path(kb)
+        if not (kb_path / "knowledge.db").exists():
+            typer.echo(f"Warning: no knowledge.db found at {kb_path} — using default prompt.", err=True)
+            kb_path = None
+
     rows: list[dict] = []
     for file_path in files:
         typer.echo(f"Describing {file_path}…", err=True)
         try:
-            description = run_describe_file(file_path, config, focus=focus)
+            description = run_describe_file(file_path, config, focus=focus, kb_path=kb_path)
             import datetime
             rows.append({
                 "path": str(file_path),

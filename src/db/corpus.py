@@ -766,14 +766,20 @@ def get_candidate_term_file_count(conn: sqlite3.Connection, term: str) -> int:
 # Retag output
 # ---------------------------------------------------------------------------
 
-def get_pending_retag_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_pending_retag_files(
+    conn: sqlite3.Connection,
+    *,
+    source_id: int | None = None,
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.id, f.path FROM files f
         LEFT JOIN retag_output r ON r.file_id = f.id
-        WHERE r.file_id IS NULL OR r.retag_status IN ('pending', 'failed', 'skipped')
+        WHERE (r.file_id IS NULL OR r.retag_status IN ('pending', 'failed', 'skipped'))
+          AND (? IS NULL OR f.source_id = ?)
         ORDER BY f.id
-        """
+        """,
+        (source_id, source_id),
     ).fetchall()
 
 
@@ -964,7 +970,12 @@ def get_grouped_analyse_tokens(conn: sqlite3.Connection) -> list[dict]:
 # Describe (Stage 3a)
 # ---------------------------------------------------------------------------
 
-def get_pending_describe_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_pending_describe_files(
+    conn: sqlite3.Connection,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.id, f.path, f.file_type, f.ext
@@ -972,8 +983,11 @@ def get_pending_describe_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         LEFT JOIN descriptions d ON d.file_id = f.id
         WHERE f.canonical_id IS NULL
           AND (d.file_id IS NULL OR d.pass1_status IN ('pending', 'failed', 'skipped'))
+          AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.file_type = ?)
         ORDER BY f.id
-        """
+        """,
+        (source_id, source_id, file_type, file_type),
     ).fetchall()
 
 
@@ -1049,7 +1063,12 @@ def get_describe_counts(conn: sqlite3.Connection) -> dict:
 # Transcribe (Stage 3b)
 # ---------------------------------------------------------------------------
 
-def get_pending_transcribe_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_pending_transcribe_files(
+    conn: sqlite3.Connection,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.id, f.path, f.file_type
@@ -1058,8 +1077,11 @@ def get_pending_transcribe_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         WHERE f.canonical_id IS NULL
           AND f.file_type IN ('audio', 'video')
           AND (t.file_id IS NULL OR t.transcribe_status IN ('failed', 'pending'))
+          AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.file_type = ?)
         ORDER BY f.id
-        """
+        """,
+        (source_id, source_id, file_type, file_type),
     ).fetchall()
 
 
@@ -1152,7 +1174,13 @@ def reset_transcribe_to_pending(
 # Aesthetic (Stage KB.9)
 # ---------------------------------------------------------------------------
 
-def get_pending_aesthetic_files(conn: sqlite3.Connection, model_name: str) -> list[sqlite3.Row]:
+def get_pending_aesthetic_files(
+    conn: sqlite3.Connection,
+    model_name: str,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.id, f.path, f.file_type
@@ -1161,9 +1189,11 @@ def get_pending_aesthetic_files(conn: sqlite3.Connection, model_name: str) -> li
         WHERE f.file_type = 'image'
           AND f.canonical_id IS NULL
           AND fa.id IS NULL
+          AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.file_type = ?)
         ORDER BY f.id
         """,
-        (model_name,),
+        (model_name, source_id, source_id, file_type, file_type),
     ).fetchall()
 
 
@@ -1301,7 +1331,12 @@ def get_aesthetic_scores_for_export(
 # Technical quality scores
 # ---------------------------------------------------------------------------
 
-def get_pending_quality_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_pending_quality_files(
+    conn: sqlite3.Connection,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
+) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.id, f.path, f.file_type
@@ -1310,8 +1345,11 @@ def get_pending_quality_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         WHERE f.file_type IN ('images', 'video')
           AND f.canonical_id IS NULL
           AND fq.file_id IS NULL
+          AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.file_type = ?)
         ORDER BY f.id
-        """
+        """,
+        (source_id, source_id, file_type, file_type),
     ).fetchall()
 
 
@@ -2304,7 +2342,11 @@ def reset_summarize_to_pending(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def get_pending_summarize_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_pending_summarize_files(
+    conn: sqlite3.Connection,
+    *,
+    source_id: int | None = None,
+) -> list[sqlite3.Row]:
     """Files eligible for summarize: have a done description or transcription,
     no done summary, canonical files only."""
     return conn.execute(
@@ -2322,8 +2364,10 @@ def get_pending_summarize_files(conn: sqlite3.Connection) -> list[sqlite3.Row]:
               SELECT 1 FROM file_summaries s
               WHERE s.file_id = f.id AND s.status = 'done'
           )
+          AND (? IS NULL OR f.source_id = ?)
         ORDER BY f.id
-        """
+        """,
+        (source_id, source_id),
     ).fetchall()
 
 
@@ -2366,3 +2410,82 @@ def get_export_summaries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY f.path
         """
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# VAD / has_speech
+# ---------------------------------------------------------------------------
+
+def get_has_speech(conn: sqlite3.Connection, file_id: int) -> bool | None:
+    row = conn.execute("SELECT has_speech FROM files WHERE id = ?", (file_id,)).fetchone()
+    if row is None or row["has_speech"] is None:
+        return None
+    return bool(row["has_speech"])
+
+
+def set_has_speech(conn: sqlite3.Connection, file_id: int, value: bool) -> None:
+    conn.execute("UPDATE files SET has_speech = ? WHERE id = ?", (int(value), file_id))
+
+
+# ---------------------------------------------------------------------------
+# Per-file context queries (used by src/text/context.py)
+# ---------------------------------------------------------------------------
+
+def get_file_filename(conn: sqlite3.Connection, file_id: int) -> str:
+    row = conn.execute("SELECT filename FROM files WHERE id=?", (file_id,)).fetchone()
+    return row["filename"] if row else ""
+
+
+def get_description_for_file(conn: sqlite3.Connection, file_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT description_normalized, description_raw FROM descriptions"
+        " WHERE file_id=? AND pass1_status='done'",
+        (file_id,),
+    ).fetchone()
+
+
+def get_file_transcript_segments(conn: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT start_ms, speaker_label, text FROM transcript_segments"
+        " WHERE file_id=? ORDER BY start_ms",
+        (file_id,),
+    ).fetchall()
+
+
+def get_file_transcription(conn: sqlite3.Connection, file_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT transcript_text FROM transcriptions"
+        " WHERE file_id=? AND transcribe_status='done'",
+        (file_id,),
+    ).fetchone()
+
+
+def get_file_derived_tags(conn: sqlite3.Connection, file_id: int) -> list[str]:
+    rows = conn.execute(
+        "SELECT tag FROM file_derived_tags WHERE file_id=?", (file_id,)
+    ).fetchall()
+    return [r["tag"] for r in rows]
+
+
+def get_file_captured_fields(conn: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT field_name, value FROM file_captured_fields"
+        " WHERE file_id=? AND value IS NOT NULL",
+        (file_id,),
+    ).fetchall()
+
+
+def get_file_metadata_date(conn: sqlite3.Connection, file_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT value FROM file_metadata_fields"
+        " WHERE file_id=? AND canonical_name='captured_date' LIMIT 1",
+        (file_id,),
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def get_file_geolabel(conn: sqlite3.Connection, file_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT custom_region, state, country FROM file_geolabels WHERE file_id=? LIMIT 1",
+        (file_id,),
+    ).fetchone()

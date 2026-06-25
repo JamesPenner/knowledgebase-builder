@@ -198,9 +198,63 @@ body {
 /* Pipeline run buttons */
 .badge-running  { background: #fef08a; color: #854d0e; }
 .badge-failed   { background: #fee2e2; color: #991b1b; }
+.badge-ready    { background: #dbeafe; color: #1e40af; }
+.badge-blocked  { background: #f1f5f9; color: #94a3b8; }
 .btn--run    { background: #dcfce7; color: #166534; border-color: #86efac; }
 .btn--cancel { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+.btn--group  { background: #f0fdf4; color: #166534; border-color: #bbf7d0; font-size: 0.8em; }
+.btn--run-all { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.btn--run-all:hover { background: #1e40af; }
+.btn:disabled { opacity: 0.4; cursor: default; }
 .stage-progress { display: block; margin-top: 0.35rem; }
+
+/* Workbench layout */
+.wb-scope {
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+.wb-scope-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.wb-scope-label { font-size: 0.85em; font-weight: 600; color: #475569; }
+.wb-scope-select { font-size: 0.85em; padding: 0.25rem 0.4rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; }
+.wb-scope-types { display: flex; gap: 0.75rem; font-size: 0.85em; color: #374151; }
+.wb-scope-types label { display: flex; align-items: center; gap: 0.25rem; cursor: pointer; }
+.wb-scope-summary { margin-top: 0.35rem; font-size: 0.8em; color: #64748b; }
+.wb-actions { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem; }
+.wb-group { margin-bottom: 1rem; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; }
+.wb-group-header {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+.wb-group-label { font-weight: 600; font-size: 0.95em; }
+.wb-group-desc  { color: #64748b; font-size: 0.8em; flex: 1; }
+.wb-gate {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.55rem 0.9rem;
+  margin: 0.5rem 0;
+  border-radius: 5px;
+  font-size: 0.85em;
+  border: 1px solid #e2e8f0;
+  background: #fafafa;
+}
+.wb-gate--done   { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+.wb-gate--pending { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.wb-gate-status { font-size: 0.8em; font-weight: 600; }
+.wb-gate-link { margin-left: auto; font-size: 0.8em; text-decoration: none; color: #1d4ed8; }
+.wb-gate-link:hover { text-decoration: underline; }
+.stage-row td { padding: 0.45rem 0.75rem; border-bottom: 1px solid #f8fafc; }
+.stage-row:last-child td { border-bottom: none; }
+.stage-row--blocked td { opacity: 0.55; }
+.stage-row--blocked .stage-name { color: #94a3b8; }
+.stage-check { width: 1.5rem; }
+.stage-help-row td { padding: 0 0.75rem 0.5rem 2.5rem; background: #f8fafc; font-size: 0.82em; color: #475569; }
+.stage-help-deps { margin-top: 0.25rem; color: #94a3b8; font-size: 0.95em; }
+.stage-help-toggle { background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 0.8em; padding: 0 0.25rem; }
+.stage-help-toggle:hover { color: #475569; }
 
 /* Progress bar */
 .progress-bar-track {

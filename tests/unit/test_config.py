@@ -90,3 +90,21 @@ def test_invalid_per_kb_value_falls_back_to_global(tmp_path):
     cfg = load_config(global_cfg, kb_cfg)
     # Invalid type in per-KB falls back; global supplies 4, not default 3
     assert cfg.suggest_min_files == 4
+
+
+def test_visual_profile_default_is_default_string():
+    cfg = Config()
+    assert cfg.visual_profile == "default"
+
+
+def test_visual_profile_parsed_from_global_yaml(tmp_path):
+    global_cfg = _write_yaml(tmp_path / "g.yaml", {"thresholds": {"visual_profile": "quick"}})
+    cfg = load_config(global_cfg)
+    assert cfg.visual_profile == "quick"
+
+
+def test_visual_profile_overridable_per_kb(tmp_path):
+    global_cfg = _write_yaml(tmp_path / "g.yaml", {"thresholds": {"visual_profile": "archival"}})
+    kb_cfg = _write_yaml(tmp_path / "kb.yaml", {"thresholds": {"visual_profile": "quick"}})
+    cfg = load_config(global_cfg, kb_cfg)
+    assert cfg.visual_profile == "quick"

@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import resolve_kb
-from src.pipeline.dag import DEPENDENCIES
+from src.pipeline.dag import DEPENDENCIES, STAGE_DESCRIPTIONS, STAGE_GROUPS, TOUCHPOINT_BEFORE
 
 router = APIRouter()
 
@@ -33,24 +33,98 @@ def index():
 
 @router.get("/pipeline", include_in_schema=False)
 def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
-    corpus_path, _ = paths
+    corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
     from src.db.corpus import (
+        get_analyse_token_counts,
+        get_candidate_counts,
         get_describe_counts,
+        get_new_terms_candidates,
         get_pipeline_checkpoints,
+        get_sources,
         get_transcribe_counts,
         open_corpus,
     )
-    conn = open_corpus(corpus_path)
-    checkpoint_rows = get_pipeline_checkpoints(conn)
-    stage_counts = {
-        "describe": get_describe_counts(conn),
-        "transcribe": get_transcribe_counts(conn),
+    from src.db.kb import open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    try:
+        checkpoint_rows = get_pipeline_checkpoints(corpus_conn)
+        checkpoints: dict[str, dict] = {r["stage"]: dict(r) for r in checkpoint_rows}
+        stage_counts = {
+            "describe": get_describe_counts(corpus_conn),
+            "transcribe": get_transcribe_counts(corpus_conn),
+        }
+        token_counts = get_analyse_token_counts(corpus_conn)
+        candidate_counts = get_candidate_counts(corpus_conn)
+        new_terms = get_new_terms_candidates(corpus_conn, kb_conn)
+        sources = [{"id": r["id"], "path": r["path"]} for r in get_sources(corpus_conn)]
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
+
+    # Touchpoint completion
+    touchpoints = {
+        "normalise_review": {
+            "completed": token_counts["total"] > 0 and token_counts["reviewed"] == token_counts["total"],
+            "url": f"/review/normalise?kb={kb_name}",
+            "label": "Normalise Review",
+            "description": "Approve or reject candidate vocabulary terms before continuing",
+        },
+        "suggest_review": {
+            "completed": candidate_counts["total"] > 0 and candidate_counts["pending"] == 0,
+            "url": f"/review/suggest?kb={kb_name}",
+            "label": "Suggest Review",
+            "description": "Review proposed vocabulary terms before retagging",
+        },
+        "new_terms_review": {
+            "completed": len(new_terms) == 0 and bool(checkpoints.get("retag")),
+            "url": f"/review/new-terms?kb={kb_name}",
+            "label": "New Terms Review",
+            "description": "Accept or reject terms proposed by the retag stage",
+        },
     }
-    conn.close()
-    checkpoints = {r["stage"]: dict(r) for r in checkpoint_rows}
+
+    # Per-stage dependency state
+    def _stage_state(stage: str) -> str:
+        if stage in checkpoints:
+            return "done"
+        deps = DEPENDENCIES.get(stage, [])
+        if all(d in checkpoints for d in deps):
+            return "ready"
+        return "blocked"
+
+    def _blocking_dep(stage: str) -> str | None:
+        return next((d for d in DEPENDENCIES.get(stage, []) if d not in checkpoints), None)
+
+    # Enrich groups with per-stage info
+    groups = []
+    for grp in STAGE_GROUPS:
+        stages = []
+        for name in grp["stages"]:
+            cp = checkpoints.get(name)
+            sc = stage_counts.get(name)
+            stages.append({
+                "name": name,
+                "description": STAGE_DESCRIPTIONS.get(name, ""),
+                "deps": DEPENDENCIES.get(name, []),
+                "state": _stage_state(name),
+                "blocking_dep": _blocking_dep(name),
+                "checkpoint": cp,
+                "stage_counts": sc,
+                "touchpoint_before": TOUCHPOINT_BEFORE.get(name),
+            })
+        groups.append({**grp, "stages": stages})
+
     return templates.TemplateResponse(request, "pipeline.html", {
         "kb": kb_name,
+        "groups": groups,
+        "touchpoints": touchpoints,
+        "checkpoints_json": list(checkpoints.keys()),
+        "stage_descriptions": STAGE_DESCRIPTIONS,
+        "sources": sources,
+        # keep legacy keys so any other code that uses them doesn't break
         "checkpoints": checkpoints,
         "all_stages": list(DEPENDENCIES.keys()),
         "stage_counts": stage_counts,
@@ -1282,3 +1356,26 @@ def ui_speaker_unassign_new(
     corpus_conn.commit()
     corpus_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+# ---------------------------------------------------------------------------
+# Prompt library page (KB.S5)
+# ---------------------------------------------------------------------------
+
+@router.get("/knowledge/prompts", include_in_schema=False)
+def prompt_library_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.kb import list_stage_prompts, open_kb
+    kb_conn = open_kb(kb_path)
+    all_prompts = list_stage_prompts(kb_conn)
+    kb_conn.close()
+
+    grouped: dict[str, dict[str, list]] = {}
+    for p in all_prompts:
+        grouped.setdefault(p["stage"], {}).setdefault(p["prompt_key"], []).append(p)
+
+    return templates.TemplateResponse(request, "prompt_library.html", {
+        "kb": kb_name,
+        "grouped": grouped,
+    })
