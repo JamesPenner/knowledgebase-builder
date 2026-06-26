@@ -1,0 +1,177 @@
+<div class="sources-panel" id="sources-panel">
+
+  <!-- Sources section -->
+  <div class="sources-panel-section">
+    <h4 class="sources-panel-heading">Sources</h4>
+
+    {% if not sources %}
+      <p class="sources-onboarding">Add your first source to get started</p>
+    {% else %}
+      <table class="sources-table">
+        <thead>
+          <tr>
+            <th>Path</th>
+            <th>Type</th>
+            <th>Filters</th>
+            <th>Files</th>
+            <th>Last ingested</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for src in sources %}
+            <tr id="src-row-{{ src.id }}">
+              <td class="sources-path">{{ src.path }}</td>
+              <td>{{ src.file_type }}</td>
+              <td class="sources-filters">{{ src.filters_summary or '—' }}</td>
+              <td>{{ src.file_count_ingested or 0 }}</td>
+              <td class="sources-date">{{ src.last_ingested_at or '—' }}</td>
+              <td>
+                <span id="src-confirm-{{ src.id }}" style="display:none" class="sources-confirm">
+                  Remove source and delete {{ src.file_count_ingested or 0 }} files?
+                  <button class="btn btn--danger btn--sm"
+                    hx-delete="/api/kb/{{ kb }}/sources/{{ src.id }}?cascade=true"
+                    hx-target="#sources-panel"
+                    hx-swap="outerHTML"
+                    hx-confirm="">Confirm</button>
+                  <button class="btn btn--sm" onclick="document.getElementById('src-confirm-{{ src.id }}').style.display='none'; document.getElementById('src-remove-{{ src.id }}').style.display=''">Cancel</button>
+                </span>
+                <button id="src-remove-{{ src.id }}" class="btn btn--sm btn--danger-outline"
+                  onclick="document.getElementById('src-confirm-{{ src.id }}').style.display=''; this.style.display='none'">
+                  Remove
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <!-- Add source form -->
+    <form class="sources-add-form"
+          hx-post="/api/kb/{{ kb }}/sources"
+          hx-target="#sources-panel"
+          hx-swap="outerHTML"
+          hx-include="#src-form-path,#src-form-type,#src-form-recursive,#src-form-glob,#src-form-limit">
+      <div class="sources-form-row">
+        <input id="src-form-path" name="path" type="text" class="sources-input sources-input--wide"
+               placeholder="Directory path" required>
+        <select id="src-form-type" name="file_type" class="sources-select">
+          <option value="all">All</option>
+          <option value="images">Images</option>
+          <option value="video">Video</option>
+          <option value="audio">Audio</option>
+        </select>
+        <label class="sources-checkbox-label">
+          <input id="src-form-recursive" name="recursive" type="checkbox" checked value="true"> Recursive
+        </label>
+        <input id="src-form-glob" name="glob_pattern" type="text" class="sources-input"
+               placeholder="Glob (e.g. 2024-*)">
+        <input id="src-form-limit" name="count_limit" type="number" class="sources-input sources-input--sm"
+               placeholder="Limit" min="1">
+      </div>
+      <div class="sources-form-actions">
+        <button type="button" class="btn btn--sm"
+                onclick="previewSource('{{ kb }}')">Preview</button>
+        <span id="src-preview-result" class="sources-preview-result"></span>
+        <button type="submit" class="btn btn--run btn--sm">Add</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Saved sets section -->
+  <div class="sources-panel-section">
+    <h4 class="sources-panel-heading">Saved Sets</h4>
+
+    {% if not sets %}
+      <p class="sources-onboarding">No saved sets yet. Save the current scope as a set below.</p>
+    {% else %}
+      <table class="sources-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Files</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sets %}
+            <tr>
+              <td><strong>{{ s.name }}</strong></td>
+              <td>{{ s.description or '—' }}</td>
+              <td>{{ s.file_count }}</td>
+              <td class="sources-date">{{ s.created_at }}</td>
+              <td>
+                <button class="btn btn--sm btn--danger-outline"
+                  hx-delete="/api/kb/{{ kb }}/sets/{{ s.id }}"
+                  hx-target="#sources-panel"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete set '{{ s.name }}'?">Delete</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <!-- Save current scope as set -->
+    <div class="sources-save-set">
+      <span class="sources-save-label">Save current scope as set:</span>
+      <input id="set-name-input" type="text" class="sources-input" placeholder="Set name" maxlength="64">
+      <input id="set-desc-input" type="text" class="sources-input sources-input--wide" placeholder="Description (optional)">
+      <button class="btn btn--sm btn--run" onclick="saveCurrentScopeAsSet('{{ kb }}')">Save</button>
+      <span id="set-save-result" class="sources-preview-result"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+function previewSource(kb) {
+  const path = document.getElementById('src-form-path').value;
+  const fileType = document.getElementById('src-form-type').value;
+  const recursive = document.getElementById('src-form-recursive').checked;
+  const glob = document.getElementById('src-form-glob').value;
+  const limit = document.getElementById('src-form-limit').value;
+  const filters = {};
+  if (glob) filters.glob = glob;
+  if (limit) filters.count_limit = parseInt(limit);
+  const el = document.getElementById('src-preview-result');
+  el.textContent = 'Scanning…';
+  fetch('/api/kb/' + kb + '/sources/preview', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path, file_type: fileType, recursive, filters}),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.total === 0) { el.textContent = 'Found: 0 files'; return; }
+    const parts = Object.entries(d.by_type).map(([t, n]) => n + ' ' + t);
+    el.textContent = 'Found: ' + parts.join(', ');
+  })
+  .catch(() => { el.textContent = 'Preview failed'; });
+}
+
+function saveCurrentScopeAsSet(kb) {
+  const name = document.getElementById('set-name-input').value.trim();
+  const desc = document.getElementById('set-desc-input').value.trim();
+  const result = document.getElementById('set-save-result');
+  if (!name) { result.textContent = 'Name required'; return; }
+  const scope = window.KB_SCOPE || {};
+  result.textContent = 'Saving…';
+  fetch('/api/kb/' + kb + '/sets', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, description: desc, scope}),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.detail) { result.textContent = 'Error: ' + d.detail; return; }
+    result.textContent = 'Saved: ' + d.file_count + ' files';
+    // Reload the panel via HTMX
+    htmx.ajax('GET', '/api/kb/' + kb + '/sources/panel', {target: '#sources-panel', swap: 'outerHTML'});
+  })
+  .catch(() => { result.textContent = 'Save failed'; });
+}
+</script>

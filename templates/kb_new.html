@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}New KB — KB Builder{% endblock %}
+{% block content %}
+<h1 class="page-title">Create New Knowledge Base</h1>
+
+{% if error %}
+<div class="kb-new-error">{{ error }}</div>
+{% endif %}
+
+<form class="kb-new-form" method="post" action="/kb/new">
+
+  <div class="kb-new-section">
+    <h3>Knowledge Base</h3>
+    <div class="kb-new-field">
+      <label for="kb-name">Name</label>
+      <input id="kb-name" name="name" type="text" class="kb-new-input"
+             pattern="[a-zA-Z0-9_-]+" required
+             placeholder="my-photos-2024">
+      <span class="kb-new-hint">Alphanumeric, hyphens, underscores only</span>
+    </div>
+    <div class="kb-new-field">
+      <label for="kb-template">Template</label>
+      <select id="kb-template" name="template" class="kb-new-select">
+        <option value="general-media">General Media</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="kb-new-section">
+    <h3>Initial Source <span class="kb-new-optional">(optional)</span></h3>
+    <div class="kb-new-field">
+      <label for="kb-source-path">Directory path</label>
+      <input id="kb-source-path" name="source_path" type="text" class="kb-new-input kb-new-input--wide"
+             placeholder="/path/to/photos">
+    </div>
+    <div class="kb-new-field">
+      <label for="kb-source-type">File type</label>
+      <select id="kb-source-type" name="source_file_type" class="kb-new-select">
+        <option value="all">All</option>
+        <option value="images">Images</option>
+        <option value="video">Video</option>
+        <option value="audio">Audio</option>
+      </select>
+    </div>
+    <div class="kb-new-field">
+      <label>
+        <input name="source_recursive" type="checkbox" value="true" checked>
+        Recursive
+      </label>
+    </div>
+    <div class="kb-new-field">
+      <label for="kb-source-glob">Glob pattern</label>
+      <input id="kb-source-glob" name="glob_pattern" type="text" class="kb-new-input"
+             placeholder="e.g. 2024-*">
+    </div>
+    <div class="kb-new-field">
+      <label for="kb-source-limit">Count limit</label>
+      <input id="kb-source-limit" name="count_limit" type="number" class="kb-new-input kb-new-input--sm"
+             placeholder="e.g. 100" min="1">
+    </div>
+    <div class="kb-new-preview-row">
+      <button type="button" class="btn btn--sm" onclick="previewKbSource()">Preview</button>
+      <span id="kb-preview-result" class="kb-new-preview-result"></span>
+    </div>
+  </div>
+
+  <div class="kb-new-actions">
+    <button type="submit" class="btn btn--run">Create KB</button>
+    <a href="/" class="btn">Cancel</a>
+  </div>
+</form>
+
+<script>
+function previewKbSource() {
+  const path = document.getElementById('kb-source-path').value;
+  const fileType = document.getElementById('kb-source-type').value;
+  const recursive = document.querySelector('[name=source_recursive]').checked;
+  const glob = document.getElementById('kb-source-glob').value;
+  const limit = document.getElementById('kb-source-limit').value;
+  const filters = {};
+  if (glob) filters.glob = glob;
+  if (limit) filters.count_limit = parseInt(limit);
+  const el = document.getElementById('kb-preview-result');
+  if (!path) { el.textContent = 'Enter a path first'; return; }
+  el.textContent = 'Scanning…';
+  // Use a dummy kb name for preview — the preview endpoint doesn't need a real KB
+  fetch('/api/kb/__preview__/sources/preview', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path, file_type: fileType, recursive, filters}),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.detail) { el.textContent = 'Error: ' + d.detail; return; }
+    if (d.total === 0) { el.textContent = 'Found: 0 files'; return; }
+    const parts = Object.entries(d.by_type).map(([t, n]) => n + ' ' + t);
+    el.textContent = 'Found: ' + parts.join(', ');
+  })
+  .catch(() => { el.textContent = 'Preview failed'; });
+}
+</script>
+{% endblock %}

@@ -16,19 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1275 passing, 2 skipped, ruff clean
-- **Last completed sprint:** KB.T2 (Scope Selector, 1275 tests)
-
----
-
-## Active Work
-
-### KB.U1 — Source Management & File Sets
-**Document:** `sprints/planned/KB.U1.md`  
-**Scope:** Source management panel in the workbench ingest row (add/remove/preview
-sources with filter criteria); named file sets for repeatable work; "By set" scope
-mode; `+ New KB` button and creation form; corpus.db migration 0020.  
-**Target:** ≥ 1330 tests (+55 net)
+- **Tests:** 1332 passing, 2 skipped, ruff clean
+- **Last completed sprint:** KB.U1 (Source Management & File Sets, 1332 tests)
+- **Next planned sprint:** KB.V1 (Pipeline Workbench: Sources + Scope Restructure) — see `sprints/planned/KB.V1.md`
 
 ---
 

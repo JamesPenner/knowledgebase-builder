@@ -297,3 +297,56 @@ body {
 .health-label { font-weight: 500; min-width: 14rem; }
 .health-detail { color: #64748b; font-size: 0.875em; }
 .health-fix { color: #7c3aed; font-size: 0.8em; font-family: ui-monospace, monospace; margin-left: 0.25rem; }
+
+/* Source management panel */
+.sources-panel { padding: 0.75rem 0; }
+.sources-panel-section { margin-bottom: 1.25rem; }
+.sources-panel-heading { font-size: 0.75em; font-weight: 600; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+.sources-onboarding { color: #64748b; font-style: italic; margin-bottom: 0.5rem; }
+.sources-table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 0.5rem; }
+.sources-table th { text-align: left; padding: 0.3rem 0.5rem; color: #64748b; font-weight: 500; border-bottom: 1px solid #e2e8f0; }
+.sources-table td { padding: 0.3rem 0.5rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+.sources-path { font-family: ui-monospace, monospace; word-break: break-all; }
+.sources-filters { color: #64748b; font-size: 0.9em; }
+.sources-date { color: #94a3b8; font-size: 0.85em; white-space: nowrap; }
+.sources-confirm { display: inline-flex; align-items: center; gap: 0.4rem; }
+.sources-add-form { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.75rem; margin-top: 0.5rem; }
+.sources-form-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.sources-form-actions { display: flex; align-items: center; gap: 0.5rem; }
+.sources-input { border: 1px solid #cbd5e1; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.85em; }
+.sources-input--wide { flex: 1; min-width: 200px; }
+.sources-input--sm { width: 80px; }
+.sources-select { border: 1px solid #cbd5e1; border-radius: 4px; padding: 0.3rem 0.4rem; font-size: 0.85em; }
+.sources-checkbox-label { font-size: 0.85em; display: flex; align-items: center; gap: 0.3rem; }
+.sources-preview-result { font-size: 0.85em; color: #0369a1; font-style: italic; }
+.sources-save-set { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.sources-save-label { font-size: 0.85em; color: #64748b; white-space: nowrap; }
+.sources-panel-loading { color: #94a3b8; font-style: italic; font-size: 0.85em; }
+
+/* Nav + KB creation */
+.nav-new-kb { color: #94a3b8; font-size: 1.2em; font-weight: 600; text-decoration: none; padding: 0 0.3rem; line-height: 1; }
+.nav-new-kb:hover { color: #3b82f6; }
+
+/* New KB form */
+.kb-new-form { max-width: 600px; margin: 1.5rem 0; }
+.kb-new-section { margin-bottom: 1.5rem; }
+.kb-new-section h3 { font-size: 0.9em; font-weight: 600; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
+.kb-new-optional { font-weight: 400; text-transform: none; }
+.kb-new-field { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 0.5rem; }
+.kb-new-field label { width: 120px; flex-shrink: 0; font-size: 0.875em; color: #475569; }
+.kb-new-input { border: 1px solid #cbd5e1; border-radius: 4px; padding: 0.35rem 0.6rem; font-size: 0.875em; flex: 1; }
+.kb-new-input--wide { min-width: 250px; }
+.kb-new-input--sm { width: 80px; flex: none; }
+.kb-new-select { border: 1px solid #cbd5e1; border-radius: 4px; padding: 0.35rem 0.6rem; font-size: 0.875em; }
+.kb-new-hint { font-size: 0.8em; color: #94a3b8; }
+.kb-new-error { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; border-radius: 6px; padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.875em; }
+.kb-new-preview-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.25rem; padding-left: 120px; }
+.kb-new-preview-result { font-size: 0.85em; color: #0369a1; font-style: italic; }
+.kb-new-actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
+
+/* Danger button variants */
+.btn--danger { background: #ef4444; color: white; border-color: #ef4444; }
+.btn--danger:hover { background: #dc2626; }
+.btn--danger-outline { border: 1px solid #ef4444; color: #ef4444; background: transparent; }
+.btn--danger-outline:hover { background: #fee2e2; }
+.btn--sm { padding: 0.2rem 0.5rem; font-size: 0.8em; }

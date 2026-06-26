@@ -18,9 +18,10 @@ _active_cancels: dict[str, threading.Event] = {}
 class RunRequest(BaseModel):
     kb: str
     workers: int | None = None
-    scope_mode: str = "resume"   # resume | rerun | new_files | by_source | by_type
+    scope_mode: str = "resume"   # resume | rerun | new_files | by_source | by_type | by_set
     source_id: int | None = None
     file_type: str | None = None
+    set_id: int | None = None
 
 
 def _get_kb_folder(kb: str) -> Path:
@@ -50,6 +51,7 @@ def _make_stage_routes(stage: str, runner_fn):
             "scope_mode": req.scope_mode,
             "source_id": req.source_id,
             "file_type": req.file_type,
+            "set_id": req.set_id,
         }
 
         def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel, sc=scope):
@@ -120,13 +122,14 @@ def _aesthetic_runner(corpus_path, kb_path, config, progress, cancel, *, scope=N
     mode = sc.get("scope_mode", "resume")
     source_id = sc.get("source_id")
     file_type = sc.get("file_type")
+    set_id = sc.get("set_id")
     if mode == "rerun":
         from src.db.corpus import open_corpus, reset_aesthetic_scores
         conn = open_corpus(corpus_path)
         reset_aesthetic_scores(conn)
         conn.close()
     from src.stages.aesthetic import run_aesthetic
-    run_aesthetic(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
+    run_aesthetic(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type, set_id=set_id)
 
 
 def _describe_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
@@ -134,13 +137,14 @@ def _describe_runner(corpus_path, kb_path, config, progress, cancel, *, scope=No
     mode = sc.get("scope_mode", "resume")
     source_id = sc.get("source_id")
     file_type = sc.get("file_type")
+    set_id = sc.get("set_id")
     if mode == "rerun":
         from src.db.corpus import open_corpus, reset_describe_to_pending
         conn = open_corpus(corpus_path)
         reset_describe_to_pending(conn)
         conn.close()
     from src.stages.describe import run_describe
-    run_describe(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
+    run_describe(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type, set_id=set_id)
 
 
 def _transcribe_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
@@ -148,13 +152,14 @@ def _transcribe_runner(corpus_path, kb_path, config, progress, cancel, *, scope=
     mode = sc.get("scope_mode", "resume")
     source_id = sc.get("source_id")
     file_type = sc.get("file_type")
+    set_id = sc.get("set_id")
     if mode == "rerun":
         from src.db.corpus import open_corpus, reset_transcribe_to_pending
         conn = open_corpus(corpus_path)
         reset_transcribe_to_pending(conn)
         conn.close()
     from src.stages.transcribe import run_transcribe
-    run_transcribe(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
+    run_transcribe(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type, set_id=set_id)
 
 
 def _entity_match_runner(corpus_path, kb_path, config, progress, cancel, **_):
@@ -176,13 +181,14 @@ def _retag_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None,
     sc = scope or {}
     mode = sc.get("scope_mode", "resume")
     source_id = sc.get("source_id")
+    set_id = sc.get("set_id")
     if mode == "rerun":
         from src.db.corpus import open_corpus, reset_retag_to_pending
         conn = open_corpus(corpus_path)
         reset_retag_to_pending(conn)
         conn.close()
     from src.stages.retag import run_retag
-    run_retag(corpus_path, kb_path, config, progress, cancel, source_id=source_id)
+    run_retag(corpus_path, kb_path, config, progress, cancel, source_id=source_id, set_id=set_id)
 
 
 def _writeback_runner(corpus_path, kb_path, config, progress, cancel, **_):
@@ -257,13 +263,14 @@ def _quality_runner(corpus_path, kb_path, config, progress, cancel, *, scope=Non
     mode = sc.get("scope_mode", "resume")
     source_id = sc.get("source_id")
     file_type = sc.get("file_type")
+    set_id = sc.get("set_id")
     if mode == "rerun":
         from src.db.corpus import open_corpus, reset_quality_scores
         conn = open_corpus(corpus_path)
         reset_quality_scores(conn)
         conn.close()
     from src.stages.quality import run_quality
-    run_quality(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type)
+    run_quality(corpus_path, kb_path, config, progress, cancel, source_id=source_id, file_type=file_type, set_id=set_id)
 
 
 def _geolocate_runner(corpus_path, kb_path, config, progress, cancel, **_):
@@ -301,6 +308,7 @@ class SummarizeRunRequest(BaseModel):
     force: bool = False
     scope_mode: str = "resume"
     source_id: int | None = None
+    set_id: int | None = None
 
 
 @router.post("/summarize/run", tags=["pipeline"])
@@ -327,7 +335,7 @@ def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -
                 reset_summarize_to_pending(conn)
                 conn.close()
             from src.stages.summarize import run_summarize
-            run_summarize(cp, kp, cfg, pr, ce, source_id=req.source_id)
+            run_summarize(cp, kp, cfg, pr, ce, source_id=req.source_id, set_id=req.set_id)
         except Exception as exc:
             logger.error("Stage summarize failed: %s", exc, exc_info=True)
             pr.failed(str(exc)[:300])

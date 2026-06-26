@@ -11,6 +11,7 @@
     {% endfor %}
   };
   window.KB_SOURCES = {{ sources | tojson }};
+  window.KB_SETS = {{ sets | tojson }};
 </script>
 {% endblock %}
 {% block content %}
@@ -25,6 +26,10 @@
       <option value="new_files">New files</option>
       <option value="by_source">By source</option>
       <option value="by_type">By file type</option>
+      <option value="by_set">By set</option>
+    </select>
+    <select id="scope-set" class="wb-scope-select" style="display:none" onchange="WB.onScopeChange()">
+      <option value="">Select set…</option>
     </select>
     <select id="scope-source" class="wb-scope-select" style="display:none" onchange="WB.onScopeChange()">
       <option value="">All sources</option>
@@ -117,18 +122,31 @@
             <button id="btn-cancel-{{ stage.name }}" class="btn btn--cancel"
                     style="display:none"
                     onclick="cancelStage('{{ stage.name }}')">Cancel</button>
-            <button class="stage-help-toggle" onclick="WB.toggleHelp('{{ stage.name }}')" title="About this stage">▸</button>
+            <button class="stage-help-toggle" id="help-btn-{{ stage.name }}"
+                    onclick="WB.toggleHelp('{{ stage.name }}')" title="About this stage">
+              {% if stage.name == 'ingest' and sources | length == 0 %}▾{% else %}▸{% endif %}
+            </button>
             <span id="progress-{{ stage.name }}" class="stage-progress"></span>
           </td>
         </tr>
-        <tr class="stage-help-row" id="help-{{ stage.name }}" style="display:none">
+        {% set ingest_no_sources = stage.name == 'ingest' and sources | length == 0 %}
+        <tr class="stage-help-row" id="help-{{ stage.name }}"
+            {% if not ingest_no_sources %}style="display:none"{% endif %}>
           <td colspan="6">
-            {{ stage.description }}
-            {% if stage.deps %}
-              <div class="stage-help-deps">Requires: {{ stage.deps | join(', ') }}</div>
-            {% endif %}
-            {% if stage.blocking_dep and stage.state == 'blocked' %}
-              <div class="stage-help-deps" style="color:#dc2626">Blocked by: {{ stage.blocking_dep }}</div>
+            {% if stage.name == 'ingest' %}
+              <div hx-get="/api/kb/{{ kb }}/sources/panel"
+                   hx-trigger="load"
+                   hx-swap="outerHTML">
+                <span class="sources-panel-loading">Loading sources…</span>
+              </div>
+            {% else %}
+              {{ stage.description }}
+              {% if stage.deps %}
+                <div class="stage-help-deps">Requires: {{ stage.deps | join(', ') }}</div>
+              {% endif %}
+              {% if stage.blocking_dep and stage.state == 'blocked' %}
+                <div class="stage-help-deps" style="color:#dc2626">Blocked by: {{ stage.blocking_dep }}</div>
+              {% endif %}
             {% endif %}
           </td>
         </tr>

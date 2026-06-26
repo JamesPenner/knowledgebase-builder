@@ -21,6 +21,7 @@ const WB = (() => {
     const mode = modeEl ? modeEl.value : 'resume';
     let source_id = null;
     let file_type = null;
+    let set_id = null;
     if (mode === 'by_source') {
       const sel = document.getElementById('scope-source');
       source_id = sel && sel.value ? parseInt(sel.value, 10) : null;
@@ -30,7 +31,11 @@ const WB = (() => {
         .map(e => e.value);
       file_type = checked.length ? checked.join(',') : null;
     }
-    return {scope_mode: mode, source_id, file_type};
+    if (mode === 'by_set') {
+      const sel = document.getElementById('scope-set');
+      set_id = sel && sel.value ? parseInt(sel.value, 10) : null;
+    }
+    return {scope_mode: mode, source_id, file_type, set_id};
   }
 
   function _updateScopeSummary() {
@@ -48,6 +53,9 @@ const WB = (() => {
       el.textContent = src ? 'Processing: source ' + src.path : 'Processing: selected source';
     } else if (sc.scope_mode === 'by_type') {
       el.textContent = 'Processing: ' + (sc.file_type || 'all types') + ' files';
+    } else if (sc.scope_mode === 'by_set') {
+      const s = (window.KB_SETS || []).find(x => x.id === sc.set_id);
+      el.textContent = s ? 'Processing: ' + s.file_count + ' files from set \'' + s.name + '\'' : 'Processing: selected set';
     }
   }
 
@@ -55,8 +63,10 @@ const WB = (() => {
     const mode = document.getElementById('scope-mode').value;
     const srcSel = document.getElementById('scope-source');
     const typeEl = document.getElementById('scope-type');
+    const setSel = document.getElementById('scope-set');
     if (srcSel) srcSel.style.display = mode === 'by_source' ? '' : 'none';
     if (typeEl) typeEl.style.display = mode === 'by_type' ? '' : 'none';
+    if (setSel) setSel.style.display = mode === 'by_set' ? '' : 'none';
     window.KB_SCOPE = getScope();
     _updateScopeSummary();
   }
@@ -69,6 +79,18 @@ const WB = (() => {
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = s.path;
+      sel.appendChild(opt);
+    });
+  }
+
+  function _loadSets() {
+    const sets = window.KB_SETS || [];
+    const sel = document.getElementById('scope-set');
+    if (!sel) return;
+    sets.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name + ' (' + s.file_count + ' files)';
       sel.appendChild(opt);
     });
   }
@@ -175,7 +197,7 @@ const WB = (() => {
 
   function toggleHelp(stage) {
     const row = document.getElementById('help-' + stage);
-    const btn = document.querySelector(`[onclick="WB.toggleHelp('${stage}')"]`);
+    const btn = document.getElementById('help-btn-' + stage);
     if (!row) return;
     const visible = row.style.display !== 'none';
     row.style.display = visible ? 'none' : '';
@@ -185,8 +207,9 @@ const WB = (() => {
   /* Initialise on page load */
   document.addEventListener('DOMContentLoaded', function () {
     _loadSources();
+    _loadSets();
     window.KB_SCOPE = getScope();
   });
 
-  return {runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, getScope};
+  return {runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, getScope, reloadSets: _loadSets};
 })();

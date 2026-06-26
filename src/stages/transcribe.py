@@ -137,6 +137,7 @@ def run_transcribe(
     *,
     source_id: int | None = None,
     file_type: str | None = None,
+    set_id: int | None = None,
 ) -> None:
     from src.db.corpus import (
         delete_transcript_segments_for_file,
@@ -167,7 +168,7 @@ def run_transcribe(
     try:
         model = None
 
-        pending = get_pending_transcribe_files(corpus_conn, source_id=source_id, file_type=file_type)
+        pending = get_pending_transcribe_files(corpus_conn, source_id=source_id, file_type=file_type, set_id=set_id)
         total = len(pending)
 
         if total == 0:

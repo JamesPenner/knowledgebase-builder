@@ -28,10 +28,18 @@ def open_corpus(path: Path) -> sqlite3.Connection:
 # Sources
 # ---------------------------------------------------------------------------
 
-def add_source(conn: sqlite3.Connection, path: str, file_type: str = "all", recursive: bool = True) -> int:
+def add_source(
+    conn: sqlite3.Connection,
+    path: str,
+    file_type: str = "all",
+    recursive: bool = True,
+    filters_json: dict | None = None,
+) -> int:
+    import json as _json
+    filters_str = _json.dumps(filters_json or {})
     cur = conn.execute(
-        "INSERT OR IGNORE INTO sources (path, file_type, recursive) VALUES (?, ?, ?)",
-        (path, file_type, int(recursive)),
+        "INSERT OR IGNORE INTO sources (path, file_type, recursive, filters_json) VALUES (?, ?, ?, ?)",
+        (path, file_type, int(recursive), filters_str),
     )
     conn.commit()
     if cur.lastrowid:
@@ -40,10 +48,132 @@ def add_source(conn: sqlite3.Connection, path: str, file_type: str = "all", recu
     return row["id"]
 
 
+def remove_source(conn: sqlite3.Connection, source_id: int, cascade: bool = False) -> int:
+    """Soft-delete or cascade-delete a source.
+
+    cascade=False: set removed_at on the source row only; returns 0.
+    cascade=True:  delete all files for the source (and their dependent rows)
+                   inside a single transaction; returns count of files deleted.
+    """
+    if not cascade:
+        conn.execute(
+            "UPDATE sources SET removed_at = datetime('now') WHERE id = ?",
+            (source_id,),
+        )
+        conn.commit()
+        return 0
+
+    file_id_rows = conn.execute(
+        "SELECT id FROM files WHERE source_id = ?", (source_id,)
+    ).fetchall()
+    if not file_id_rows:
+        conn.execute(
+            "UPDATE sources SET removed_at = datetime('now') WHERE id = ?",
+            (source_id,),
+        )
+        conn.commit()
+        return 0
+
+    file_ids = [r["id"] for r in file_id_rows]
+    placeholders = ",".join("?" * len(file_ids))
+
+    child_tables = [
+        "file_set_members",
+        "face_cluster_members",
+        "file_voice_segments",
+        "file_voice_embeddings",
+        "file_face_regions",
+        "file_geolabels",
+        "file_gps_masks",
+        "file_gps_cluster_assignments",
+        "validation_results",
+        "file_temporal_fields",
+        "file_derived_tags",
+        "file_entity_matches",
+        "file_quality",
+        "file_aesthetic",
+        "file_hashes",
+        "file_captured_fields",
+        "file_exif",
+        "file_metadata_fields",
+        "file_metadata_keywords",
+        "descriptions",
+        "video_frames",
+        "candidates",
+        "transcriptions",
+        "transcript_segments",
+        "retag_output",
+        "writeback_log",
+        "file_summaries",
+    ]
+
+    for tbl in child_tables:
+        conn.execute(
+            f"DELETE FROM {tbl} WHERE file_id IN ({placeholders})", file_ids
+        )
+
+    conn.execute(
+        f"DELETE FROM files WHERE id IN ({placeholders})", file_ids
+    )
+    conn.execute(
+        "UPDATE sources SET removed_at = datetime('now') WHERE id = ?",
+        (source_id,),
+    )
+    conn.commit()
+    return len(file_ids)
+
+
 def get_sources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM sources WHERE removed_at IS NULL ORDER BY id"
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# File sets
+# ---------------------------------------------------------------------------
+
+def create_file_set(
+    conn: sqlite3.Connection,
+    name: str,
+    description: str,
+    file_ids: list[int],
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO file_sets (name, description) VALUES (?, ?)",
+        (name, description),
+    )
+    set_id = cur.lastrowid
+    for fid in file_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO file_set_members (set_id, file_id) VALUES (?, ?)",
+            (set_id, fid),
+        )
+    conn.commit()
+    return set_id
+
+
+def get_file_sets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT fs.id, fs.name, fs.description, fs.created_at,
+               (SELECT COUNT(*) FROM file_set_members WHERE set_id = fs.id) AS file_count
+        FROM file_sets fs
+        ORDER BY fs.created_at DESC
+        """
+    ).fetchall()
+
+
+def delete_file_set(conn: sqlite3.Connection, set_id: int) -> None:
+    conn.execute("DELETE FROM file_sets WHERE id = ?", (set_id,))
+    conn.commit()
+
+
+def resolve_set_file_ids(conn: sqlite3.Connection, set_id: int) -> frozenset[int]:
+    rows = conn.execute(
+        "SELECT file_id FROM file_set_members WHERE set_id = ?", (set_id,)
+    ).fetchall()
+    return frozenset(r["file_id"] for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +900,7 @@ def get_pending_retag_files(
     conn: sqlite3.Connection,
     *,
     source_id: int | None = None,
+    set_id: int | None = None,
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -777,9 +908,10 @@ def get_pending_retag_files(
         LEFT JOIN retag_output r ON r.file_id = f.id
         WHERE (r.file_id IS NULL OR r.retag_status IN ('pending', 'failed', 'skipped'))
           AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
         ORDER BY f.id
         """,
-        (source_id, source_id),
+        (source_id, source_id, set_id, set_id),
     ).fetchall()
 
 
@@ -975,6 +1107,7 @@ def get_pending_describe_files(
     *,
     source_id: int | None = None,
     file_type: str | None = None,
+    set_id: int | None = None,
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -985,9 +1118,10 @@ def get_pending_describe_files(
           AND (d.file_id IS NULL OR d.pass1_status IN ('pending', 'failed', 'skipped'))
           AND (? IS NULL OR f.source_id = ?)
           AND (? IS NULL OR f.file_type = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type),
+        (source_id, source_id, file_type, file_type, set_id, set_id),
     ).fetchall()
 
 
@@ -1068,6 +1202,7 @@ def get_pending_transcribe_files(
     *,
     source_id: int | None = None,
     file_type: str | None = None,
+    set_id: int | None = None,
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -1079,9 +1214,10 @@ def get_pending_transcribe_files(
           AND (t.file_id IS NULL OR t.transcribe_status IN ('failed', 'pending'))
           AND (? IS NULL OR f.source_id = ?)
           AND (? IS NULL OR f.file_type = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type),
+        (source_id, source_id, file_type, file_type, set_id, set_id),
     ).fetchall()
 
 
@@ -1180,6 +1316,7 @@ def get_pending_aesthetic_files(
     *,
     source_id: int | None = None,
     file_type: str | None = None,
+    set_id: int | None = None,
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -1191,9 +1328,10 @@ def get_pending_aesthetic_files(
           AND fa.id IS NULL
           AND (? IS NULL OR f.source_id = ?)
           AND (? IS NULL OR f.file_type = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
         ORDER BY f.id
         """,
-        (model_name, source_id, source_id, file_type, file_type),
+        (model_name, source_id, source_id, file_type, file_type, set_id, set_id),
     ).fetchall()
 
 
@@ -1336,6 +1474,7 @@ def get_pending_quality_files(
     *,
     source_id: int | None = None,
     file_type: str | None = None,
+    set_id: int | None = None,
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -1347,9 +1486,10 @@ def get_pending_quality_files(
           AND fq.file_id IS NULL
           AND (? IS NULL OR f.source_id = ?)
           AND (? IS NULL OR f.file_type = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type),
+        (source_id, source_id, file_type, file_type, set_id, set_id),
     ).fetchall()
 
 
@@ -2346,6 +2486,7 @@ def get_pending_summarize_files(
     conn: sqlite3.Connection,
     *,
     source_id: int | None = None,
+    set_id: int | None = None,
 ) -> list[sqlite3.Row]:
     """Files eligible for summarize: have a done description or transcription,
     no done summary, canonical files only."""
@@ -2365,9 +2506,10 @@ def get_pending_summarize_files(
               WHERE s.file_id = f.id AND s.status = 'done'
           )
           AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
         ORDER BY f.id
         """,
-        (source_id, source_id),
+        (source_id, source_id, set_id, set_id),
     ).fetchall()
 
 

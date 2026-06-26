@@ -121,6 +121,7 @@ def run_summarize(
     cancel_event: threading.Event,
     *,
     source_id: int | None = None,
+    set_id: int | None = None,
 ) -> None:
     from src.db.corpus import (
         get_pending_summarize_files,
@@ -150,7 +151,7 @@ def run_summarize(
                 n_ctx=config.summarize_max_transcript_tokens + 4096,
                 max_retries=config.deep_seek_max_iter if config.deep_seek else 0,
             ) as session:
-                pending = get_pending_summarize_files(corpus_conn, source_id=source_id)
+                pending = get_pending_summarize_files(corpus_conn, source_id=source_id, set_id=set_id)
                 total = len(pending)
                 processed = skipped = errors = 0
 

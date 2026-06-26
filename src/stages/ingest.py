@@ -1,3 +1,5 @@
+import fnmatch
+import json
 import os
 import threading
 import time
@@ -23,6 +25,27 @@ _VIDEO_EXTS = {
     ".webm", ".mts", ".m2ts",
 }
 _AUDIO_EXTS = {".mp3", ".wav", ".aac", ".m4a", ".flac", ".ogg", ".wma", ".opus"}
+
+
+def apply_source_filters(files: list[Path], filters: dict) -> list[Path]:
+    """Apply filter criteria to a list of candidate file Paths.
+
+    Recognised keys (applied in order):
+      glob         — fnmatch pattern matched against file.name only
+      count_limit  — truncate list to first N after glob filter
+    Unknown keys are silently ignored.
+    """
+    result = files
+    glob_pat = filters.get("glob")
+    if glob_pat:
+        result = [f for f in result if fnmatch.fnmatch(f.name, glob_pat)]
+    count_limit = filters.get("count_limit")
+    if count_limit is not None:
+        try:
+            result = result[: int(count_limit)]
+        except (TypeError, ValueError):
+            pass
+    return result
 
 
 def detect_file_type(ext: str) -> str | None:
@@ -80,18 +103,26 @@ def run_ingest(
         if not source_path.exists():
             continue
 
+        try:
+            filters = json.loads(source["filters_json"] or "{}")
+        except (ValueError, TypeError):
+            filters = {}
+
+        candidates: list[Path] = []
         for dirpath, _dirs, filenames in os.walk(str(source_path)):
             for fname in filenames:
-                filepath = os.path.join(dirpath, fname)
-                ext = Path(fname).suffix
+                p = Path(os.path.join(dirpath, fname))
+                ext = p.suffix
                 detected = detect_file_type(ext)
-
                 if source_file_type == "all" or detected == source_file_type:
-                    all_files.append((source_id, filepath, detected or source_file_type, True))
-                    source_file_counts[source_id] += 1
-
+                    candidates.append(p)
             if not recursive:
                 break
+
+        candidates = apply_source_filters(candidates, filters)
+        for p in candidates:
+            all_files.append((source_id, str(p), detect_file_type(p.suffix) or source_file_type, True))
+            source_file_counts[source_id] += 1
 
     total = len(all_files)
     processed = 0

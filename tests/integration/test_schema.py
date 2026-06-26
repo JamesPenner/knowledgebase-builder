@@ -23,6 +23,8 @@ _CORPUS_TABLES = {
     "gps_clusters",
     "file_gps_cluster_assignments",
     "file_summaries",
+    "file_sets",
+    "file_set_members",
 }
 
 _KB_TABLES = {
@@ -104,3 +106,21 @@ def test_file_summaries_schema(tmp_path):
     conn = open_corpus(tmp_path / "corpus.db")
     cols = {row[1] for row in conn.execute("PRAGMA table_info(file_summaries)")}
     assert cols == {"file_id", "summary_text", "model", "prompt_version", "processed_at", "status"}
+
+
+def test_sources_has_filters_json_column(tmp_path):
+    conn = open_corpus(tmp_path / "corpus.db")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
+    assert "filters_json" in cols
+
+
+def test_file_sets_schema(tmp_path):
+    conn = open_corpus(tmp_path / "corpus.db")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(file_sets)")}
+    assert cols == {"id", "name", "description", "created_at"}
+
+
+def test_file_set_members_schema(tmp_path):
+    conn = open_corpus(tmp_path / "corpus.db")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(file_set_members)")}
+    assert cols == {"set_id", "file_id"}

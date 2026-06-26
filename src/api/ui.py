@@ -39,6 +39,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         get_analyse_token_counts,
         get_candidate_counts,
         get_describe_counts,
+        get_file_sets,
         get_new_terms_candidates,
         get_pipeline_checkpoints,
         get_sources,
@@ -60,6 +61,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         candidate_counts = get_candidate_counts(corpus_conn)
         new_terms = get_new_terms_candidates(corpus_conn, kb_conn)
         sources = [{"id": r["id"], "path": r["path"]} for r in get_sources(corpus_conn)]
+        sets = [{"id": r["id"], "name": r["name"], "file_count": r["file_count"]} for r in get_file_sets(corpus_conn)]
     finally:
         corpus_conn.close()
         kb_conn.close()
@@ -124,6 +126,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         "checkpoints_json": list(checkpoints.keys()),
         "stage_descriptions": STAGE_DESCRIPTIONS,
         "sources": sources,
+        "sets": sets,
         # keep legacy keys so any other code that uses them doesn't break
         "checkpoints": checkpoints,
         "all_stages": list(DEPENDENCIES.keys()),
@@ -154,6 +157,94 @@ def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(r
         "counts": counts,
         "decisions": decisions,
     })
+
+
+@router.get("/kb/new", include_in_schema=False)
+def kb_new_page(request: Request):
+    return templates.TemplateResponse(request, "kb_new.html", {"kb": ""})
+
+
+@router.post("/kb/new", include_in_schema=False)
+async def kb_new_submit(request: Request):
+    from fastapi.responses import RedirectResponse
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    template = form.get("template") or "general-media"
+    source_path = (form.get("source_path") or "").strip()
+    source_file_type = form.get("source_file_type") or "all"
+    source_recursive = form.get("source_recursive") == "true"
+    source_glob = (form.get("glob_pattern") or "").strip()
+    source_limit_str = (form.get("count_limit") or "").strip()
+
+    import re
+    if not name or not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        return templates.TemplateResponse(request, "kb_new.html", {
+            "kb": "",
+            "error": "Name must be alphanumeric with hyphens/underscores only",
+        }, status_code=422)
+
+    from pathlib import Path as P
+    from src.cli.kb import (
+        _load_general_media_seed,
+        _populate_reference_files,
+        _write_library_yaml,
+        _write_metrics_yaml,
+    )
+    from src.db.corpus import open_corpus as _open_corpus_new
+    from src.db.kb import open_kb as _open_kb_new
+    from src.db.registry import list_kbs, open_registry, register_kb, set_active
+
+    kb_root = P("knowledge-bases")
+    kb_root.mkdir(exist_ok=True)
+    kb_folder = kb_root / name
+    if kb_folder.exists():
+        return templates.TemplateResponse(request, "kb_new.html", {
+            "kb": "",
+            "error": f"KB already exists: {name}",
+        }, status_code=422)
+
+    kb_folder.mkdir()
+    (kb_folder / "reference").mkdir()
+    (kb_folder / "reference" / "registers").mkdir()
+    (kb_folder / "seed").mkdir()
+    _open_corpus_new(kb_folder / "corpus.db").close()
+    _open_kb_new(kb_folder / "knowledge.db").close()
+    _write_library_yaml(kb_folder / "library.yaml")
+    _write_metrics_yaml(kb_folder / "metrics.yaml")
+    _populate_reference_files(kb_folder)
+
+    if template == "general-media":
+        _load_general_media_seed(kb_folder / "knowledge.db")
+
+    reg = open_registry(P("."))
+    try:
+        register_kb(reg, name, kb_folder.resolve())
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "kb_new.html", {
+            "kb": "",
+            "error": str(exc),
+        }, status_code=422)
+
+    existing = list_kbs(reg)
+    if len(existing) == 1:
+        set_active(reg, name)
+    reg.close()
+
+    if source_path:
+        from src.db.corpus import add_source, open_corpus
+        filters: dict = {}
+        if source_glob:
+            filters["glob"] = source_glob
+        if source_limit_str:
+            try:
+                filters["count_limit"] = int(source_limit_str)
+            except ValueError:
+                pass
+        conn = open_corpus(kb_folder / "corpus.db")
+        add_source(conn, source_path, source_file_type, source_recursive, filters)
+        conn.close()
+
+    return RedirectResponse(f"/pipeline?kb={name}", status_code=303)
 
 
 @router.get("/corpus-stats", include_in_schema=False)
