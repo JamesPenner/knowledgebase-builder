@@ -59,10 +59,11 @@ def run_extract_meta(
                     continue
                 file_id = path_to_id.get(source_file)
                 if file_id is None:
-                    # ExifTool may normalise separators on Windows; try forward-slash match
-                    source_norm = source_file.replace("\\", "/")
+                    # ExifTool normalises separators on Windows; also guard against
+                    # drive-letter case differences (e.g. D:/ vs d:/).
+                    source_norm = source_file.replace("\\", "/").lower()
                     for orig_path, fid in path_to_id.items():
-                        if orig_path.replace("\\", "/") == source_norm:
+                        if orig_path.replace("\\", "/").lower() == source_norm:
                             file_id = fid
                             break
                 if file_id is not None:

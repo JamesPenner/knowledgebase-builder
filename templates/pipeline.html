@@ -95,6 +95,9 @@
           {%- if tp.pending > 0 %}Review {{ tp.pending }} item{{ '' if tp.pending == 1 else 's' }} →{% else %}View results →{% endif -%}
         </a>
       {% endif %}
+      {% if tp.manage_url %}
+        <a class="wb-gate-link" href="{{ tp.manage_url }}">Capture rules →</a>
+      {% endif %}
     </div>
   {% endif %}
 
@@ -118,6 +121,9 @@
                   <a class="wb-gate-link{% if tp.pending > 0 %} wb-gate-link--active{% endif %}" href="{{ tp.url }}">
                     {%- if tp.pending > 0 %}Review {{ tp.pending }} item{{ '' if tp.pending == 1 else 's' }} →{% else %}View results →{% endif -%}
                   </a>
+                {% endif %}
+                {% if tp.manage_url %}
+                  <a class="wb-gate-link" href="{{ tp.manage_url }}">Capture rules →</a>
                 {% endif %}
               </div>
             </td>
@@ -176,6 +182,9 @@
         <tr class="stage-help-row" id="help-{{ stage.name }}" style="display:none">
           <td colspan="6">
             {{ stage.description }}
+            {% if stage.manage_url %}
+              <div class="stage-help-deps"><a href="{{ stage.manage_url }}">Manage capture rules →</a></div>
+            {% endif %}
             {% if stage.deps %}
               <div class="stage-help-deps">Requires: {{ stage.deps | join(', ') }}</div>
             {% endif %}

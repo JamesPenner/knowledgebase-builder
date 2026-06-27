@@ -144,6 +144,63 @@ def test_delete_decision_returns_token_to_pending_partial(kb_dbs):
     assert "revoke_me" in pending_resp.text
 
 
+def test_reassign_decision_changes_action(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    token_id = _seed_token(corpus_path, "highway")
+    client = _make_client(corpus_path, kb_path)
+    # Decide as ignore
+    client.post("/review/normalise/decide", data={"item_id": str(token_id), "action": "ignore"}, params={"kb": "test"})
+    decisions_resp = client.get("/api/review/normalise/decisions", params={"kb": "test"})
+    d_id = decisions_resp.json()["decisions"][0]["id"]
+    # Reassign to reject
+    resp = client.post("/review/normalise/reassign", data={"decision_id": d_id, "new_action": "reject"}, params={"kb": "test"})
+    assert resp.status_code == 200
+    assert resp.headers.get("HX-Trigger") == '{"decisionsChanged": null}'
+    # Decisions panel should now show reject, not ignore
+    decisions2 = client.get("/api/review/normalise/decisions", params={"kb": "test"}).json()["decisions"]
+    assert len(decisions2) == 1
+    assert decisions2[0]["action"] == "reject"
+    assert decisions2[0]["token"] == "highway"
+    # Token must still be decided (not reverted to pending)
+    conn = open_corpus(corpus_path)
+    status = conn.execute("SELECT status FROM analyse_tokens WHERE id=?", (token_id,)).fetchone()["status"]
+    conn.close()
+    assert status == "decided"
+
+
+def test_reassign_to_accept_removes_from_decisions(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    token_id = _seed_token(corpus_path, "junction")
+    client = _make_client(corpus_path, kb_path)
+    client.post("/review/normalise/decide", data={"item_id": str(token_id), "action": "ignore"}, params={"kb": "test"})
+    decisions_resp = client.get("/api/review/normalise/decisions", params={"kb": "test"})
+    d_id = decisions_resp.json()["decisions"][0]["id"]
+    resp = client.post("/review/normalise/reassign", data={"decision_id": d_id, "new_action": "accept"}, params={"kb": "test"})
+    assert resp.status_code == 200
+    # Accept has no KB rule — decisions list should be empty
+    decisions2 = client.get("/api/review/normalise/decisions", params={"kb": "test"}).json()["decisions"]
+    assert decisions2 == []
+
+
+def test_reassign_to_correct_sets_canonical_term(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    token_id = _seed_token(corpus_path, "kootenay")
+    client = _make_client(corpus_path, kb_path)
+    client.post("/review/normalise/decide", data={"item_id": str(token_id), "action": "reject"}, params={"kb": "test"})
+    decisions_resp = client.get("/api/review/normalise/decisions", params={"kb": "test"})
+    d_id = decisions_resp.json()["decisions"][0]["id"]
+    resp = client.post(
+        "/review/normalise/reassign",
+        data={"decision_id": d_id, "new_action": "correct", "canonical_term": "Kootenay"},
+        params={"kb": "test"},
+    )
+    assert resp.status_code == 200
+    decisions2 = client.get("/api/review/normalise/decisions", params={"kb": "test"}).json()["decisions"]
+    assert len(decisions2) == 1
+    assert decisions2[0]["action"] == "correct"
+    assert decisions2[0]["detail"] == "Kootenay"
+
+
 def test_cross_source_badge_shown_for_flagged_tokens(kb_dbs):
     corpus_path, kb_path = kb_dbs
     _seed_token(corpus_path, "bc5", "word", "word", is_cross_source=1)

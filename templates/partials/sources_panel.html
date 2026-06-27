@@ -26,7 +26,9 @@
               <td class="sources-filters">{{ src.filters_summary or '—' }}</td>
               <td>{{ src.file_count_ingested or 0 }}</td>
               <td class="sources-date">{{ src.last_ingested_at or '—' }}</td>
-              <td>
+              <td class="sources-actions">
+                <button class="btn btn--sm"
+                  onclick="toggleSourceEdit({{ src.id }})">Edit</button>
                 <span id="src-confirm-{{ src.id }}" style="display:none" class="sources-confirm">
                   Remove source and delete {{ src.file_count_ingested or 0 }} files?
                   <button class="btn btn--danger btn--sm"
@@ -42,6 +44,46 @@
                 </button>
               </td>
             </tr>
+            <tr id="src-edit-{{ src.id }}" class="src-edit-row" style="display:none">
+              <td colspan="6">
+                <div class="sources-edit-form">
+                  <div class="sources-form-row">
+                    <select id="src-edit-type-{{ src.id }}" class="sources-select">
+                      <option value="all" {% if src.file_type == 'all' %}selected{% endif %}>All</option>
+                      <option value="images" {% if src.file_type == 'images' %}selected{% endif %}>Images</option>
+                      <option value="video" {% if src.file_type == 'video' %}selected{% endif %}>Video</option>
+                      <option value="audio" {% if src.file_type == 'audio' %}selected{% endif %}>Audio</option>
+                    </select>
+                    <label class="sources-checkbox-label">
+                      <input id="src-edit-recursive-{{ src.id }}" type="checkbox"
+                             value="true" {% if src.recursive %}checked{% endif %}> Recursive
+                    </label>
+                    <input id="src-edit-glob-{{ src.id }}" type="text"
+                           class="sources-input" placeholder="Glob (e.g. 2024-*)"
+                           value="{{ src.f_glob }}">
+                    <input id="src-edit-limit-{{ src.id }}" type="number"
+                           class="sources-input sources-input--sm" placeholder="Limit" min="1"
+                           value="{{ src.f_count_limit }}">
+                    <input id="src-edit-modified-after-{{ src.id }}" type="date"
+                           class="sources-input" title="Only files modified on or after this date"
+                           value="{{ src.f_modified_after }}">
+                    <input id="src-edit-exclude-{{ src.id }}" type="text"
+                           class="sources-input sources-input--wide"
+                           placeholder="Exclude (e.g. @eaDir, #recycle)"
+                           value="{{ src.f_exclude_patterns }}">
+                  </div>
+                  <div class="sources-edit-footer">
+                    <span class="sources-edit-note">Changes apply on the next ingest run. Files already in the corpus are not removed.</span>
+                    <div class="sources-form-actions">
+                      <button type="button" class="btn btn--sm"
+                              onclick="toggleSourceEdit({{ src.id }})">Cancel</button>
+                      <button type="button" class="btn btn--run btn--sm"
+                              onclick="saveSourceEdit('{{ kb }}', {{ src.id }})">Save</button>
+                    </div>
+                  </div>
+                </div>
+              </td>
+            </tr>
           {% endfor %}
         </tbody>
       </table>
@@ -52,7 +94,7 @@
           hx-post="/api/kb/{{ kb }}/sources"
           hx-target="#sources-panel"
           hx-swap="outerHTML"
-          hx-include="#src-form-path,#src-form-type,#src-form-recursive,#src-form-glob,#src-form-limit">
+          hx-include="#src-form-path,#src-form-type,#src-form-recursive,#src-form-glob,#src-form-limit,#src-form-modified-after,#src-form-exclude">
       <div class="sources-form-row">
         <input id="src-form-path" name="path" type="text" class="sources-input sources-input--wide"
                placeholder="Directory path" required>
@@ -69,6 +111,10 @@
                placeholder="Glob (e.g. 2024-*)">
         <input id="src-form-limit" name="count_limit" type="number" class="sources-input sources-input--sm"
                placeholder="Limit" min="1">
+        <input id="src-form-modified-after" name="modified_after" type="date" class="sources-input"
+               title="Only files modified on or after this date">
+        <input id="src-form-exclude" name="exclude_patterns" type="text" class="sources-input sources-input--wide"
+               placeholder="Exclude (e.g. @eaDir, #recycle)">
       </div>
       <div class="sources-form-actions">
         <button type="button" class="btn btn--sm"
@@ -128,21 +174,61 @@
 </div>
 
 <script>
+function toggleSourceEdit(id) {
+  const row = document.getElementById('src-edit-' + id);
+  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+function saveSourceEdit(kb, id) {
+  const fileType = document.getElementById('src-edit-type-' + id).value;
+  const recursive = document.getElementById('src-edit-recursive-' + id).checked;
+  const glob = document.getElementById('src-edit-glob-' + id).value;
+  const limit = document.getElementById('src-edit-limit-' + id).value;
+  const modifiedAfter = document.getElementById('src-edit-modified-after-' + id).value;
+  const excludeRaw = document.getElementById('src-edit-exclude-' + id).value;
+  const filters = {};
+  if (glob) filters.glob = glob;
+  if (limit) filters.count_limit = parseInt(limit);
+  const exclude_patterns = excludeRaw ? excludeRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  fetch('/api/kb/' + kb + '/sources/' + id, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      file_type: fileType, recursive, filters,
+      modified_after: modifiedAfter || null,
+      exclude_patterns,
+    }),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.detail) { alert('Save failed: ' + d.detail); return; }
+    htmx.ajax('GET', '/api/kb/' + kb + '/sources/panel', {target: '#sources-panel', swap: 'outerHTML'});
+  })
+  .catch(() => { alert('Save failed'); });
+}
+
 function previewSource(kb) {
   const path = document.getElementById('src-form-path').value;
   const fileType = document.getElementById('src-form-type').value;
   const recursive = document.getElementById('src-form-recursive').checked;
   const glob = document.getElementById('src-form-glob').value;
   const limit = document.getElementById('src-form-limit').value;
+  const modifiedAfter = (document.getElementById('src-form-modified-after') || {}).value || '';
+  const excludeRaw = (document.getElementById('src-form-exclude') || {}).value || '';
   const filters = {};
   if (glob) filters.glob = glob;
   if (limit) filters.count_limit = parseInt(limit);
+  const exclude_patterns = excludeRaw ? excludeRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
   const el = document.getElementById('src-preview-result');
   el.textContent = 'Scanning…';
   fetch('/api/kb/' + kb + '/sources/preview', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path, file_type: fileType, recursive, filters}),
+    body: JSON.stringify({
+      path, file_type: fileType, recursive, filters,
+      modified_after: modifiedAfter || null,
+      exclude_patterns,
+    }),
   })
   .then(r => r.json())
   .then(d => {

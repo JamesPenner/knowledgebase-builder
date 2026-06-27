@@ -2,18 +2,57 @@
 <table class="decisions-table">
   <thead>
     <tr>
-      <th>Action</th>
-      <th>Token</th>
-      <th>Details</th>
+      <th data-sort="action">Action</th>
+      <th data-sort="token">Token</th>
+      <th data-sort="detail">Details</th>
+      <th class="col-change">Change to</th>
       <th></th>
     </tr>
   </thead>
   <tbody>
   {% for d in decisions %}
-  <tr class="decision-row">
+  <tr class="decision-row" data-action="{{ d.action }}">
     <td><span class="badge badge--{{ d.action }}">{{ d.action }}</span></td>
     <td class="decision-token">{{ d.token }}</td>
     <td class="decision-detail">{{ d.detail or '' }}</td>
+    <td class="col-change">
+      {% if d.action != 'capture' %}
+      <div class="change-actions">
+        {% if d.action != 'accept' %}
+        <form class="action-form" hx-post="/review/normalise/reassign?kb={{ kb }}" hx-swap="none">
+          <input type="hidden" name="decision_id" value="{{ d.id }}">
+          <input type="hidden" name="new_action" value="accept">
+          <button type="submit" class="btn btn--xs btn--accept">Accept</button>
+        </form>
+        {% endif %}
+        {% if d.action != 'ignore' %}
+        <form class="action-form" hx-post="/review/normalise/reassign?kb={{ kb }}" hx-swap="none">
+          <input type="hidden" name="decision_id" value="{{ d.id }}">
+          <input type="hidden" name="new_action" value="ignore">
+          <button type="submit" class="btn btn--xs btn--ignore">Ignore</button>
+        </form>
+        {% endif %}
+        {% if d.action != 'correct' %}
+        <details class="inline-correct">
+          <summary class="btn btn--xs btn--correct">Correct…</summary>
+          <form class="action-form" hx-post="/review/normalise/reassign?kb={{ kb }}" hx-swap="none">
+            <input type="hidden" name="decision_id" value="{{ d.id }}">
+            <input type="hidden" name="new_action" value="correct">
+            <input type="text" name="canonical_term" placeholder="Correct to…" class="input-text input-text--sm" required>
+            <button type="submit" class="btn btn--xs btn--correct">Apply</button>
+          </form>
+        </details>
+        {% endif %}
+        {% if d.action != 'reject' %}
+        <form class="action-form" hx-post="/review/normalise/reassign?kb={{ kb }}" hx-swap="none">
+          <input type="hidden" name="decision_id" value="{{ d.id }}">
+          <input type="hidden" name="new_action" value="reject">
+          <button type="submit" class="btn btn--xs btn--reject">Reject</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </td>
     <td>
       <form hx-delete="/review/normalise/decisions/{{ d.id }}?kb={{ kb }}"
             hx-swap="none">

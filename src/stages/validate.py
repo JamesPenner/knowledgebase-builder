@@ -58,7 +58,7 @@ def run_validate(
     cancel_event: threading.Event,
     export: bool = False,
 ) -> dict:
-    from src.db.corpus import open_corpus
+    from src.db.corpus import open_corpus, update_pipeline_checkpoint
 
     corpus_conn = open_corpus(corpus_path)
     try:
@@ -116,6 +116,7 @@ def run_validate(
             export_dir.mkdir(parents=True, exist_ok=True)
             _write_validation_report(export_dir, corpus_conn)
 
+        update_pipeline_checkpoint(corpus_conn, "validate", files_checked, 0, changed + missing)
         progress.done()
         return {
             "run_id": run_id,

@@ -1,9 +1,33 @@
+{% set pending_count = counts.total - counts.reviewed %}
 <p class="review-counts">
-  <strong>{{ counts.total - counts.reviewed }}</strong> pending
+  <strong>{{ pending_count }}</strong> pending
   · <strong>{{ counts.reviewed }}</strong> decided
   · {{ counts.total }} total
 </p>
 {% if groups %}
+<div class="bulk-actions">
+  <form class="action-form" hx-post="/review/normalise/bulk?kb={{ kb }}" hx-swap="none">
+    <input type="hidden" name="action" value="accept_all">
+    <button type="submit" class="btn btn--accept">Accept All</button>
+  </form>
+  <form class="action-form" hx-post="/review/normalise/bulk?kb={{ kb }}" hx-swap="none">
+    <input type="hidden" name="action" value="ignore_all">
+    <button type="submit" class="btn btn--ignore">Ignore All</button>
+  </form>
+  <details class="bulk-reject-details">
+    <summary class="btn btn--reject">Reject All</summary>
+    <div class="bulk-reject-confirm">
+      <p class="bulk-reject-warning">
+        This will reject all <strong>{{ pending_count }}</strong> pending token{{ '' if pending_count == 1 else 's' }} and exclude them from normalized filenames.
+        Rejected tokens won't contribute context for downstream LLM stages — only do this if these terms are genuinely meaningless noise.
+      </p>
+      <form class="action-form" hx-post="/review/normalise/bulk?kb={{ kb }}" hx-swap="none">
+        <input type="hidden" name="action" value="reject_all">
+        <button type="submit" class="btn btn--reject">Confirm: reject {{ pending_count }} token{{ '' if pending_count == 1 else 's' }}</button>
+      </form>
+    </div>
+  </details>
+</div>
 {% for group in groups %}
 <section class="token-group">
   <h2 class="group-title">
@@ -31,6 +55,14 @@
         </td>
         <td class="token-freq">{{ token.file_count }} files</td>
         <td class="token-actions">
+          <form class="action-form"
+                hx-post="/review/normalise/decide?kb={{ kb }}"
+                hx-swap="none">
+            <input type="hidden" name="item_id" value="{{ token.id }}">
+            <input type="hidden" name="action" value="accept">
+            <button type="submit" class="btn btn--accept">Accept</button>
+          </form>
+
           {% if sub.proposed_pattern and sub.proposed_action and sub.proposed_action != 'none' %}
           <form class="action-form"
                 hx-post="/review/normalise/decide?kb={{ kb }}"

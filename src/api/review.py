@@ -18,6 +18,11 @@ class DecideRequest(BaseModel):
     value: dict | None = None
 
 
+class BulkDecideRequest(BaseModel):
+    kb: str
+    action: str  # accept_all | ignore_all | reject_all
+
+
 @router.get("/normalise/pending", tags=["review"])
 def get_normalise_pending(
     limit: int = 50,
@@ -58,7 +63,10 @@ def post_normalise_decide(
     action = req.action
     value = req.value or {}
 
-    if action == "capture":
+    if action == "accept":
+        pass  # no KB rule — token is kept as-is by normalize
+
+    elif action == "capture":
         add_capture_rule(
             kb_conn,
             pattern=value.get("pattern", ""),
@@ -99,7 +107,7 @@ def post_normalise_decide(
             add_reject_token(kb_conn, pattern=token_row["token"], is_regex=False, label=token_row["token"])
             bump_kb_version(kb_conn, "reject_token_added")
 
-    else:
+    elif action != "accept":
         corpus_conn.close()
         kb_conn.close()
         raise HTTPException(400, f"Unknown action: {action!r}")
@@ -108,6 +116,51 @@ def post_normalise_decide(
     corpus_conn.close()
     kb_conn.close()
     return {"status": "ok"}
+
+
+@router.post("/normalise/bulk", tags=["review"])
+def post_normalise_bulk(
+    req: BulkDecideRequest,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> dict[str, Any]:
+    from src.db.corpus import (
+        get_all_pending_tokens,
+        open_corpus,
+        set_all_pending_decided,
+    )
+    from src.db.kb import add_reject_token, add_to_stoplist, bump_kb_version, open_kb
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    if req.action == "accept_all":
+        count = set_all_pending_decided(corpus_conn)
+
+    elif req.action == "ignore_all":
+        rows = get_all_pending_tokens(corpus_conn)
+        for row in rows:
+            add_to_stoplist(kb_conn, row["token"])
+        if rows:
+            bump_kb_version(kb_conn, "stoplist_updated")
+        count = set_all_pending_decided(corpus_conn)
+
+    elif req.action == "reject_all":
+        rows = get_all_pending_tokens(corpus_conn)
+        for row in rows:
+            add_reject_token(kb_conn, pattern=row["token"], is_regex=False, label=row["token"])
+        if rows:
+            bump_kb_version(kb_conn, "reject_token_added")
+        count = set_all_pending_decided(corpus_conn)
+
+    else:
+        corpus_conn.close()
+        kb_conn.close()
+        raise HTTPException(400, f"Unknown bulk action: {req.action!r}")
+
+    corpus_conn.close()
+    kb_conn.close()
+    return {"status": "ok", "count": count}
 
 
 @router.get("/normalise/decisions", tags=["review"])

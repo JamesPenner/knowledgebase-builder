@@ -13,6 +13,7 @@ _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _HX_TRIGGER_BOTH = '{"pendingChanged": null, "decisionsChanged": null}'
+_HX_TRIGGER_DECISIONS = '{"decisionsChanged": null}'
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         "normalise_review": {
             "completed": token_counts["total"] > 0 and token_counts["reviewed"] == token_counts["total"],
             "url": f"/review/normalise?kb={kb_name}",
+            "manage_url": f"/knowledge/capture-rules?kb={kb_name}",
             "label": "Normalise Review",
             "description": "Approve or reject candidate vocabulary terms before continuing",
             "pending": _norm_pending,
@@ -123,6 +125,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
                 "checkpoint": cp,
                 "stage_counts": sc,
                 "touchpoint_before": TOUCHPOINT_BEFORE.get(name),
+                "manage_url": f"/knowledge/capture-rules?kb={kb_name}" if name == "normalize" else None,
             })
         groups.append({**grp, "stages": stages})
 
@@ -456,7 +459,9 @@ async def ui_normalise_decide(
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
 
-    if action == "capture":
+    if action == "accept":
+        pass  # no KB rule — token is kept as-is by normalize
+    elif action == "capture":
         add_capture_rule(
             kb_conn,
             pattern=pattern,
@@ -495,6 +500,46 @@ async def ui_normalise_decide(
             bump_kb_version(kb_conn, "reject_token_added")
 
     set_token_decided(corpus_conn, item_id)
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.post("/review/normalise/bulk", include_in_schema=False)
+async def ui_normalise_bulk(
+    action: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import (
+        get_all_pending_tokens,
+        open_corpus,
+        set_all_pending_decided,
+    )
+    from src.db.kb import add_reject_token, add_to_stoplist, bump_kb_version, open_kb
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    if action == "accept_all":
+        set_all_pending_decided(corpus_conn)
+
+    elif action == "ignore_all":
+        rows = get_all_pending_tokens(corpus_conn)
+        for row in rows:
+            add_to_stoplist(kb_conn, row["token"])
+        if rows:
+            bump_kb_version(kb_conn, "stoplist_updated")
+        set_all_pending_decided(corpus_conn)
+
+    elif action == "reject_all":
+        rows = get_all_pending_tokens(corpus_conn)
+        for row in rows:
+            add_reject_token(kb_conn, pattern=row["token"], is_regex=False, label=row["token"])
+        if rows:
+            bump_kb_version(kb_conn, "reject_token_added")
+        set_all_pending_decided(corpus_conn)
+
     corpus_conn.close()
     kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
@@ -771,6 +816,59 @@ def ui_delete_decision(
     corpus_conn.close()
 
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.post("/review/normalise/reassign", include_in_schema=False)
+async def ui_normalise_reassign(
+    decision_id: str = Form(...),
+    new_action: str = Form(...),
+    canonical_term: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import (
+        add_correction,
+        add_reject_token,
+        add_to_stoplist,
+        bump_kb_version,
+        delete_decision,
+        get_decision_token,
+        open_kb,
+    )
+
+    _, kb_path = paths
+
+    try:
+        table, row_id_str = decision_id.rsplit(":", 1)
+        row_id = int(row_id_str)
+    except ValueError:
+        return Response(content="", status_code=400)
+
+    kb_conn = open_kb(kb_path)
+
+    token_text = get_decision_token(kb_conn, table, row_id)
+    if token_text is None:
+        kb_conn.close()
+        return Response(content="", status_code=404)
+
+    try:
+        delete_decision(kb_conn, table, row_id)
+    except ValueError:
+        kb_conn.close()
+        return Response(content="", status_code=400)
+
+    if new_action == "ignore":
+        add_to_stoplist(kb_conn, token_text)
+        bump_kb_version(kb_conn, "stoplist_updated")
+    elif new_action == "correct":
+        add_correction(kb_conn, raw_term=token_text, canonical_term=canonical_term, correction_kind="typo")
+        bump_kb_version(kb_conn, "correction_added")
+    elif new_action == "reject":
+        add_reject_token(kb_conn, pattern=token_text, is_regex=False, label=token_text)
+        bump_kb_version(kb_conn, "reject_token_added")
+    # new_action == "accept": no KB rule needed; token stays decided in corpus
+
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_DECISIONS})
 
 
 @router.get("/health", include_in_schema=False)
@@ -1477,3 +1575,166 @@ def prompt_library_page(request: Request, paths: tuple[Path, Path] = Depends(res
         "kb": kb_name,
         "grouped": grouped,
     })
+
+
+# ---------------------------------------------------------------------------
+# Capture Rules manager
+# ---------------------------------------------------------------------------
+
+_HX_TRIGGER_RULES = '{"rulesChanged": null}'
+
+
+@router.get("/knowledge/capture-rules", include_in_schema=False)
+def capture_rules_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    return templates.TemplateResponse(request, "capture_rules.html", {"kb": kb_name})
+
+
+@router.get("/knowledge/capture-rules/partials/list", include_in_schema=False)
+def capture_rules_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.kb import list_capture_rules, open_kb
+    kb_conn = open_kb(kb_path)
+    rules = list_capture_rules(kb_conn)
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/capture_rule_list.html", {
+        "kb": kb_name,
+        "rules": rules,
+    })
+
+
+@router.get("/knowledge/capture-rules/partials/form", include_in_schema=False)
+def capture_rules_form_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    rule_id_str = request.query_params.get("rule_id", "")
+    rule = None
+    if rule_id_str:
+        from src.db.kb import list_capture_rules, open_kb
+        kb_conn = open_kb(kb_path)
+        rules = list_capture_rules(kb_conn)
+        kb_conn.close()
+        try:
+            rule_id = int(rule_id_str)
+            rule = next((r for r in rules if r["id"] == rule_id), None)
+        except ValueError:
+            pass
+    return templates.TemplateResponse(request, "partials/capture_rule_form.html", {
+        "kb": kb_name,
+        "rule": rule,
+    })
+
+
+@router.post("/knowledge/capture-rules/add", include_in_schema=False)
+async def ui_capture_rule_add(
+    request: Request,
+    pattern: str = Form(...),
+    extract_as: str = Form(...),
+    label: str = Form(""),
+    format_str: str = Form(""),
+    value_type: str = Form(""),
+    keep_token: str = Form("false"),
+    date_precision: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import add_capture_rule, open_kb
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    try:
+        existing = kb_conn.execute(
+            "SELECT id FROM capture_rules WHERE pattern=?", (pattern,)
+        ).fetchone()
+        if existing:
+            kb_conn.close()
+            return Response(
+                content="<p style='color:#dc2626'>A rule with that pattern already exists.</p>",
+                media_type="text/html",
+            )
+        add_capture_rule(
+            kb_conn,
+            pattern=pattern,
+            label=label,
+            extract_as=extract_as,
+            format_str=format_str,
+            value_type=value_type,
+            keep_token=keep_token.lower() == "true",
+            date_precision=date_precision or None,
+        )
+    finally:
+        kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Rule added.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_RULES},
+    )
+
+
+@router.post("/knowledge/capture-rules/{rule_id}/edit", include_in_schema=False)
+async def ui_capture_rule_edit(
+    rule_id: int,
+    pattern: str = Form(...),
+    extract_as: str = Form(...),
+    label: str = Form(""),
+    format_str: str = Form(""),
+    value_type: str = Form(""),
+    keep_token: str = Form("false"),
+    date_precision: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import open_kb, update_capture_rule
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    try:
+        existing = kb_conn.execute(
+            "SELECT id FROM capture_rules WHERE id=?", (rule_id,)
+        ).fetchone()
+        if not existing:
+            kb_conn.close()
+            return Response(content="<p style='color:#dc2626'>Rule not found.</p>",
+                            media_type="text/html", status_code=404)
+        update_capture_rule(
+            kb_conn,
+            rule_id=rule_id,
+            pattern=pattern,
+            label=label,
+            extract_as=extract_as,
+            format_str=format_str,
+            value_type=value_type,
+            keep_token=keep_token.lower() == "true",
+            date_precision=date_precision or None,
+        )
+    finally:
+        kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Rule updated.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_RULES},
+    )
+
+
+@router.post("/knowledge/capture-rules/{rule_id}/delete", include_in_schema=False)
+async def ui_capture_rule_delete(
+    rule_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import delete_capture_rule, open_kb
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    try:
+        existing = kb_conn.execute(
+            "SELECT id FROM capture_rules WHERE id=?", (rule_id,)
+        ).fetchone()
+        if not existing:
+            kb_conn.close()
+            return Response(content="<p style='color:#dc2626'>Rule not found.</p>",
+                            media_type="text/html", status_code=404)
+        delete_capture_rule(kb_conn, rule_id)
+    finally:
+        kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Rule deleted.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_RULES},
+    )

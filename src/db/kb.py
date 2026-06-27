@@ -94,13 +94,16 @@ def add_capture_rule(
     format_str: str = "",
     value_type: str = "",
     keep_token: bool = False,
+    date_precision: str | None = None,
 ) -> int:
     cur = conn.execute(
         """
-        INSERT INTO capture_rules (pattern, label, extract_as, format_str, value_type, keep_token)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO capture_rules
+            (pattern, label, extract_as, format_str, value_type, keep_token, date_precision)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (pattern, label, extract_as, format_str or None, value_type or None, int(keep_token)),
+        (pattern, label, extract_as, format_str or None, value_type or None,
+         int(keep_token), date_precision or None),
     )
     conn.commit()
     return cur.lastrowid
@@ -169,6 +172,21 @@ def delete_decision(conn: sqlite3.Connection, table: str, row_id: int) -> None:
     conn.commit()
 
 
+def get_decision_token(conn: sqlite3.Connection, table: str, row_id: int) -> str | None:
+    """Return the token text for an existing KB decision row, or None if not found."""
+    _COLUMN = {
+        "stoplist": ("stoplist", "term", "WHERE rowid=?"),
+        "corrections": ("corrections", "raw_term", "WHERE id=?"),
+        "capture_rules": ("capture_rules", "pattern", "WHERE id=?"),
+        "reject_tokens": ("reject_tokens", "pattern", "WHERE id=?"),
+    }
+    if table not in _COLUMN:
+        raise ValueError(f"Unknown decision table: {table!r}")
+    tbl, col, clause = _COLUMN[table]
+    row = conn.execute(f"SELECT {col} FROM {tbl} {clause}", (row_id,)).fetchone()  # noqa: S608
+    return row[col] if row else None
+
+
 def get_decisions(conn: sqlite3.Connection) -> list[dict]:
     decisions: list[dict] = []
 
@@ -230,6 +248,41 @@ def get_capture_rules(conn: sqlite3.Connection) -> list[dict]:
         " FROM capture_rules ORDER BY id"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_capture_rules(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, pattern, label, extract_as, format_str,"
+        "       keep_token, value_type, date_precision"
+        " FROM capture_rules ORDER BY id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_capture_rule(
+    conn: sqlite3.Connection,
+    rule_id: int,
+    pattern: str,
+    label: str,
+    extract_as: str,
+    format_str: str = "",
+    value_type: str = "",
+    keep_token: bool = False,
+    date_precision: str | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE capture_rules"
+        " SET pattern=?, label=?, extract_as=?, format_str=?,"
+        "     value_type=?, keep_token=?, date_precision=?"
+        " WHERE id=?",
+        (pattern, label or None, extract_as, format_str or None,
+         value_type or None, int(keep_token), date_precision or None, rule_id),
+    )
+    conn.commit()
+
+
+def delete_capture_rule(conn: sqlite3.Connection, rule_id: int) -> None:
+    delete_decision(conn, "capture_rules", rule_id)
 
 
 def get_reject_tokens(conn: sqlite3.Connection) -> list[dict]:

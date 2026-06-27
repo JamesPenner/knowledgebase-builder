@@ -162,6 +162,35 @@ def test_decide_reject_writes_reject_token(tmp_path):
     assert row is not None
 
 
+def test_decide_accept_marks_decided_with_no_kb_rule(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    open_corpus(corpus_path).close()
+    open_kb(kb_path).close()
+
+    token_id = _seed_token(corpus_path, "mountain")
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/review/normalise/decide", json={
+        "kb": "test",
+        "item_id": token_id,
+        "action": "accept",
+    })
+    assert resp.status_code == 200
+
+    conn = open_corpus(corpus_path)
+    row = conn.execute("SELECT status FROM analyse_tokens WHERE id=?", (token_id,)).fetchone()
+    conn.close()
+    assert row["status"] == "decided"
+
+    # Accept adds no KB rules (reject_tokens, corrections, capture_rules are always empty on a fresh KB)
+    kb_conn = open_kb(kb_path)
+    assert kb_conn.execute("SELECT COUNT(*) FROM reject_tokens").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0] == 0
+    kb_conn.close()
+
+
 def test_decide_marks_token_decided(tmp_path):
     corpus_path = tmp_path / "corpus.db"
     kb_path = tmp_path / "knowledge.db"
@@ -253,3 +282,157 @@ def test_delete_decision_reverts_token_to_pending(tmp_path):
     count = kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0]
     kb_conn.close()
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Bulk actions
+# ---------------------------------------------------------------------------
+
+def test_bulk_accept_all_marks_all_decided_no_kb_rules(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    open_corpus(corpus_path).close()
+    open_kb(kb_path).close()
+
+    _seed_token(corpus_path, "lake")
+    _seed_token(corpus_path, "river")
+    _seed_token(corpus_path, "mountain")
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/review/normalise/bulk", json={"kb": "test", "action": "accept_all"})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 3
+
+    conn = open_corpus(corpus_path)
+    pending = conn.execute("SELECT COUNT(*) FROM analyse_tokens WHERE status='pending'").fetchone()[0]
+    conn.close()
+    assert pending == 0
+
+    kb_conn = open_kb(kb_path)
+    assert kb_conn.execute("SELECT COUNT(*) FROM reject_tokens").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0] == 0
+    kb_conn.close()
+
+
+def test_bulk_ignore_all_adds_all_to_stoplist(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    open_corpus(corpus_path).close()
+    open_kb(kb_path).close()
+
+    _seed_token(corpus_path, "jpg")
+    _seed_token(corpus_path, "copy")
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/review/normalise/bulk", json={"kb": "test", "action": "ignore_all"})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 2
+
+    conn = open_corpus(corpus_path)
+    pending = conn.execute("SELECT COUNT(*) FROM analyse_tokens WHERE status='pending'").fetchone()[0]
+    conn.close()
+    assert pending == 0
+
+    kb_conn = open_kb(kb_path)
+    rows = kb_conn.execute("SELECT term FROM stoplist WHERE term IN ('jpg','copy')").fetchall()
+    kb_conn.close()
+    assert {r["term"] for r in rows} == {"jpg", "copy"}
+
+
+def test_bulk_reject_all_adds_all_to_reject_tokens(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    open_corpus(corpus_path).close()
+    open_kb(kb_path).close()
+
+    _seed_token(corpus_path, "img0042")
+    _seed_token(corpus_path, "dsc9999")
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/review/normalise/bulk", json={"kb": "test", "action": "reject_all"})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 2
+
+    conn = open_corpus(corpus_path)
+    pending = conn.execute("SELECT COUNT(*) FROM analyse_tokens WHERE status='pending'").fetchone()[0]
+    conn.close()
+    assert pending == 0
+
+    kb_conn = open_kb(kb_path)
+    rows = kb_conn.execute("SELECT pattern FROM reject_tokens WHERE pattern IN ('img0042','dsc9999')").fetchall()
+    kb_conn.close()
+    assert {r["pattern"] for r in rows} == {"img0042", "dsc9999"}
+
+
+def test_bulk_invalid_action_returns_400(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    open_corpus(corpus_path).close()
+    open_kb(kb_path).close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/review/normalise/bulk", json={"kb": "test", "action": "delete_everything"})
+    assert resp.status_code == 400
+
+
+def test_bulk_accept_all_on_empty_queue_returns_zero(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    open_corpus(corpus_path).close()
+    open_kb(kb_path).close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/review/normalise/bulk", json={"kb": "test", "action": "accept_all"})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# get_decision_token helper
+# ---------------------------------------------------------------------------
+
+def test_get_decision_token_stoplist(tmp_path):
+    from src.db.kb import add_to_stoplist, get_decision_token
+
+    kb_path = tmp_path / "knowledge.db"
+    kb_conn = open_kb(kb_path)
+    add_to_stoplist(kb_conn, "construction")
+    row = kb_conn.execute("SELECT rowid FROM stoplist WHERE term='construction'").fetchone()
+    result = get_decision_token(kb_conn, "stoplist", row["rowid"])
+    kb_conn.close()
+    assert result == "construction"
+
+
+def test_get_decision_token_corrections(tmp_path):
+    from src.db.kb import add_correction, get_decision_token
+
+    kb_path = tmp_path / "knowledge.db"
+    kb_conn = open_kb(kb_path)
+    add_correction(kb_conn, raw_term="tuckinleted", canonical_term="Tuck Inlet", correction_kind="typo")
+    row = kb_conn.execute("SELECT id FROM corrections WHERE raw_term='tuckinleted'").fetchone()
+    result = get_decision_token(kb_conn, "corrections", row["id"])
+    kb_conn.close()
+    assert result == "tuckinleted"
+
+
+def test_get_decision_token_reject_tokens(tmp_path):
+    from src.db.kb import add_reject_token, get_decision_token
+
+    kb_path = tmp_path / "knowledge.db"
+    kb_conn = open_kb(kb_path)
+    add_reject_token(kb_conn, pattern="img0042", is_regex=False, label="img0042")
+    row = kb_conn.execute("SELECT id FROM reject_tokens WHERE pattern='img0042'").fetchone()
+    result = get_decision_token(kb_conn, "reject_tokens", row["id"])
+    kb_conn.close()
+    assert result == "img0042"
+
+
+def test_get_decision_token_missing_returns_none(tmp_path):
+    from src.db.kb import get_decision_token
+
+    kb_path = tmp_path / "knowledge.db"
+    kb_conn = open_kb(kb_path)
+    result = get_decision_token(kb_conn, "stoplist", 9999)
+    kb_conn.close()
+    assert result is None

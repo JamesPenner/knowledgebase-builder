@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.config import Config
-from src.db.corpus import add_source, open_corpus
+from src.db.corpus import add_source, open_corpus, reset_file_exif, reset_file_fields, reset_file_hashes
 from src.db.kb import open_kb
 from src.pipeline.cancel import make_cancel_event
 from src.pipeline.progress import NullProgressReporter
@@ -104,3 +104,71 @@ def test_generate_field_map_writes_csv(tmp_path):
     csv_path = kb_path.parent / "reference" / "field_map.csv"
     assert csv_path.exists()
     assert csv_path.stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
+# Reset helpers (no ExifTool needed)
+# ---------------------------------------------------------------------------
+
+def _seed_file(conn, path="/a/b.jpg"):
+    from src.db.corpus import add_source
+    src_id = add_source(conn, "/a", "images", True)
+    conn.execute(
+        "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime) VALUES (?, ?, 'b.jpg', '.jpg', 'images', 1, 1.0)",
+        (src_id, path),
+    )
+    conn.commit()
+    return conn.execute("SELECT id FROM files WHERE path=?", (path,)).fetchone()[0]
+
+
+def test_reset_file_exif_clears_table(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    conn = open_corpus(corpus_path)
+    fid = _seed_file(conn)
+    conn.execute("INSERT INTO file_exif (file_id, metadata_json, extracted_at) VALUES (?, '{}', datetime('now'))", (fid,))
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM file_exif").fetchone()[0] == 1
+    n = reset_file_exif(conn)
+    conn.close()
+    assert n == 1
+    conn2 = open_corpus(corpus_path)
+    assert conn2.execute("SELECT COUNT(*) FROM file_exif").fetchone()[0] == 0
+    conn2.close()
+
+
+def test_reset_file_fields_clears_tables(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    conn = open_corpus(corpus_path)
+    fid = _seed_file(conn)
+    conn.execute(
+        "INSERT INTO file_metadata_fields (file_id, canonical_name, raw_field_name, value, value_type, extracted_at) VALUES (?, 'title', 'Title', 'x', 'text', datetime('now'))",
+        (fid,),
+    )
+    conn.execute("INSERT INTO file_metadata_keywords (file_id, canonical_name, keyword) VALUES (?, 'keywords', 'sunset')", (fid,))
+    conn.commit()
+    n = reset_file_fields(conn)
+    conn.close()
+    assert n == 1
+    conn2 = open_corpus(corpus_path)
+    assert conn2.execute("SELECT COUNT(*) FROM file_metadata_fields").fetchone()[0] == 0
+    assert conn2.execute("SELECT COUNT(*) FROM file_metadata_keywords").fetchone()[0] == 0
+    conn2.close()
+
+
+def test_reset_file_hashes_clears_table_and_sha256(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    conn = open_corpus(corpus_path)
+    fid = _seed_file(conn)
+    conn.execute("UPDATE files SET sha256 = 'abc123' WHERE id = ?", (fid,))
+    conn.execute(
+        "INSERT INTO file_hashes (file_id, sha256_content, phash, dhash, area_hash, hashed_at) VALUES (?, 'abc123', 'ph', 'dh', '[]', datetime('now'))",
+        (fid,),
+    )
+    conn.commit()
+    n = reset_file_hashes(conn)
+    conn.close()
+    assert n == 1
+    conn2 = open_corpus(corpus_path)
+    assert conn2.execute("SELECT COUNT(*) FROM file_hashes").fetchone()[0] == 0
+    assert conn2.execute("SELECT sha256 FROM files WHERE id=?", (fid,)).fetchone()["sha256"] is None
+    conn2.close()

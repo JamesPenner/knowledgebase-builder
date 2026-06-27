@@ -165,3 +165,118 @@ def test_preview_invalid_path_422(tmp_path, monkeypatch):
         "path": "/no/such/path/xyz", "file_type": "all", "recursive": True, "filters": {}
     })
     assert resp.status_code == 422
+
+
+def test_add_source_with_modified_after(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    _patch_registry(monkeypatch, tmp_path)
+    src_dir = tmp_path / "photos"
+    src_dir.mkdir()
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/kb/test/sources", json={
+        "path": str(src_dir), "file_type": "all", "recursive": True, "filters": {},
+        "modified_after": "2024-01-01",
+    })
+    assert resp.status_code == 200
+    import json
+    conn = open_corpus(corpus_path)
+    row = conn.execute("SELECT filters_json FROM sources WHERE id=?", (resp.json()["id"],)).fetchone()
+    stored = json.loads(row["filters_json"])
+    assert stored["modified_after"] == "2024-01-01"
+    conn.close()
+
+
+def test_add_source_with_exclude_patterns(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    _patch_registry(monkeypatch, tmp_path)
+    src_dir = tmp_path / "photos"
+    src_dir.mkdir()
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/kb/test/sources", json={
+        "path": str(src_dir), "file_type": "all", "recursive": True, "filters": {},
+        "exclude_patterns": ["@eaDir", "#recycle"],
+    })
+    assert resp.status_code == 200
+    import json
+    conn = open_corpus(corpus_path)
+    row = conn.execute("SELECT filters_json FROM sources WHERE id=?", (resp.json()["id"],)).fetchone()
+    stored = json.loads(row["filters_json"])
+    assert stored["exclude_patterns"] == ["@eaDir", "#recycle"]
+    conn.close()
+
+
+def test_preview_source_with_exclude_patterns(tmp_path, monkeypatch):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    keep_dir = src_dir / "photos"
+    keep_dir.mkdir()
+    skip_dir = src_dir / "@eaDir"
+    skip_dir.mkdir()
+    (keep_dir / "a.jpg").write_bytes(b"x")
+    (skip_dir / "thumb.jpg").write_bytes(b"x")
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    _patch_registry(monkeypatch, tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post("/api/kb/test/sources/preview", json={
+        "path": str(src_dir), "file_type": "all", "recursive": True, "filters": {},
+        "exclude_patterns": ["@eaDir"],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/kb/{name}/sources/{source_id}
+# ---------------------------------------------------------------------------
+
+def test_update_source_changes_file_type(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    conn = open_corpus(corpus_path)
+    src_id = add_source(conn, "/photos", file_type="all")
+    conn.close()
+    _patch_registry(monkeypatch, tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    resp = client.patch(f"/api/kb/test/sources/{src_id}", json={
+        "file_type": "images", "recursive": True, "filters": {},
+    })
+    assert resp.status_code == 200
+    assert resp.json()["updated"] is True
+    conn2 = open_corpus(corpus_path)
+    row = conn2.execute("SELECT file_type FROM sources WHERE id=?", (src_id,)).fetchone()
+    conn2.close()
+    assert row["file_type"] == "images"
+
+
+def test_update_source_stores_filters(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    conn = open_corpus(corpus_path)
+    src_id = add_source(conn, "/photos")
+    conn.close()
+    _patch_registry(monkeypatch, tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    resp = client.patch(f"/api/kb/test/sources/{src_id}", json={
+        "file_type": "all", "recursive": False,
+        "filters": {"glob": "2024-*"},
+        "modified_after": "2024-01-01",
+        "exclude_patterns": ["@eaDir"],
+    })
+    assert resp.status_code == 200
+    import json
+    conn2 = open_corpus(corpus_path)
+    row = conn2.execute("SELECT filters_json, recursive FROM sources WHERE id=?", (src_id,)).fetchone()
+    conn2.close()
+    stored = json.loads(row["filters_json"])
+    assert stored["glob"] == "2024-*"
+    assert stored["modified_after"] == "2024-01-01"
+    assert stored["exclude_patterns"] == ["@eaDir"]
+    assert row["recursive"] == 0
+
+
+def test_update_source_not_found_returns_404(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    _patch_registry(monkeypatch, tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    resp = client.patch("/api/kb/test/sources/9999", json={
+        "file_type": "all", "recursive": True, "filters": {},
+    })
+    assert resp.status_code == 404

@@ -1,4 +1,4 @@
-"""Integration tests for KB.T2 — Scope Selector."""
+"""Integration tests for KB.T2 — Scope Selector (updated for KB.V1 run_mode)."""
 from pathlib import Path
 
 import pytest
@@ -9,10 +9,6 @@ from src.api.deps import resolve_kb
 from src.db.corpus import open_corpus
 from src.db.kb import open_kb
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _make_client(corpus_path: Path, kb_path: Path) -> TestClient:
     def _override():
@@ -45,19 +41,17 @@ def _add_source(conn, path: str, removed: bool = False) -> int:
 
 
 def _kb_folder_stub(tmp_path):
-    """Returns a function that patches _get_kb_folder to point at tmp_path."""
     return lambda _kb: tmp_path
+
+
+def _patch_kb_registry(monkeypatch, tmp_path):
+    monkeypatch.setattr("src.db.registry.get_kb_path", lambda reg, name: tmp_path)
+    monkeypatch.setattr("src.db.registry.open_registry", lambda p: None)
 
 
 # ---------------------------------------------------------------------------
 # GET /api/kb/{name}/sources
 # ---------------------------------------------------------------------------
-
-def _patch_kb_registry(monkeypatch, tmp_path):
-    """Patch registry lookups so kb_sources/stats/health point at tmp_path."""
-    monkeypatch.setattr("src.db.registry.get_kb_path", lambda reg, name: tmp_path)
-    monkeypatch.setattr("src.db.registry.open_registry", lambda p: None)
-
 
 def test_get_sources_returns_list(tmp_path, monkeypatch):
     corpus_path, kb_path = _open_dbs(tmp_path)
@@ -103,99 +97,99 @@ def test_get_sources_excludes_removed(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Run endpoints accept scope params
+# Run endpoints accept run_mode + independent filter params
 # ---------------------------------------------------------------------------
 
-def test_run_describe_scope_resume(tmp_path, monkeypatch):
+def test_run_describe_run_mode_resume(tmp_path, monkeypatch):
     corpus_path, kb_path = _open_dbs(tmp_path)
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
     client = _make_client(corpus_path, kb_path)
-    resp = client.post("/api/stages/describe/run", json={"kb": "test", "scope_mode": "resume"})
+    resp = client.post("/api/stages/describe/run", json={"kb": "test", "run_mode": "resume"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "started"
 
 
-def test_run_describe_scope_by_source(tmp_path, monkeypatch):
-    corpus_path, kb_path = _open_dbs(tmp_path)
-    import src.api.pipeline as pm
-    monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
-    client = _make_client(corpus_path, kb_path)
-    resp = client.post(
-        "/api/stages/describe/run",
-        json={"kb": "test", "scope_mode": "by_source", "source_id": 1},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "started"
-
-
-def test_run_describe_scope_by_type(tmp_path, monkeypatch):
+def test_run_describe_with_source_id(tmp_path, monkeypatch):
     corpus_path, kb_path = _open_dbs(tmp_path)
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
     client = _make_client(corpus_path, kb_path)
     resp = client.post(
         "/api/stages/describe/run",
-        json={"kb": "test", "scope_mode": "by_type", "file_type": "image"},
+        json={"kb": "test", "run_mode": "resume", "source_id": 1},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "started"
 
 
-def test_run_describe_scope_rerun(tmp_path, monkeypatch):
+def test_run_describe_with_file_type(tmp_path, monkeypatch):
     corpus_path, kb_path = _open_dbs(tmp_path)
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
     client = _make_client(corpus_path, kb_path)
     resp = client.post(
         "/api/stages/describe/run",
-        json={"kb": "test", "scope_mode": "rerun"},
+        json={"kb": "test", "run_mode": "resume", "file_type": "images"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "started"
 
 
-def test_run_quality_scope_rerun(tmp_path, monkeypatch):
+def test_run_describe_run_mode_rerun(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    import src.api.pipeline as pm
+    monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post(
+        "/api/stages/describe/run",
+        json={"kb": "test", "run_mode": "rerun"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "started"
+
+
+def test_run_quality_run_mode_rerun(tmp_path, monkeypatch):
     corpus_path, kb_path = _open_dbs(tmp_path)
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
     client = _make_client(corpus_path, kb_path)
     resp = client.post(
         "/api/stages/quality/run",
-        json={"kb": "test", "scope_mode": "rerun"},
+        json={"kb": "test", "run_mode": "rerun"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "started"
 
 
-def test_run_transcribe_scope_by_source(tmp_path, monkeypatch):
+def test_run_transcribe_with_source_id(tmp_path, monkeypatch):
     corpus_path, kb_path = _open_dbs(tmp_path)
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
     client = _make_client(corpus_path, kb_path)
     resp = client.post(
         "/api/stages/transcribe/run",
-        json={"kb": "test", "scope_mode": "by_source", "source_id": 2},
+        json={"kb": "test", "run_mode": "resume", "source_id": 2},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "started"
 
 
-def test_unknown_scope_mode_does_not_error(tmp_path, monkeypatch):
-    """RunRequest accepts any string for scope_mode; unknown values fall back to resume."""
+def test_unknown_run_mode_does_not_error(tmp_path, monkeypatch):
+    """RunRequest accepts any string for run_mode; unknown values fall back to resume."""
     corpus_path, kb_path = _open_dbs(tmp_path)
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", _kb_folder_stub(tmp_path))
     client = _make_client(corpus_path, kb_path)
     resp = client.post(
         "/api/stages/describe/run",
-        json={"kb": "test", "scope_mode": "some_future_mode"},
+        json={"kb": "test", "run_mode": "some_future_mode"},
     )
     assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
-# Pipeline page includes sources
+# Pipeline page HTML
 # ---------------------------------------------------------------------------
 
 def test_pipeline_page_includes_sources_context(tmp_path):
@@ -207,15 +201,33 @@ def test_pipeline_page_includes_sources_context(tmp_path):
     client = _make_client(corpus_path, kb_path)
     resp = client.get("/pipeline?kb=test")
     assert resp.status_code == 200
-    # Sources are injected as KB_SOURCES in page JS
     assert "KB_SOURCES" in resp.text
 
 
-def test_pipeline_page_scope_selector_present(tmp_path):
+def test_pipeline_page_scope_bar_present(tmp_path):
     corpus_path, kb_path = _open_dbs(tmp_path)
     client = _make_client(corpus_path, kb_path)
     resp = client.get("/pipeline?kb=test")
     assert resp.status_code == 200
-    assert "scope-mode" in resp.text
+    assert "wb-scope-bar" in resp.text
     assert "scope-source" in resp.text
     assert "scope-type" in resp.text
+    assert "scope-set" in resp.text
+
+
+def test_pipeline_page_sources_header_present(tmp_path):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/pipeline?kb=test")
+    assert resp.status_code == 200
+    assert "wb-sources" in resp.text
+    assert "wb-sources-header" in resp.text
+
+
+def test_pipeline_page_run_mode_toggle_present(tmp_path):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/pipeline?kb=test")
+    assert resp.status_code == 200
+    assert "wb-run-mode" in resp.text
+    assert "setAllModes" in resp.text

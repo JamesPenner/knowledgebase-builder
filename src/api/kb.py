@@ -74,18 +74,58 @@ class SourceCreateRequest(BaseModel):
     file_type: str = "all"
     recursive: bool = True
     filters: dict = {}
+    modified_after: str | None = None
+    exclude_patterns: list[str] = []
 
 
 @router.post("/{name}/sources", tags=["kb"])
 def kb_add_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
     from src.db.corpus import add_source, open_corpus
+    from src.pipeline.filter_spec import FilterSpec
     folder = _get_kb_folder(name)
     if not Path(req.path).exists():
         raise HTTPException(status_code=422, detail=f"Path does not exist: {req.path}")
     conn = open_corpus(folder / "corpus.db")
     try:
-        source_id = add_source(conn, req.path, req.file_type, req.recursive, req.filters)
+        spec = FilterSpec(
+            file_type=req.file_type,
+            glob=req.filters.get("glob"),
+            count_limit=req.filters.get("count_limit"),
+            modified_after=req.modified_after,
+            exclude_patterns=req.exclude_patterns,
+        )
+        source_id = add_source(conn, req.path, req.file_type, req.recursive, spec.to_dict())
         return {"id": source_id, "path": req.path}
+    finally:
+        conn.close()
+
+
+class SourceUpdateRequest(BaseModel):
+    file_type: str = "all"
+    recursive: bool = True
+    filters: dict = {}
+    modified_after: str | None = None
+    exclude_patterns: list[str] = []
+
+
+@router.patch("/{name}/sources/{source_id}", tags=["kb"])
+def kb_update_source(name: str, source_id: int, req: SourceUpdateRequest) -> dict[str, Any]:
+    from src.db.corpus import open_corpus, update_source
+    from src.pipeline.filter_spec import FilterSpec
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    try:
+        spec = FilterSpec(
+            file_type=req.file_type,
+            glob=req.filters.get("glob"),
+            count_limit=req.filters.get("count_limit"),
+            modified_after=req.modified_after,
+            exclude_patterns=req.exclude_patterns,
+        )
+        found = update_source(conn, source_id, req.file_type, req.recursive, spec.to_dict())
+        if not found:
+            raise HTTPException(status_code=404, detail=f"Source {source_id} not found")
+        return {"id": source_id, "updated": True}
     finally:
         conn.close()
 
@@ -105,6 +145,7 @@ def kb_remove_source(name: str, source_id: int, cascade: bool = False) -> dict[s
 @router.post("/{name}/sources/preview", tags=["kb"])
 def kb_preview_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
     import os
+    from src.pipeline.filter_spec import FilterSpec
     from src.stages.ingest import apply_source_filters, detect_file_type
     # name is not used — preview only scans the filesystem
     src_path = Path(req.path)
@@ -121,7 +162,14 @@ def kb_preview_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
         if not req.recursive:
             break
 
-    candidates = apply_source_filters(candidates, req.filters)
+    spec = FilterSpec(
+        file_type=req.file_type,
+        glob=req.filters.get("glob"),
+        count_limit=req.filters.get("count_limit"),
+        modified_after=req.modified_after,
+        exclude_patterns=req.exclude_patterns,
+    )
+    candidates = apply_source_filters(candidates, spec.to_dict())
 
     by_type: dict[str, int] = {}
     for p in candidates:
@@ -151,7 +199,16 @@ def kb_sources_panel(name: str, request: Request):
                 parts.append(f"glob: {filters['glob']}")
             if filters.get("count_limit") is not None:
                 parts.append(f"limit: {filters['count_limit']}")
+            if filters.get("modified_after"):
+                parts.append(f"after: {filters['modified_after']}")
+            if filters.get("exclude_patterns"):
+                parts.append(f"exclude: {', '.join(filters['exclude_patterns'])}")
             d["filters_summary"] = ", ".join(parts) if parts else ""
+            # Expose parsed filter fields for edit form pre-population
+            d["f_glob"] = filters.get("glob") or ""
+            d["f_count_limit"] = filters.get("count_limit") or ""
+            d["f_modified_after"] = filters.get("modified_after") or ""
+            d["f_exclude_patterns"] = ", ".join(filters.get("exclude_patterns") or [])
             sources.append(d)
         sets = [dict(r) for r in get_file_sets(conn)]
     finally:

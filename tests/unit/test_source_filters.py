@@ -54,3 +54,35 @@ def test_unknown_key_ignored():
 def test_empty_file_list():
     result = apply_source_filters([], {"glob": "*.jpg", "count_limit": 10})
     assert result == []
+
+
+def test_modified_after_excludes_old_files(tmp_path):
+    import time
+    old = tmp_path / "old.jpg"
+    new = tmp_path / "new.jpg"
+    old.write_bytes(b"x")
+    time.sleep(0.05)
+    cutoff = __import__("datetime").datetime.now().isoformat()
+    time.sleep(0.05)
+    new.write_bytes(b"x")
+    result = apply_source_filters([old, new], {"modified_after": cutoff})
+    assert result == [new]
+
+
+def test_modified_after_passes_new_files(tmp_path):
+    f = tmp_path / "img.jpg"
+    f.write_bytes(b"x")
+    past = "2000-01-01"
+    result = apply_source_filters([f], {"modified_after": past})
+    assert result == [f]
+
+
+def test_exclude_patterns_skips_matching_components(tmp_path):
+    keep = tmp_path / "photos" / "a.jpg"
+    skip = tmp_path / "@eaDir" / "thumb.jpg"
+    keep.parent.mkdir()
+    skip.parent.mkdir()
+    keep.write_bytes(b"x")
+    skip.write_bytes(b"x")
+    result = apply_source_filters([keep, skip], {"exclude_patterns": ["@eaDir"]})
+    assert result == [keep]

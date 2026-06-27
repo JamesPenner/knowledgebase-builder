@@ -31,20 +31,42 @@ def apply_source_filters(files: list[Path], filters: dict) -> list[Path]:
     """Apply filter criteria to a list of candidate file Paths.
 
     Recognised keys (applied in order):
-      glob         — fnmatch pattern matched against file.name only
-      count_limit  — truncate list to first N after glob filter
+      modified_after   — ISO date string; skip files with mtime before this date
+      exclude_patterns — list of fnmatch patterns; skip files whose path components match any
+      glob             — fnmatch pattern matched against file.name only
+      count_limit      — truncate list to first N after other filters
     Unknown keys are silently ignored.
     """
+    from datetime import datetime
+
     result = files
+
+    modified_after = filters.get("modified_after")
+    if modified_after:
+        try:
+            threshold = datetime.fromisoformat(modified_after).timestamp()
+            result = [f for f in result if f.stat().st_mtime >= threshold]
+        except (ValueError, OSError):
+            pass
+
+    exclude_patterns = filters.get("exclude_patterns") or []
+    if exclude_patterns:
+        def _excluded(path: Path) -> bool:
+            parts = path.parts
+            return any(fnmatch.fnmatch(part, pat) for part in parts for pat in exclude_patterns)
+        result = [f for f in result if not _excluded(f)]
+
     glob_pat = filters.get("glob")
     if glob_pat:
         result = [f for f in result if fnmatch.fnmatch(f.name, glob_pat)]
+
     count_limit = filters.get("count_limit")
     if count_limit is not None:
         try:
             result = result[: int(count_limit)]
         except (TypeError, ValueError):
             pass
+
     return result
 
 

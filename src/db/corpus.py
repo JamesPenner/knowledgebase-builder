@@ -129,6 +129,22 @@ def get_sources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def update_source(
+    conn: sqlite3.Connection,
+    source_id: int,
+    file_type: str,
+    recursive: bool,
+    filters_json: dict,
+) -> bool:
+    import json as _json
+    cur = conn.execute(
+        "UPDATE sources SET file_type=?, recursive=?, filters_json=? WHERE id=? AND removed_at IS NULL",
+        (file_type, int(recursive), _json.dumps(filters_json), source_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 # ---------------------------------------------------------------------------
 # File sets
 # ---------------------------------------------------------------------------
@@ -314,6 +330,18 @@ def set_token_decided(conn: sqlite3.Connection, token_id: int) -> None:
     conn.commit()
 
 
+def get_all_pending_tokens(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, token FROM analyse_tokens WHERE status='pending' ORDER BY id"
+    ).fetchall()
+
+
+def set_all_pending_decided(conn: sqlite3.Connection) -> int:
+    cur = conn.execute("UPDATE analyse_tokens SET status='decided' WHERE status='pending'")
+    conn.commit()
+    return cur.rowcount
+
+
 def set_token_pending(conn: sqlite3.Connection, token_id: int) -> None:
     conn.execute("UPDATE analyse_tokens SET status='pending' WHERE id=?", (token_id,))
     conn.commit()
@@ -393,6 +421,12 @@ def get_files_with_exif(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def reset_file_exif(conn: sqlite3.Connection) -> int:
+    cur = conn.execute("DELETE FROM file_exif")
+    conn.commit()
+    return cur.rowcount
+
+
 # ---------------------------------------------------------------------------
 # Extracted metadata fields
 # ---------------------------------------------------------------------------
@@ -446,9 +480,23 @@ def get_files_without_fields(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def reset_file_fields(conn: sqlite3.Connection) -> int:
+    conn.execute("DELETE FROM file_metadata_keywords")
+    cur = conn.execute("DELETE FROM file_metadata_fields")
+    conn.commit()
+    return cur.rowcount
+
+
 # ---------------------------------------------------------------------------
 # File hashes
 # ---------------------------------------------------------------------------
+
+def reset_file_hashes(conn: sqlite3.Connection) -> int:
+    conn.execute("UPDATE files SET sha256 = NULL")
+    cur = conn.execute("DELETE FROM file_hashes")
+    conn.commit()
+    return cur.rowcount
+
 
 def get_files_without_hash(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(

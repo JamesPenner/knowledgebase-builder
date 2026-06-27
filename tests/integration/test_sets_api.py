@@ -156,6 +156,6 @@ def test_run_describe_scope_by_set(tmp_path, monkeypatch):
     import src.api.pipeline as pm
     monkeypatch.setattr(pm, "_get_kb_folder", lambda _kb: tmp_path)
     client = _make_client(corpus_path, kb_path)
-    resp = client.post("/api/stages/describe/run", json={"kb": "test", "scope_mode": "by_set", "set_id": 1})
+    resp = client.post("/api/stages/describe/run", json={"kb": "test", "run_mode": "resume", "set_id": 1})
     assert resp.status_code == 200
     assert resp.json()["status"] == "started"

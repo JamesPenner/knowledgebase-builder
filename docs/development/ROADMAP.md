@@ -16,9 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1332 passing, 2 skipped, ruff clean
-- **Last completed sprint:** KB.U1 (Source Management & File Sets, 1332 tests)
-- **Next planned sprint:** KB.V1 (Pipeline Workbench: Sources + Scope Restructure) — see `sprints/planned/KB.V1.md`
+- **Tests:** 1378 passing, 2 skipped, ruff clean
+- **Last completed sprint:** KB.W1 (Capture Rules Manager, 1378 tests)
+- **Next planned sprint:** TBD
 
 ---
 
