@@ -1,6 +1,155 @@
 /* Workbench multi-stage orchestration */
 const WB = (() => {
 
+  // ---------------------------------------------------------------------------
+  // Stage mode tracking
+  // ---------------------------------------------------------------------------
+
+  let _globalMode = 'resume';
+  const _stageModes = {};   // per-stage override; null means "use global"
+
+  function getStageMode(stage) {
+    return _stageModes[stage] !== undefined ? _stageModes[stage] : _globalMode;
+  }
+
+  function setAllModes(mode) {
+    _globalMode = mode;
+    Object.keys(_stageModes).forEach(s => delete _stageModes[s]);
+    // Update global toggle buttons
+    document.querySelectorAll('.wb-mode-btn').forEach(btn => {
+      btn.classList.toggle('wb-mode-btn--active', btn.dataset.mode === mode);
+    });
+    // Update all stage mode indicators
+    document.querySelectorAll('[data-stage-mode-btn]').forEach(btn => {
+      const stage = btn.dataset.stageModeBtn;
+      _refreshStageModeBtn(stage);
+    });
+  }
+
+  function toggleStageMode(stage) {
+    const current = getStageMode(stage);
+    if (stage === 'ingest') {
+      _stageModes[stage] = current === 'incremental' ? 'full' : 'incremental';
+    } else {
+      _stageModes[stage] = current === 'rerun' ? 'resume' : 'rerun';
+    }
+    _refreshStageModeBtn(stage);
+  }
+
+  function _refreshStageModeBtn(stage) {
+    const btn = document.querySelector(`[data-stage-mode-btn="${stage}"]`);
+    if (!btn) return;
+    const m = getStageMode(stage);
+    if (stage === 'ingest') {
+      btn.textContent = m === 'incremental' ? 'Incremental' : 'Full scan';
+    } else {
+      btn.textContent = m === 'rerun' ? 'Re-run' : 'Resume';
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sources header collapse/expand
+  // ---------------------------------------------------------------------------
+
+  function toggleSources() {
+    const body = document.getElementById('wb-sources-body');
+    const arrow = document.getElementById('wb-sources-arrow');
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    if (arrow) arrow.textContent = open ? '▸' : '▾';
+    try {
+      const kb = window.KB_NAME || '';
+      localStorage.setItem('kb-sources-open-' + kb, open ? '0' : '1');
+    } catch (_) {}
+  }
+
+  function _initSources() {
+    const body = document.getElementById('wb-sources-body');
+    const arrow = document.getElementById('wb-sources-arrow');
+    if (!body) return;
+    const kb = window.KB_NAME || '';
+    const sources = window.KB_SOURCES || [];
+
+    let open;
+    if (sources.length === 0) {
+      open = true;
+    } else {
+      try {
+        const stored = localStorage.getItem('kb-sources-open-' + kb);
+        open = stored === '1';
+      } catch (_) {
+        open = false;
+      }
+    }
+    body.style.display = open ? '' : 'none';
+    if (arrow) arrow.textContent = open ? '▾' : '▸';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scope bar
+  // ---------------------------------------------------------------------------
+
+  function getScope() {
+    const srcSel = document.getElementById('scope-source');
+    const typeSel = document.getElementById('scope-type');
+    const setSel = document.getElementById('scope-set');
+    const source_id = srcSel && srcSel.value ? parseInt(srcSel.value, 10) : null;
+    const file_type = typeSel && typeSel.value ? typeSel.value : null;
+    const set_id = setSel && setSel.value ? parseInt(setSel.value, 10) : null;
+    return {source_id, file_type, set_id};
+  }
+
+  function onScopeChange() {
+    window.KB_SCOPE = getScope();
+  }
+
+  function _initScopeBar() {
+    const sources = window.KB_SOURCES || [];
+    const sets = window.KB_SETS || [];
+
+    const srcSel = document.getElementById('scope-source');
+    if (srcSel) {
+      if (sources.length >= 2) {
+        sources.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.path;
+          srcSel.appendChild(opt);
+        });
+        srcSel.closest('.wb-scope-bar-item').style.display = '';
+      } else {
+        const item = srcSel.closest('.wb-scope-bar-item');
+        if (item) item.style.display = 'none';
+      }
+    }
+
+    const setSel = document.getElementById('scope-set');
+    if (setSel) {
+      if (sets.length > 0) {
+        sets.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name + ' (' + s.file_count + ' files)';
+          setSel.appendChild(opt);
+        });
+        setSel.closest('.wb-scope-bar-item').style.display = '';
+      } else {
+        const item = setSel.closest('.wb-scope-bar-item');
+        if (item) item.style.display = 'none';
+      }
+    }
+
+    window.KB_SCOPE = getScope();
+  }
+
+  // Keep for HTMX panel reload compatibility
+  function reloadSets() { _initScopeBar(); }
+
+  // ---------------------------------------------------------------------------
+  // Checkbox / selection
+  // ---------------------------------------------------------------------------
+
   function _checkedStages() {
     return Array.from(document.querySelectorAll('input[type=checkbox][id^="check-"]'))
       .filter(cb => cb.checked && !cb.disabled)
@@ -13,121 +162,20 @@ const WB = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Scope selector
-  // ---------------------------------------------------------------------------
-
-  function getScope() {
-    const modeEl = document.getElementById('scope-mode');
-    const mode = modeEl ? modeEl.value : 'resume';
-    let source_id = null;
-    let file_type = null;
-    let set_id = null;
-    if (mode === 'by_source') {
-      const sel = document.getElementById('scope-source');
-      source_id = sel && sel.value ? parseInt(sel.value, 10) : null;
-    }
-    if (mode === 'by_type') {
-      const checked = [...document.querySelectorAll('#scope-type input[type=checkbox]:checked')]
-        .map(e => e.value);
-      file_type = checked.length ? checked.join(',') : null;
-    }
-    if (mode === 'by_set') {
-      const sel = document.getElementById('scope-set');
-      set_id = sel && sel.value ? parseInt(sel.value, 10) : null;
-    }
-    return {scope_mode: mode, source_id, file_type, set_id};
-  }
-
-  function _updateScopeSummary() {
-    const sc = window.KB_SCOPE || {};
-    const el = document.getElementById('scope-summary');
-    if (!el) return;
-    if (sc.scope_mode === 'resume') {
-      el.textContent = 'Processing: all pending files';
-    } else if (sc.scope_mode === 'rerun') {
-      el.textContent = 'Processing: all files (resetting stage first)';
-    } else if (sc.scope_mode === 'new_files') {
-      el.textContent = 'Processing: new files only (runs ingest first)';
-    } else if (sc.scope_mode === 'by_source') {
-      const src = (window.KB_SOURCES || []).find(s => s.id === sc.source_id);
-      el.textContent = src ? 'Processing: source ' + src.path : 'Processing: selected source';
-    } else if (sc.scope_mode === 'by_type') {
-      el.textContent = 'Processing: ' + (sc.file_type || 'all types') + ' files';
-    } else if (sc.scope_mode === 'by_set') {
-      const s = (window.KB_SETS || []).find(x => x.id === sc.set_id);
-      el.textContent = s ? 'Processing: ' + s.file_count + ' files from set \'' + s.name + '\'' : 'Processing: selected set';
-    }
-  }
-
-  function onScopeChange() {
-    const mode = document.getElementById('scope-mode').value;
-    const srcSel = document.getElementById('scope-source');
-    const typeEl = document.getElementById('scope-type');
-    const setSel = document.getElementById('scope-set');
-    if (srcSel) srcSel.style.display = mode === 'by_source' ? '' : 'none';
-    if (typeEl) typeEl.style.display = mode === 'by_type' ? '' : 'none';
-    if (setSel) setSel.style.display = mode === 'by_set' ? '' : 'none';
-    window.KB_SCOPE = getScope();
-    _updateScopeSummary();
-  }
-
-  function _loadSources() {
-    const sources = window.KB_SOURCES || [];
-    const sel = document.getElementById('scope-source');
-    if (!sel) return;
-    sources.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.id;
-      opt.textContent = s.path;
-      sel.appendChild(opt);
-    });
-  }
-
-  function _loadSets() {
-    const sets = window.KB_SETS || [];
-    const sel = document.getElementById('scope-set');
-    if (!sel) return;
-    sets.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.id;
-      opt.textContent = s.name + ' (' + s.file_count + ' files)';
-      sel.appendChild(opt);
-    });
-  }
-
-  // ---------------------------------------------------------------------------
   // Stage execution
   // ---------------------------------------------------------------------------
 
-  /* Returns a Promise that resolves with 'done' or rejects with 'failed'
-     when the stage's SSE stream completes. Delegates the actual run to
-     the existing runStage() from pipeline.js but intercepts its EventSource
-     via a wrapper EventSource that resolves on completion. */
-  function _runStageAsync(stage) {
+  async function _runStageAsync(stage) {
+    const kb = window.KB_NAME;
+    await runStage(stage, kb);
     return new Promise((resolve, reject) => {
-      const kb = window.KB_NAME;
-
-      /* Patch: after runStage fires, attach a second listener to the stream
-         to get the terminal status. runStage already manages the badge/button
-         UI; we just need to know when it finishes. */
-      runStage(stage, kb);
-
-      /* Poll the stream independently so we can await completion */
       const es = new EventSource('/api/stages/' + stage + '/stream');
       es.onmessage = function (e) {
         const d = JSON.parse(e.data);
-        if (d.status === 'done') {
-          es.close();
-          resolve('done');
-        } else if (d.status === 'failed') {
-          es.close();
-          reject(new Error('Stage ' + stage + ' failed: ' + (d.message || '')));
-        }
+        if (d.status === 'done') { es.close(); resolve('done'); }
+        else if (d.status === 'failed') { es.close(); reject(new Error('Stage ' + stage + ' failed: ' + (d.message || ''))); }
       };
-      es.onerror = function () {
-        es.close();
-        reject(new Error('SSE error on stage ' + stage));
-      };
+      es.onerror = function () { es.close(); reject(new Error('SSE error on stage ' + stage)); };
     });
   }
 
@@ -136,62 +184,33 @@ const WB = (() => {
     window.KB_SCOPE = scope;
     const completed = [...(window.KB_CHECKPOINTS || [])];
 
-    /* For new_files mode: force ingest to run (even if already completed) */
-    let planStages = [...stages];
-    let effectiveCompleted = completed;
-    if (scope.scope_mode === 'new_files') {
-      if (!planStages.includes('ingest')) planStages = ['ingest', ...planStages];
-      effectiveCompleted = completed.filter(s => s !== 'ingest');
-    }
-
     let plan;
     try {
       const resp = await fetch('/api/stages/resolve-plan', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({stages: planStages, completed: effectiveCompleted}),
+        body: JSON.stringify({stages, completed}),
       });
-      if (!resp.ok) {
-        console.error('resolve-plan failed', await resp.text());
-        return;
-      }
+      if (!resp.ok) { console.error('resolve-plan failed', await resp.text()); return; }
       plan = (await resp.json()).plan;
-    } catch (err) {
-      console.error('resolve-plan error', err);
-      return;
-    }
+    } catch (err) { console.error('resolve-plan error', err); return; }
 
-    /* Filter plan to runnable stages (strings, not touchpoint dicts) */
+    window.WB_RUNNING_PLAN = true;
     const runnable = plan.filter(e => typeof e === 'string');
-
     for (const stage of runnable) {
       try {
         await _runStageAsync(stage);
-        /* Add to local checkpoints so subsequent dep resolution in this
-           session is accurate. */
-        if (!window.KB_CHECKPOINTS.includes(stage)) {
-          window.KB_CHECKPOINTS.push(stage);
-        }
-      } catch (err) {
-        console.error('Stopping plan: ' + err.message);
-        break;
-      }
+        if (!window.KB_CHECKPOINTS.includes(stage)) window.KB_CHECKPOINTS.push(stage);
+      } catch (err) { console.error('Stopping plan: ' + err.message); break; }
     }
+    window.WB_RUNNING_PLAN = false;
+    location.reload();
   }
 
-  function runSelected() {
-    _runPlan(_checkedStages());
-  }
-
-  function runGroup(groupId) {
-    const stages = (window.KB_GROUP_STAGES || {})[groupId] || [];
-    _runPlan(stages);
-  }
-
+  function runSelected() { _runPlan(_checkedStages()); }
+  function runGroup(groupId) { _runPlan((window.KB_GROUP_STAGES || {})[groupId] || []); }
   function runAll() {
-    const all = (window.KB_GROUPS || []).flatMap(
-      id => (window.KB_GROUP_STAGES || {})[id] || []
-    );
+    const all = (window.KB_GROUPS || []).flatMap(id => (window.KB_GROUP_STAGES || {})[id] || []);
     _runPlan(all);
   }
 
@@ -204,12 +223,13 @@ const WB = (() => {
     if (btn) btn.textContent = visible ? '▸' : '▾';
   }
 
-  /* Initialise on page load */
   document.addEventListener('DOMContentLoaded', function () {
-    _loadSources();
-    _loadSets();
-    window.KB_SCOPE = getScope();
+    _initSources();
+    _initScopeBar();
   });
 
-  return {runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, getScope, reloadSets: _loadSets};
+  return {
+    runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, getScope,
+    toggleSources, setAllModes, toggleStageMode, getStageMode, reloadSets,
+  };
 })();

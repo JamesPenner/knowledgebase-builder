@@ -212,7 +212,7 @@ def test_pipeline_page_touchpoints_keys_present(tmp_path):
     corpus_path, kb_path = _open_dbs(tmp_path)
     client = _make_client(corpus_path, kb_path)
     resp = client.get("/pipeline?kb=test")
-    # All three review links should appear in the rendered page
-    assert "/review/normalise" in resp.text
-    assert "/review/suggest" in resp.text
-    assert "/review/new-terms" in resp.text
+    # Gate banners for all three review touchpoints should always appear (links are conditional on data)
+    assert "Normalise Review" in resp.text
+    assert "Suggest Review" in resp.text
+    assert "New Terms Review" in resp.text

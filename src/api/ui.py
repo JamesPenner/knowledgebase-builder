@@ -60,31 +60,38 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         token_counts = get_analyse_token_counts(corpus_conn)
         candidate_counts = get_candidate_counts(corpus_conn)
         new_terms = get_new_terms_candidates(corpus_conn, kb_conn)
-        sources = [{"id": r["id"], "path": r["path"]} for r in get_sources(corpus_conn)]
+        sources = [{"id": r["id"], "path": r["path"], "file_count": r["file_count_ingested"] or 0} for r in get_sources(corpus_conn)]
         sets = [{"id": r["id"], "name": r["name"], "file_count": r["file_count"]} for r in get_file_sets(corpus_conn)]
     finally:
         corpus_conn.close()
         kb_conn.close()
 
     # Touchpoint completion
+    _norm_pending = token_counts["total"] - token_counts["reviewed"]
     touchpoints = {
         "normalise_review": {
             "completed": token_counts["total"] > 0 and token_counts["reviewed"] == token_counts["total"],
             "url": f"/review/normalise?kb={kb_name}",
             "label": "Normalise Review",
             "description": "Approve or reject candidate vocabulary terms before continuing",
+            "pending": _norm_pending,
+            "total": token_counts["total"],
         },
         "suggest_review": {
             "completed": candidate_counts["total"] > 0 and candidate_counts["pending"] == 0,
             "url": f"/review/suggest?kb={kb_name}",
             "label": "Suggest Review",
             "description": "Review proposed vocabulary terms before retagging",
+            "pending": candidate_counts["pending"],
+            "total": candidate_counts["total"],
         },
         "new_terms_review": {
             "completed": len(new_terms) == 0 and bool(checkpoints.get("retag")),
             "url": f"/review/new-terms?kb={kb_name}",
             "label": "New Terms Review",
             "description": "Accept or reject terms proposed by the retag stage",
+            "pending": len(new_terms),
+            "total": len(new_terms),
         },
     }
 

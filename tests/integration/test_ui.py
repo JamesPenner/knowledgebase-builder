@@ -234,27 +234,29 @@ def test_pipeline_page_includes_pipeline_js(kb_dbs):
 
 
 # ---------------------------------------------------------------------------
-# Suggest nav link (KB.P6)
+# Suggest gate banner (replaces nav link from KB.P6)
 # ---------------------------------------------------------------------------
 
-def test_nav_has_suggest_link(kb_dbs):
+def test_pipeline_has_suggest_gate_banner(kb_dbs):
+    """Suggest review gate banner always appears on the pipeline page (link is conditional on data)."""
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
     assert resp.status_code == 200
-    assert "/review/suggest?kb=test" in resp.text
+    assert "Suggest Review" in resp.text
 
 
-def test_nav_suggest_link_has_badge_span(kb_dbs):
+def test_suggest_nav_link_removed(kb_dbs):
+    """Suggest is now inline in the pipeline gate banner, not a standalone nav link."""
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
-    assert 'id="suggest-badge"' in resp.text
-    assert 'data-kb="test"' in resp.text
+    assert 'href="/review/suggest?kb=test">Suggest' not in resp.text
 
 
-def test_nav_includes_suggest_badge_js(kb_dbs):
+def test_suggest_badge_js_removed(kb_dbs):
+    """Suggest pending count is now server-rendered in the gate banner, not a client-side fetch."""
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
-    assert "suggest_badge.js" in resp.text
+    assert "suggest_badge.js" not in resp.text
 
 
 def test_suggest_review_page_returns_200(kb_dbs):
@@ -436,11 +438,12 @@ def test_new_terms_delete_decision(kb_dbs):
     assert row is None
 
 
-def test_nav_has_new_terms_link(kb_dbs):
+def test_pipeline_has_new_terms_gate_banner(kb_dbs):
+    """New Terms review gate banner always appears on the pipeline page (link is conditional on data)."""
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
     assert resp.status_code == 200
-    assert "/review/new-terms?kb=test" in resp.text
+    assert "New Terms Review" in resp.text
 
 
 def test_health_page_returns_200(kb_dbs):

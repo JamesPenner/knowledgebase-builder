@@ -1,13 +1,24 @@
 const _sources = {};
 
+function _getStageModeFromDom(stage) {
+  const btn = document.querySelector('[data-stage-mode-btn="' + stage + '"]');
+  if (!btn) return stage === 'ingest' ? 'full' : 'resume';
+  const text = btn.textContent.trim();
+  if (stage === 'ingest') return text === 'Incremental' ? 'incremental' : 'full';
+  return text === 'Re-run' ? 'rerun' : 'resume';
+}
+
 function _buildBody(stage, kb) {
   const scope = window.KB_SCOPE || {};
-  const body = {kb, ...scope};
+  if (stage === 'ingest') {
+    const incremental = _getStageModeFromDom('ingest') === 'incremental';
+    return JSON.stringify({kb, incremental});
+  }
+  const {source_id, file_type, set_id} = scope;
+  const run_mode = _getStageModeFromDom(stage);
+  const body = {kb, run_mode, source_id, file_type, set_id};
   if (stage === 'suggest') {
     body.levels = ['a', 'b'];
-  }
-  if (stage === 'ingest' && scope.scope_mode === 'new_files') {
-    body.incremental = true;
   }
   return JSON.stringify(body);
 }
@@ -45,17 +56,32 @@ function _renderProgress(stage, d) {
     `<span class="progress-detail">${detail}</span>`;
 }
 
-function runStage(stage, kb) {
-  document.getElementById('btn-run-' + stage).disabled = true;
-  document.getElementById('btn-cancel-' + stage).style.display = '';
+async function runStage(stage, kb) {
+  const runBtn = document.getElementById('btn-run-' + stage);
+  const cancelBtn = document.getElementById('btn-cancel-' + stage);
   const badge = document.getElementById('badge-' + stage);
+
+  runBtn.disabled = true;
+  cancelBtn.style.display = '';
   badge.className = 'badge badge-running';
   badge.textContent = 'running';
 
-  fetch('/api/stages/' + stage + '/run', {
+  let body;
+  try {
+    body = _buildBody(stage, kb);
+  } catch (err) {
+    console.error('runStage: body build failed for', stage, err);
+    runBtn.disabled = false;
+    cancelBtn.style.display = 'none';
+    badge.className = 'badge badge-pending';
+    badge.textContent = 'pending';
+    return;
+  }
+
+  await fetch('/api/stages/' + stage + '/run', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: _buildBody(stage, kb),
+    body,
   });
 
   const es = new EventSource('/api/stages/' + stage + '/stream');
@@ -71,6 +97,9 @@ function runStage(stage, kb) {
       document.getElementById('btn-cancel-' + stage).style.display = 'none';
       es.close();
       delete _sources[stage];
+      // Reload so gate banners reflect updated touchpoint state.
+      // Suppressed during multi-stage runs (workbench.js sets this flag and reloads at plan end).
+      if (!window.WB_RUNNING_PLAN) location.reload();
     } else if (d.status === 'failed') {
       badge.className = 'badge badge-failed';
       badge.textContent = 'failed';
