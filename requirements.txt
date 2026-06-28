@@ -33,11 +33,11 @@ geopandas>=1.0.0
 shapely>=2.0.0
 
 # --- Aesthetic scoring (KB.9) ---
-# onnxruntime>=1.19.0       # CPU
-# onnxruntime-directml>=1.19.0  # GPU (Windows DirectML)
+# onnxruntime>=1.19.0       # CPU (uncomment instead of directml for non-Windows)
+onnxruntime-directml>=1.19.0  # GPU (Windows DirectML); falls back to CPU
 
 # --- Face detection (KB.P15) ---
-# onnxruntime>=1.19.0
+onnxruntime-directml>=1.19.0  # shared with aesthetic scoring above
 # opencv-python>=4.10.0
 
 # --- Voice fingerprinting (KB.P16) ---

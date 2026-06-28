@@ -17,7 +17,7 @@ def _make_corpus_db() -> sqlite3.Connection:
             id        INTEGER PRIMARY KEY,
             path      TEXT    NOT NULL,
             filename  TEXT,
-            file_type TEXT    NOT NULL DEFAULT 'image',
+            file_type TEXT    NOT NULL DEFAULT 'images',
             canonical_id INTEGER
         );
         CREATE TABLE file_face_regions (
@@ -98,7 +98,7 @@ def _fake_embedding(value: float = 1.0) -> bytes:
     return v.tobytes()
 
 
-def _insert_file(conn, file_id=1, path="img.jpg", file_type="image"):
+def _insert_file(conn, file_id=1, path="img.jpg", file_type="images"):
     conn.execute(
         "INSERT INTO files(id, path, file_type) VALUES (?, ?, ?)",
         (file_id, path, file_type),
@@ -238,7 +238,7 @@ class TestGetFilesWithoutFaceRegions:
     def test_returns_image_with_no_region(self):
         from src.db.corpus import get_files_without_face_regions
         conn = _make_corpus_db()
-        _insert_file(conn, 1, "a.jpg", "image")
+        _insert_file(conn, 1, "a.jpg", "images")
         rows = get_files_without_face_regions(conn)
         assert len(rows) == 1
         assert rows[0]["path"] == "a.jpg"
@@ -246,7 +246,7 @@ class TestGetFilesWithoutFaceRegions:
     def test_excludes_file_with_region(self):
         from src.db.corpus import get_files_without_face_regions, upsert_face_region
         conn = _make_corpus_db()
-        _insert_file(conn, 1, "a.jpg", "image")
+        _insert_file(conn, 1, "a.jpg", "images")
         upsert_face_region(conn, 1, 0, None, _fake_embedding(), None, None)
         rows = get_files_without_face_regions(conn)
         assert len(rows) == 0
@@ -261,8 +261,8 @@ class TestGetFilesWithoutFaceRegions:
     def test_mixed_returns_only_unprocessed_images(self):
         from src.db.corpus import get_files_without_face_regions, upsert_face_region
         conn = _make_corpus_db()
-        _insert_file(conn, 1, "a.jpg", "image")
-        _insert_file(conn, 2, "b.jpg", "image")
+        _insert_file(conn, 1, "a.jpg", "images")
+        _insert_file(conn, 2, "b.jpg", "images")
         _insert_file(conn, 3, "clip.mp4", "video")
         upsert_face_region(conn, 1, 0, None, _fake_embedding(), None, None)
         rows = get_files_without_face_regions(conn)
@@ -511,7 +511,7 @@ class TestFaceHealthChecks:
         from src.health import run_checks
         config = self._make_config()
         checks = run_checks(config, None, None, tmp_path)
-        assert len(checks) == 25
+        assert len(checks) == 27
 
 
 # ---------------------------------------------------------------------------

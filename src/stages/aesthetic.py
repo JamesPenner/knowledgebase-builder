@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -140,10 +141,23 @@ def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, source_id=N
         compute_combined_rank_scores,
         get_pending_aesthetic_files,
         open_corpus,
+        update_pipeline_checkpoint,
         upsert_aesthetic_score,
     )
 
+    if not config.aesthetic_nima and not config.aesthetic_clip:
+        logger.warning(
+            "Aesthetic stage skipped: no models configured. "
+            "Run 'enrich aesthetic download --nima-model' and/or '--clip-model'."
+        )
+        progress.set_message(
+            "No models configured — run 'enrich aesthetic download --nima-model' or '--clip-model'"
+        )
+        progress.done()
+        return {"nima_scored": 0, "clip_scored": 0, "combined_computed": 0, "errors": 0}
+
     conn = open_corpus(corpus_path)
+    start = time.monotonic()
     nima_count = 0
     clip_count = 0
     error_count = 0
@@ -191,6 +205,11 @@ def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, source_id=N
     combined_count = 0
     if nima_count > 0 or clip_count > 0:
         combined_count = compute_combined_rank_scores(conn)
+
+    total_scored = nima_count + clip_count
+    duration = time.monotonic() - start
+    update_pipeline_checkpoint(conn, "aesthetic", total_scored, 0, error_count, duration)
+    conn.commit()
 
     progress.done()
     conn.close()

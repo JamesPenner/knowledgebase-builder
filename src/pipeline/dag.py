@@ -79,7 +79,7 @@ STAGE_GROUPS: list[dict] = [
         "id": "ml_analysis",
         "label": "ML Analysis",
         "description": "Slow, GPU-bound — content understanding",
-        "stages": ["describe", "transcribe", "summarize", "quality", "aesthetic", "face", "voice", "voice_diarize"],
+        "stages": ["describe", "transcribe", "summarize", "quality", "face", "voice", "voice_diarize"],
     },
     {
         "id": "enrichment",
@@ -92,6 +92,12 @@ STAGE_GROUPS: list[dict] = [
         "label": "Vocabulary",
         "description": "Knowledge-building against review queues",
         "stages": ["suggest", "retag"],
+    },
+    {
+        "id": "curation",
+        "label": "Curation",
+        "description": "Per-file scoring for export filtering and star-rating writeback",
+        "stages": ["aesthetic"],
     },
     {
         "id": "output",

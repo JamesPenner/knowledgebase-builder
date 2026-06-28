@@ -526,21 +526,19 @@ def upsert_file_hash(
     sha256_content: str,
     phash: str,
     dhash: str,
-    area_hash: str | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO file_hashes
-            (file_id, sha256_content, phash, dhash, area_hash, hashed_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
+            (file_id, sha256_content, phash, dhash, hashed_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
         ON CONFLICT(file_id) DO UPDATE SET
             sha256_content = excluded.sha256_content,
             phash          = excluded.phash,
             dhash          = excluded.dhash,
-            area_hash      = excluded.area_hash,
             hashed_at      = datetime('now')
         """,
-        (file_id, sha256_content, phash, dhash, area_hash),
+        (file_id, sha256_content, phash, dhash),
     )
 
 
@@ -1371,7 +1369,7 @@ def get_pending_aesthetic_files(
         SELECT f.id, f.path, f.file_type
         FROM files f
         LEFT JOIN file_aesthetic fa ON fa.file_id = f.id AND fa.model_name = ?
-        WHERE f.file_type = 'image'
+        WHERE f.file_type = 'images'
           AND f.canonical_id IS NULL
           AND fa.id IS NULL
           AND (? IS NULL OR f.source_id = ?)
@@ -1851,6 +1849,12 @@ def upsert_temporal_fields(
     )
 
 
+def reset_temporal_fields(conn: sqlite3.Connection) -> int:
+    cur = conn.execute("DELETE FROM file_temporal_fields")
+    conn.commit()
+    return cur.rowcount
+
+
 def get_export_temporal_fields(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -1871,7 +1875,7 @@ def get_files_without_face_regions(conn: sqlite3.Connection) -> list[sqlite3.Row
     return conn.execute(
         """
         SELECT id, path FROM files
-        WHERE file_type = 'image'
+        WHERE file_type = 'images'
           AND id NOT IN (SELECT DISTINCT file_id FROM file_face_regions)
         ORDER BY path
         """
