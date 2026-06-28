@@ -190,7 +190,13 @@ def _classify_runner(corpus_path, kb_path, config, progress, cancel, **_):
     run_classify(corpus_path, kb_path, config, progress, cancel)
 
 
-def _temporal_runner(corpus_path, kb_path, config, progress, cancel, **_):
+def _temporal_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    if sc.get("run_mode") == "rerun":
+        from src.db.corpus import open_corpus, reset_temporal_fields
+        conn = open_corpus(corpus_path)
+        reset_temporal_fields(conn)
+        conn.close()
     from src.stages.temporal import run_temporal
     run_temporal(corpus_path, kb_path, config, progress, cancel)
 
@@ -212,6 +218,37 @@ def _retag_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None,
 def _writeback_runner(corpus_path, kb_path, config, progress, cancel, **_):
     from src.stages.writeback import run_writeback
     run_writeback(corpus_path, kb_path, config, progress, cancel)
+
+
+def _face_runner(corpus_path, kb_path, config, progress, cancel, **_):
+    from src.stages.face import run_face
+    run_face(corpus_path, kb_path, config, progress, cancel)
+
+
+def _face_meta_runner(corpus_path, kb_path, config, progress, cancel, *, scope=None, **_):
+    sc = scope or {}
+    if sc.get("run_mode") == "rerun":
+        from src.db.corpus import open_corpus, reset_meta_face_regions
+        conn = open_corpus(corpus_path)
+        reset_meta_face_regions(conn)
+        conn.close()
+    from src.stages.face_meta import run_face_meta
+    run_face_meta(corpus_path, kb_path, config, progress, cancel, scope=sc)
+
+
+def _voice_runner(corpus_path, kb_path, config, progress, cancel, **_):
+    from src.stages.voice import run_voice
+    run_voice(corpus_path, kb_path, config, progress, cancel)
+
+
+def _voice_diarize_runner(corpus_path, kb_path, config, progress, cancel, **_):
+    from src.stages.voice import run_voice_diarize
+    run_voice_diarize(corpus_path, kb_path, config, progress, cancel)
+
+
+def _attribute_speakers_runner(corpus_path, kb_path, config, progress, cancel, **_):
+    from src.stages.attribute_speakers import run_attribute_speakers
+    run_attribute_speakers(corpus_path, kb_path, config, progress, cancel)
 
 
 class ExportRunRequest(BaseModel):
@@ -305,6 +342,11 @@ _make_stage_routes("quality", _quality_runner)
 _make_stage_routes("geolocate", _geolocate_runner)
 _make_stage_routes("validate", _validate_runner)
 _make_stage_routes("aesthetic", _aesthetic_runner)
+_make_stage_routes("face", _face_runner)
+_make_stage_routes("face_meta", _face_meta_runner)
+_make_stage_routes("voice", _voice_runner)
+_make_stage_routes("voice_diarize", _voice_diarize_runner)
+_make_stage_routes("attribute_speakers", _attribute_speakers_runner)
 _make_stage_routes("describe", _describe_runner)
 _make_stage_routes("transcribe", _transcribe_runner)
 _make_stage_routes("analyse", _analyse_runner)

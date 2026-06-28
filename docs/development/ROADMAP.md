@@ -16,8 +16,8 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1378 passing, 2 skipped, ruff clean
-- **Last completed sprint:** KB.W1 (Capture Rules Manager, 1378 tests)
+- **Tests:** 1415 passing, 2 skipped, ruff clean
+- **Last completed sprint:** KB.X1 (Face Metadata Stage, 1415 tests)
 - **Next planned sprint:** TBD
 
 ---
@@ -149,6 +149,7 @@ deferral noted.
 | Combined audio stage (transcribe + voice + diarize) | `FRAMESET_CONCEPT.md` | Only if ffmpeg cost proves significant |
 | ~~Prompt Library~~ | ~~`PROMPT_LIBRARY_CONCEPT.md`~~ | **Done — KB.S5** |
 | Stage Loop Runner | `REFACTOR_CONCEPTS.md` | No KB quality impact; low priority |
+| Area hash (spatial crop detection) | — | Removed from `hash` stage (64 pHash calls per image, high cost, edge-case use). If spatial near-duplicate detection becomes a real need, consider `imagehash.crop_resistant_hash()` or a coarser 3×3 grid as a separate opt-in stage. DB column `file_hashes.area_hash` still exists from migration 0007. |
 | ClusterAssignment typing | `REFACTOR_CONCEPTS.md` | Defer until fourth cluster type added |
 | Vocabulary review improvements | `UI_REDESIGN_CONCEPT.md` | After pipeline workbench |
 | Export page framing | `UI_REDESIGN_CONCEPT.md` | After pipeline workbench |

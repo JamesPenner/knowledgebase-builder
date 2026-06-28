@@ -1086,6 +1086,54 @@ def update_face_centroid(
     )
 
 
+def update_face_centroid_with_spread(
+    conn: sqlite3.Connection,
+    person_id: int,
+    new_centroid_blob: bytes,
+    new_sample_count: int,
+    spread: float,
+) -> None:
+    conn.execute(
+        "UPDATE people SET face_centroid = ?, face_samples = ?, face_centroid_spread = ? WHERE id = ?",
+        (new_centroid_blob, new_sample_count, spread, person_id),
+    )
+
+
+def get_all_people_names(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute("SELECT name, person_id FROM people_names").fetchall()
+    return {row["name"]: row["person_id"] for row in rows}
+
+
+def create_person_from_name(conn: sqlite3.Connection, full_name: str) -> int:
+    parts = full_name.strip().split()
+    if len(parts) == 1:
+        person_id = upsert_person(conn, preferred_name=parts[0])
+    elif len(parts) == 2:
+        person_id = upsert_person(conn, preferred_name=full_name, first_name=parts[0], last_name=parts[1])
+    else:
+        person_id = upsert_person(
+            conn,
+            preferred_name=full_name,
+            first_name=parts[0],
+            middle_name=" ".join(parts[1:-1]),
+            last_name=parts[-1],
+        )
+    add_person_name(conn, person_id, full_name)
+    return person_id
+
+
+def get_face_embeddings_for_person(
+    conn: sqlite3.Connection,
+    corpus_conn: sqlite3.Connection,
+    person_id: int,
+) -> list[bytes]:
+    rows = corpus_conn.execute(
+        "SELECT embedding FROM file_face_regions WHERE person_id = ?",
+        (person_id,),
+    ).fetchall()
+    return [bytes(row["embedding"]) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # People export helpers
 # ---------------------------------------------------------------------------
@@ -1221,7 +1269,7 @@ def get_people_with_cluster_counts(
     corpus_conn: sqlite3.Connection,
 ) -> list[dict]:
     people = kb_conn.execute(
-        "SELECT id, preferred_name FROM people ORDER BY preferred_name"
+        "SELECT id, preferred_name, face_samples, face_centroid_spread FROM people ORDER BY preferred_name"
     ).fetchall()
     voice_counts = {
         r[0]: r[1]
@@ -1243,6 +1291,8 @@ def get_people_with_cluster_counts(
             "preferred_name": r["preferred_name"],
             "voice_cluster_count": voice_counts.get(r["id"], 0),
             "face_cluster_count": face_counts.get(r["id"], 0),
+            "face_samples": r["face_samples"] or 0,
+            "face_centroid_spread": r["face_centroid_spread"],
         }
         for r in people
     ]

@@ -53,7 +53,7 @@ def _ingest_image(corpus_conn, file_id: int, path: str) -> None:
     source_id = _ensure_source(corpus_conn)
     corpus_conn.execute(
         "INSERT OR IGNORE INTO files(id, source_id, path, filename, ext, file_type, file_size, mtime) "
-        "VALUES (?, ?, ?, ?, '.jpg', 'image', 1000, 0.0)",
+        "VALUES (?, ?, ?, ?, '.jpg', 'images', 1000, 0.0)",
         (file_id, source_id, path, Path(path).name),
     )
     corpus_conn.commit()

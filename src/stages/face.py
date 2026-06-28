@@ -172,13 +172,49 @@ def update_centroid(
     return centroid.astype(np.float32).tobytes(), new_count
 
 
+def compute_trimmed_centroid(
+    embeddings: list[bytes],
+    trim_fraction: float = 0.10,
+) -> "tuple[bytes, int, float] | None":
+    """Robust centroid via trimmed mean.
+
+    Excludes the top `trim_fraction` of embeddings by distance from the initial mean,
+    then recomputes. Returns (centroid_blob, retained_count, spread) or None if
+    fewer than 2 embeddings remain after trimming.
+    """
+    import numpy as np
+    if not embeddings:
+        return None
+    vecs = np.stack([np.frombuffer(e, dtype=np.float32) for e in embeddings])
+    mean = vecs.mean(axis=0)
+    norm = float(np.linalg.norm(mean))
+    if norm > 0:
+        mean = mean / norm
+    dists = 1.0 - (vecs @ mean)  # cosine distance from initial mean
+    n_exclude = max(0, int(len(embeddings) * trim_fraction))
+    threshold = np.sort(dists)[-(n_exclude + 1)] if n_exclude < len(dists) else dists.max() + 1
+    mask = dists <= threshold
+    retained = vecs[mask]
+    if len(retained) < 2:
+        retained = vecs
+    centroid = retained.mean(axis=0)
+    norm = float(np.linalg.norm(centroid))
+    if norm > 0:
+        centroid = centroid / norm
+    # spread = mean cosine distance of retained embeddings from centroid
+    spread = float((1.0 - (retained @ centroid)).mean())
+    return centroid.astype(np.float32).tobytes(), len(retained), spread
+
+
 def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
     """Detect faces in pending image files and match to known people."""
+    import time as _time
     from src.db.corpus import (
         get_face_clusters,
         get_files_without_face_regions,
         insert_face_cluster_member,
         open_corpus,
+        update_pipeline_checkpoint,
         upsert_face_cluster,
         upsert_face_region,
     )
@@ -200,6 +236,7 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
     faces_detected = 0
     faces_matched = 0
     error_count = 0
+    _start = _time.monotonic()
 
     try:
         # Pre-load people centroids into memory {person_id: {"blob": ..., "count": ..., "name": ...}}
@@ -328,6 +365,11 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
                 files_processed += 1
             progress.update(i + 1, total)
 
+        update_pipeline_checkpoint(
+            corpus_conn, "face", files_processed, 0, error_count,
+            _time.monotonic() - _start,
+        )
+        corpus_conn.commit()
         progress.done()
     finally:
         corpus_conn.close()

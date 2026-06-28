@@ -7,9 +7,9 @@ logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="Face detection and identity matching", invoke_without_command=True)
 
-_SCRFD_REPO = "deepinsight/insightface"
+_SCRFD_REPO = "lithiumice/insightface"
 _SCRFD_FILE = "models/buffalo_l/det_10g.onnx"
-_ARCFACE_REPO = "deepinsight/insightface"
+_ARCFACE_REPO = "lithiumice/insightface"
 _ARCFACE_FILE = "models/buffalo_l/w600k_r50.onnx"
 
 
@@ -74,6 +74,114 @@ def face(
         f"matched: {result['faces_matched']}, "
         f"errors: {result['errors']}."
     )
+
+
+@app.command("meta")
+def meta(
+    kb: str | None = typer.Option(None, "--kb", help="KB name (defaults to active KB)"),
+    force: bool = typer.Option(False, "--force", help="Re-process already-processed files"),
+) -> None:
+    """Read XMP face region metadata and seed person centroids.
+
+    Requires models.face_embedding in config.yaml.
+    """
+    from src.config import load_config
+    from src.db.corpus import open_corpus, reset_meta_face_regions
+    from src.pipeline.cancel import make_cancel_event
+    from src.pipeline.progress import NullProgressReporter
+    from src.stages.face_meta import run_face_meta
+
+    corpus_path, kb_path = _resolve_kb(kb)
+    config_path = Path("config.yaml") if Path("config.yaml").exists() else None
+    config = load_config(config_path)
+
+    if not config.face_embedding_model:
+        typer.echo(
+            "Error: face embedding model not configured.\n"
+            "Set models.face_embedding in config.yaml,\n"
+            "or run 'enrich face download --embedding-model' to fetch the model.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if force:
+        conn = open_corpus(corpus_path)
+        reset_meta_face_regions(conn)
+        conn.close()
+        typer.echo("Metadata face regions reset.")
+
+    typer.echo("Reading face metadata…")
+    result = run_face_meta(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
+    typer.echo(
+        f"Done. Files: {result['files_processed']}, "
+        f"regions: {result['regions_found']}, "
+        f"people created: {result['people_created']}, "
+        f"matched: {result['people_matched']}, "
+        f"skipped (quality gate): {result['skipped_quality']}, "
+        f"errors: {result['errors']}."
+    )
+
+
+@app.command("recalibrate")
+def recalibrate(
+    kb: str | None = typer.Option(None, "--kb", help="KB name (defaults to active KB)"),
+    min_samples: int = typer.Option(5, "--min-samples", help="Minimum embeddings required to recalibrate"),
+) -> None:
+    """Recompute person centroids using trimmed-mean recalibration.
+
+    Prints per-person: name, retained/total samples, spread, confidence level.
+    """
+    from src.db.corpus import open_corpus
+    from src.db.kb import (
+        get_face_embeddings_for_person,
+        get_people_with_centroids,
+        open_kb,
+        update_face_centroid_with_spread,
+    )
+    from src.stages.face import compute_trimmed_centroid
+
+    corpus_path, kb_path = _resolve_kb(kb)
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    def _confidence(samples: int, spread: float | None) -> str:
+        if samples < 3:
+            return "Insufficient"
+        if spread is None or spread >= 0.30:
+            return "Fair"
+        if samples >= 10 and spread < 0.15:
+            return "Robust"
+        if samples >= 5 and spread < 0.30:
+            return "Strong"
+        return "Fair"
+
+    try:
+        people = get_people_with_centroids(kb_conn)
+        updated = 0
+        for row in people:
+            person_id = row["id"]
+            name = row["preferred_name"]
+            embeddings = get_face_embeddings_for_person(kb_conn, corpus_conn, person_id)
+            total = len(embeddings)
+            if total < min_samples:
+                typer.echo(f"  {name}: {total} embeddings — below threshold ({min_samples}), skipped")
+                continue
+            result = compute_trimmed_centroid(embeddings)
+            if result is None:
+                typer.echo(f"  {name}: recalibration returned None, skipped")
+                continue
+            centroid_blob, retained, spread = result
+            update_face_centroid_with_spread(kb_conn, person_id, centroid_blob, retained, spread)
+            kb_conn.commit()
+            level = _confidence(retained, spread)
+            typer.echo(
+                f"  {name}: {retained}/{total} retained, spread={spread:.4f} — {level}"
+            )
+            updated += 1
+        typer.echo(f"\nRecalibrated {updated} person(s).")
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
 
 
 @app.command("download")
@@ -159,7 +267,7 @@ def _update_config(key: str, value: str) -> None:
 
     for line in lines:
         stripped = line.rstrip()
-        if stripped == "models:":
+        if stripped == "models:" or stripped.startswith("models:") and (stripped[7:].lstrip().startswith("#") or stripped[7:].strip() == ""):
             in_models = True
             result.append(line)
             continue
@@ -172,10 +280,10 @@ def _update_config(key: str, value: str) -> None:
         result.append(line)
 
     if not updated:
+        import re as _re
         out = "".join(result)
-        if "models:" in out:
-            out = out.replace("models:\n", f"models:\n  {key}: {value}\n", 1)
-        else:
+        out = _re.sub(r"(models:[^\n]*\n)", rf"\g<1>  {key}: {value}\n", out, count=1)
+        if f"  {key}:" not in out:
             out += f"\nmodels:\n  {key}: {value}\n"
         config_path.write_text(out, encoding="utf-8")
     else:

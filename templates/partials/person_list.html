@@ -7,15 +7,43 @@
       <th>Name</th>
       <th style="text-align:center">Voice clusters</th>
       <th style="text-align:center">Face clusters</th>
+      <th style="text-align:center">Centroid</th>
       <th></th>
     </tr>
   </thead>
   <tbody>
     {% for person in people %}
+    {% set samples = person.face_samples %}
+    {% set spread = person.face_centroid_spread %}
+    {% if samples < 3 %}
+      {% set conf_label = "Insufficient" %}
+      {% set conf_color = "#64748b" %}
+      {% set conf_tip = samples ~ " sample(s) — need at least 3. Run face or face-meta to add more." %}
+    {% elif spread is none or spread >= 0.30 %}
+      {% set conf_label = "Fair" %}
+      {% set conf_color = "#ca8a04" %}
+      {% set conf_tip = samples ~ " sample(s), spread=" ~ (spread | round(3) if spread is not none else "N/A") ~ ". Run recalibrate or add more tagged images." %}
+    {% elif samples >= 10 and spread < 0.15 %}
+      {% set conf_label = "Robust" %}
+      {% set conf_color = "#2563eb" %}
+      {% set conf_tip = samples ~ " sample(s), spread=" ~ (spread | round(3)) %}
+    {% else %}
+      {% set conf_label = "Strong" %}
+      {% set conf_color = "#16a34a" %}
+      {% set conf_tip = samples ~ " sample(s), spread=" ~ (spread | round(3)) %}
+    {% endif %}
     <tr>
       <td>{{ person.preferred_name }}</td>
       <td style="text-align:center">{{ person.voice_cluster_count }}</td>
       <td style="text-align:center">{{ person.face_cluster_count }}</td>
+      <td style="text-align:center">
+        {% if samples > 0 %}
+        <span style="display:inline-block;padding:.15rem .4rem;border-radius:3px;font-size:.72rem;font-weight:600;color:#fff;background:{{ conf_color }}"
+              title="{{ conf_tip }}">{{ conf_label }}</span>
+        {% else %}
+        <span style="color:#475569;font-size:.8rem">—</span>
+        {% endif %}
+      </td>
       <td>
         <button class="btn btn--small"
                 hx-get="/knowledge/people/partials/person-detail/{{ person.id }}?kb={{ kb }}"

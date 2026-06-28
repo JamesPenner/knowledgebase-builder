@@ -54,6 +54,10 @@ class Config:
     diarization_model: str = "pyannote/speaker-diarization-3.1"
     # thresholds (face/voice)
     face_similarity_threshold: float = 0.55
+    face_meta_quality_gate: bool = False
+    face_meta_quality_threshold: float = 0.3
+    face_meta_min_centroid_similarity: float = 0.25
+    face_meta_recalibrate_min_samples: int = 5
     voice_similarity_threshold: float = 0.75
     voice_diarization_min_segment_ms: int = 500
     near_duplicate_hamming_threshold: int = 10
@@ -148,6 +152,10 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
     fields["deep_seek"] = _typed(thresholds.get("deep_seek", defaults.deep_seek), bool, defaults.deep_seek, "thresholds.deep_seek")
     fields["deep_seek_max_iter"] = _typed(thresholds.get("deep_seek_max_iter", defaults.deep_seek_max_iter), int, defaults.deep_seek_max_iter, "thresholds.deep_seek_max_iter")
     fields["face_similarity_threshold"] = _typed(thresholds.get("face_similarity_threshold", defaults.face_similarity_threshold), float, defaults.face_similarity_threshold, "thresholds.face_similarity_threshold")
+    fields["face_meta_quality_gate"] = _typed(thresholds.get("face_meta_quality_gate", defaults.face_meta_quality_gate), bool, defaults.face_meta_quality_gate, "thresholds.face_meta_quality_gate")
+    fields["face_meta_quality_threshold"] = _typed(thresholds.get("face_meta_quality_threshold", defaults.face_meta_quality_threshold), float, defaults.face_meta_quality_threshold, "thresholds.face_meta_quality_threshold")
+    fields["face_meta_min_centroid_similarity"] = _typed(thresholds.get("face_meta_min_centroid_similarity", defaults.face_meta_min_centroid_similarity), float, defaults.face_meta_min_centroid_similarity, "thresholds.face_meta_min_centroid_similarity")
+    fields["face_meta_recalibrate_min_samples"] = _typed(thresholds.get("face_meta_recalibrate_min_samples", defaults.face_meta_recalibrate_min_samples), int, defaults.face_meta_recalibrate_min_samples, "thresholds.face_meta_recalibrate_min_samples")
     fields["voice_similarity_threshold"] = _typed(thresholds.get("voice_similarity_threshold", defaults.voice_similarity_threshold), float, defaults.voice_similarity_threshold, "thresholds.voice_similarity_threshold")
     fields["voice_diarization_min_segment_ms"] = _typed(thresholds.get("voice_diarization_min_segment_ms", defaults.voice_diarization_min_segment_ms), int, defaults.voice_diarization_min_segment_ms, "thresholds.voice_diarization_min_segment_ms")
     fields["near_duplicate_hamming_threshold"] = _typed(thresholds.get("near_duplicate_hamming_threshold", defaults.near_duplicate_hamming_threshold), int, defaults.near_duplicate_hamming_threshold, "thresholds.near_duplicate_hamming_threshold")
@@ -232,6 +240,10 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
         "deep_seek": ("deep_seek", bool),
         "deep_seek_max_iter": ("deep_seek_max_iter", int),
         "face_similarity_threshold": ("face_similarity_threshold", float),
+        "face_meta_quality_gate": ("face_meta_quality_gate", bool),
+        "face_meta_quality_threshold": ("face_meta_quality_threshold", float),
+        "face_meta_min_centroid_similarity": ("face_meta_min_centroid_similarity", float),
+        "face_meta_recalibrate_min_samples": ("face_meta_recalibrate_min_samples", int),
         "voice_similarity_threshold": ("voice_similarity_threshold", float),
         "voice_diarization_min_segment_ms": ("voice_diarization_min_segment_ms", int),
         "gps_cluster_eps_km": ("gps_cluster_eps_km", float),

@@ -182,12 +182,12 @@ def test_pending_aesthetic_filter_by_source(tmp_path):
     src2 = _add_source(conn, "/a2")
     conn.execute(
         "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime)"
-        " VALUES (?, '/a1/x.jpg', 'x.jpg', '.jpg', 'image', 1000, 0.0)",
+        " VALUES (?, '/a1/x.jpg', 'x.jpg', '.jpg', 'images', 1000, 0.0)",
         (src1,),
     )
     conn.execute(
         "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime)"
-        " VALUES (?, '/a2/y.jpg', 'y.jpg', '.jpg', 'image', 1000, 0.0)",
+        " VALUES (?, '/a2/y.jpg', 'y.jpg', '.jpg', 'images', 1000, 0.0)",
         (src2,),
     )
     conn.commit()

@@ -24,12 +24,13 @@ def _make_corpus_db() -> sqlite3.Connection:
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             file_id       INTEGER NOT NULL,
             region_index  INTEGER NOT NULL,
+            source        TEXT NOT NULL DEFAULT 'ml',
             bbox          TEXT,
             embedding     BLOB NOT NULL,
             person_id     INTEGER,
             similarity    REAL,
             detected_at   DATETIME DEFAULT (datetime('now')),
-            UNIQUE(file_id, region_index)
+            UNIQUE(file_id, source, region_index)
         );
         CREATE TABLE face_clusters (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,

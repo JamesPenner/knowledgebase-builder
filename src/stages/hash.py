@@ -100,24 +100,9 @@ def _hash_image(conn, file_id: int, file_path: Path) -> None:
             sha256_content = hashlib.sha256(pixel_data).hexdigest()
             phash = str(imagehash.phash(img))
             dhash = str(imagehash.dhash(img))
-            area_hash = json.dumps(_compute_area_hash(img, imagehash))
-        upsert_file_hash(conn, file_id, sha256_content, phash, dhash, area_hash)
+        upsert_file_hash(conn, file_id, sha256_content, phash, dhash)
     except Exception:
         pass
-
-
-def _compute_area_hash(img, imagehash, rows: int = 8, cols: int = 8) -> list[str]:
-    """Divide image into rows×cols cells, return list of pHash strings."""
-    w, h = img.size
-    cell_w = max(1, w // cols)
-    cell_h = max(1, h // rows)
-    hashes: list[str] = []
-    for r in range(rows):
-        for c in range(cols):
-            box = (c * cell_w, r * cell_h, (c + 1) * cell_w, (r + 1) * cell_h)
-            cell = img.crop(box).convert("L")
-            hashes.append(str(imagehash.phash(cell)))
-    return hashes
 
 
 def _hash_video(conn, file_id: int, file_path: Path, config: Config) -> None:

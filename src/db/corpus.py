@@ -1876,7 +1876,18 @@ def get_files_without_face_regions(conn: sqlite3.Connection) -> list[sqlite3.Row
         """
         SELECT id, path FROM files
         WHERE file_type = 'images'
-          AND id NOT IN (SELECT DISTINCT file_id FROM file_face_regions)
+          AND id NOT IN (SELECT DISTINCT file_id FROM file_face_regions WHERE source = 'ml')
+        ORDER BY path
+        """
+    ).fetchall()
+
+
+def get_files_without_meta_face_regions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT id, path FROM files
+        WHERE file_type = 'images'
+          AND id NOT IN (SELECT DISTINCT file_id FROM file_face_regions WHERE source = 'metadata')
         ORDER BY path
         """
     ).fetchall()
@@ -1890,14 +1901,15 @@ def upsert_face_region(
     embedding_blob: bytes,
     person_id: int | None,
     similarity: float | None,
+    source: str = "ml",
 ) -> None:
     conn.execute(
         """
         INSERT OR REPLACE INTO file_face_regions
-            (file_id, region_index, bbox, embedding, person_id, similarity)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (file_id, region_index, source, bbox, embedding, person_id, similarity)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (file_id, region_index, bbox_json, embedding_blob, person_id, similarity),
+        (file_id, region_index, source, bbox_json, embedding_blob, person_id, similarity),
     )
 
 
@@ -1931,10 +1943,17 @@ def get_face_embeddings_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row
     ).fetchall()
 
 
-def reset_face_regions(conn: sqlite3.Connection) -> int:
-    cur = conn.execute("DELETE FROM file_face_regions")
+def reset_face_regions(conn: sqlite3.Connection, source: str | None = None) -> int:
+    if source is not None:
+        cur = conn.execute("DELETE FROM file_face_regions WHERE source = ?", (source,))
+    else:
+        cur = conn.execute("DELETE FROM file_face_regions")
     conn.commit()
     return cur.rowcount
+
+
+def reset_meta_face_regions(conn: sqlite3.Connection) -> int:
+    return reset_face_regions(conn, source="metadata")
 
 
 def get_face_clusters(conn: sqlite3.Connection) -> list[sqlite3.Row]:
