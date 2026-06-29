@@ -1,4 +1,15 @@
+{% macro reclassify_btn(term, action, label, css_class, tip) %}
+<form class="action-form"
+      hx-post="/review/suggest/reclassify?kb={{ kb }}"
+      hx-swap="none">
+  <input type="hidden" name="term" value="{{ term }}">
+  <input type="hidden" name="action" value="{{ action }}">
+  <button type="submit" class="btn {{ css_class }}" title="{{ tip }}">{{ label }}</button>
+</form>
+{% endmacro %}
+
 {% if vocabulary %}
+<h3 class="decisions-subhead">Accepted</h3>
 <table class="decisions-table">
   <thead>
     <tr>
@@ -12,16 +23,75 @@
   <tr class="decision-row">
     <td class="decision-token">{{ t.term }}</td>
     <td><span class="badge badge--{{ t.source }}">{{ t.source }}</span></td>
-    <td>
+    <td class="decision-actions">
+      {{ reclassify_btn(t.term, "ignore", "Ignore", "btn--ignore", "Move to stoplist — permanently excluded from future suggestions") }}
+      {{ reclassify_btn(t.term, "reject", "Reject", "btn--reject", "Remove from vocabulary without adding to stoplist") }}
       <form hx-delete="/review/suggest/decisions/{{ t.term }}?kb={{ kb }}"
             hx-swap="none">
-        <button type="submit" class="btn btn--remove">Remove</button>
+        <button type="submit" class="btn btn--remove" title="Remove from vocabulary and return to pending queue">Remove</button>
       </form>
     </td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
-{% else %}
-<p class="empty-state">No vocabulary terms yet. Accept candidates to build vocabulary.</p>
+{% endif %}
+
+{% if ignored %}
+<h3 class="decisions-subhead">Ignored <span class="decisions-subhead__count">({{ ignored | length }})</span></h3>
+<table class="decisions-table">
+  <tbody>
+  {% for t in ignored %}
+  <tr class="decision-row">
+    <td class="decision-token">{{ t.term }}</td>
+    <td><span class="badge badge--ignored">stoplist</span></td>
+    <td class="decision-actions">
+      {{ reclassify_btn(t.term, "accept", "Accept", "btn--capture", "Add to vocabulary — removes from stoplist") }}
+      {{ reclassify_btn(t.term, "reject", "Reject", "btn--reject", "Remove from stoplist without adding to vocabulary") }}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if rejected %}
+<h3 class="decisions-subhead">Rejected <span class="decisions-subhead__count">({{ rejected | length }})</span></h3>
+<table class="decisions-table">
+  <tbody>
+  {% for t in rejected %}
+  <tr class="decision-row">
+    <td class="decision-token">{{ t.term }}</td>
+    <td></td>
+    <td class="decision-actions">
+      {{ reclassify_btn(t.term, "accept", "Accept", "btn--capture", "Add to vocabulary") }}
+      {{ reclassify_btn(t.term, "ignore", "Ignore", "btn--ignore", "Add to stoplist — permanently excluded from future suggestions") }}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if corrected %}
+<h3 class="decisions-subhead">Corrected <span class="decisions-subhead__count">({{ corrected | length }})</span></h3>
+<table class="decisions-table">
+  <tbody>
+  {% for t in corrected %}
+  <tr class="decision-row">
+    <td class="decision-token">{{ t.term }}</td>
+    <td class="decision-correction">→ {{ t.corrected_to }}</td>
+    <td class="decision-actions">
+      {{ reclassify_btn(t.term, "accept", "Accept original", "btn--capture", "Add the original term to vocabulary instead") }}
+      {{ reclassify_btn(t.term, "reject", "Reject", "btn--reject", "Dismiss without adding to vocabulary or stoplist") }}
+      {{ reclassify_btn(t.term, "ignore", "Ignore", "btn--ignore", "Add to stoplist") }}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if not vocabulary and not ignored and not rejected and not corrected %}
+<p class="empty-state">No decisions yet. Accept or reject candidates above to build vocabulary.</p>
 {% endif %}

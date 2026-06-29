@@ -1,14 +1,34 @@
 {% if candidates %}
+<div class="bulk-actions">
+  <span class="bulk-label">All pending:</span>
+  <form class="action-form"
+        hx-post="/review/suggest/decide-all?kb={{ kb }}"
+        hx-swap="none">
+    <input type="hidden" name="action" value="accept">
+    <button type="submit" class="btn btn--capture"
+            title="Add all pending terms to vocabulary">Accept All</button>
+  </form>
+  <form class="action-form"
+        hx-post="/review/suggest/decide-all?kb={{ kb }}"
+        hx-swap="none">
+    <input type="hidden" name="action" value="ignore">
+    <button type="submit" class="btn btn--ignore"
+            title="Add all pending terms to stoplist — permanently excluded from future suggestions">Ignore All</button>
+  </form>
+  <form class="action-form"
+        hx-post="/review/suggest/decide-all?kb={{ kb }}"
+        hx-swap="none">
+    <input type="hidden" name="action" value="reject">
+    <button type="submit" class="btn btn--reject"
+            title="Dismiss all pending terms — won't resurface next run, stoplist unchanged">Reject All</button>
+  </form>
+</div>
 <table class="token-table">
   <tbody>
   {% for c in candidates %}
   <tr class="token-row" id="candidate-row-{{ c.id }}">
     <td class="token-name">
       {{ c.term }}
-      <span class="badge badge--{{ c.source }}">{{ c.source }}</span>
-      {% if c.cluster_id %}
-      <span class="cluster-badge">cluster {{ c.cluster_id }}</span>
-      {% endif %}
     </td>
     <td class="token-actions">
       <form class="action-form"
@@ -16,7 +36,8 @@
             hx-swap="none">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="accept">
-        <button type="submit" class="btn btn--capture">Accept</button>
+        <button type="submit" class="btn btn--capture"
+                title="Add to vocabulary — term will be included in LLM prompts">Accept</button>
       </form>
 
       <form class="action-form"
@@ -24,7 +45,8 @@
             hx-swap="none">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="ignore">
-        <button type="submit" class="btn btn--ignore">Ignore</button>
+        <button type="submit" class="btn btn--ignore"
+                title="Add to stoplist — permanently excluded from future suggestions">Ignore</button>
       </form>
 
       <form class="action-form"
@@ -33,7 +55,8 @@
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="correct">
         <input type="text" name="corrected_to" placeholder="Correct to…" class="input-text" required>
-        <button type="submit" class="btn btn--correct">Correct</button>
+        <button type="submit" class="btn btn--correct"
+                title="Accept a corrected form — adds the corrected term to vocabulary">Correct</button>
       </form>
 
       <form class="action-form"
@@ -41,11 +64,12 @@
             hx-swap="none">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="reject">
-        <button type="submit" class="btn btn--reject">Reject</button>
+        <button type="submit" class="btn btn--reject"
+                title="Dismiss without adding to vocabulary or stoplist — won't resurface next run">Reject</button>
       </form>
     </td>
   </tr>
-  {% if c.source == 'level_c' and c.notes %}
+  {% if c.notes %}
   <tr class="notes-row">
     <td colspan="2">
       <details class="level-c-notes">

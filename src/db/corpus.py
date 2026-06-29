@@ -834,24 +834,22 @@ def get_pending_candidates(
     offset: int = 0,
     source_filter: str | None = None,
 ) -> list[sqlite3.Row]:
-    if source_filter:
-        return conn.execute(
-            """
-            SELECT * FROM candidates
-            WHERE status='pending' AND source=?
-            ORDER BY term ASC
-            LIMIT ? OFFSET ?
-            """,
-            (source_filter, limit, offset),
-        ).fetchall()
+    # Group by term so each unique term appears once regardless of how many files
+    # generated it (level_a produces one row per file per term).
+    base_where = "WHERE status='pending' AND source=?" if source_filter else "WHERE status='pending'"
+    params: tuple = (source_filter, limit, offset) if source_filter else (limit, offset)
     return conn.execute(
-        """
-        SELECT * FROM candidates
-        WHERE status='pending'
+        f"""
+        SELECT MIN(id) as id, term,
+               MIN(source) as source, MIN(cluster_id) as cluster_id,
+               MIN(notes) as notes, 'pending' as status, MIN(corrected_to) as corrected_to
+        FROM candidates
+        {base_where}
+        GROUP BY term
         ORDER BY term ASC
         LIMIT ? OFFSET ?
         """,
-        (limit, offset),
+        params,
     ).fetchall()
 
 
@@ -859,10 +857,10 @@ def get_candidate_counts(conn: sqlite3.Connection) -> dict:
     row = conn.execute(
         """
         SELECT
-          COUNT(*) as total,
-          SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END) as pending,
-          SUM(CASE WHEN status='accepted' THEN 1 ELSE 0 END) as accepted,
-          SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) as rejected
+          COUNT(DISTINCT term) as total,
+          COUNT(DISTINCT CASE WHEN status='pending'  THEN term END) as pending,
+          COUNT(DISTINCT CASE WHEN status='accepted' THEN term END) as accepted,
+          COUNT(DISTINCT CASE WHEN status='rejected' OR status='corrected' THEN term END) as rejected
         FROM candidates
         """
     ).fetchone()
@@ -872,6 +870,21 @@ def get_candidate_counts(conn: sqlite3.Connection) -> dict:
         "accepted": row["accepted"] or 0,
         "rejected": row["rejected"] or 0,
     }
+
+
+def get_decided_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return one row per decided (non-pending) term, most recent status wins."""
+    return conn.execute(
+        """
+        SELECT term,
+               MIN(status) as status,
+               MIN(corrected_to) as corrected_to
+        FROM candidates
+        WHERE status != 'pending'
+        GROUP BY term
+        ORDER BY term ASC
+        """
+    ).fetchall()
 
 
 def has_level_b_clusters(conn: sqlite3.Connection) -> bool:
@@ -2327,6 +2340,76 @@ def get_geolabels_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                gl.method, gl.confidence, gl.resolved_at
         FROM file_geolabels gl
         JOIN files f ON f.id = gl.file_id
+        ORDER BY f.path
+        """
+    ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Location labels (geo_meta stage)
+# ---------------------------------------------------------------------------
+
+def get_gps_files_without_location_label(
+    conn: sqlite3.Connection,
+    *,
+    source_id: int | None = None,
+    file_type: str | None = None,
+    set_id: int | None = None,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT f.id, f.path,
+               CAST(lat.value AS REAL) AS lat,
+               CAST(lon.value AS REAL) AS lon
+        FROM files f
+        JOIN file_metadata_fields lat ON lat.file_id = f.id AND lat.canonical_name = 'exif_gps_lat'
+        JOIN file_metadata_fields lon ON lon.file_id = f.id AND lon.canonical_name = 'exif_gps_lon'
+        LEFT JOIN file_location_labels ll ON ll.file_id = f.id
+        WHERE f.canonical_id IS NULL
+          AND ll.file_id IS NULL
+          AND (? IS NULL OR f.source_id = ?)
+          AND (? IS NULL OR f.file_type = ?)
+          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+        ORDER BY f.id
+        """,
+        (source_id, source_id, file_type, file_type, set_id, set_id),
+    ).fetchall()
+
+
+def upsert_location_label(
+    conn: sqlite3.Connection,
+    file_id: int,
+    location: str | None,
+    city: str | None,
+    state: str | None,
+    country: str | None,
+    country_code: str | None,
+    distance_m: float,
+    matched_table: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO file_location_labels
+            (file_id, location, city, state, country, country_code, distance_m, matched_table, matched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (file_id, location, city, state, country, country_code, distance_m, matched_table),
+    )
+
+
+def reset_location_labels(conn: sqlite3.Connection) -> int:
+    cur = conn.execute("DELETE FROM file_location_labels")
+    conn.commit()
+    return cur.rowcount
+
+
+def get_location_labels_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT f.path, ll.location, ll.city, ll.state, ll.country, ll.country_code,
+               ll.distance_m, ll.matched_table, ll.matched_at
+        FROM file_location_labels ll
+        JOIN files f ON f.id = ll.file_id
         ORDER BY f.path
         """
     ).fetchall()

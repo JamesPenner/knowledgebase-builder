@@ -8,6 +8,19 @@
   · <strong>{{ counts.rejected }}</strong> rejected
   · {{ counts.total }} total
 </p>
+<details class="action-legend">
+  <summary>What do the actions do?</summary>
+  <dl class="action-legend__list">
+    <dt>Accept</dt>
+    <dd>Adds the term to your vocabulary. It will be included in LLM prompts (describe, retag, summarize) and written into file metadata.</dd>
+    <dt>Ignore</dt>
+    <dd>Adds the term to the stoplist — permanently excluded from future suggestion runs, even if candidates are reset. Does not enter LLM prompts.</dd>
+    <dt>Reject</dt>
+    <dd>Dismisses the term without adding it to vocabulary or stoplist. Will not resurface in the next suggestion run. Does not enter LLM prompts.</dd>
+    <dt>Correct</dt>
+    <dd>Accepts a corrected spelling or form of the term instead. The corrected term is added to vocabulary.</dd>
+  </dl>
+</details>
 
 <div class="level-c-controls">
   {% if has_level_b_clusters %}
@@ -30,7 +43,7 @@
 </div>
 
 <section class="decisions-section">
-  <h2 class="section-title">Vocabulary</h2>
+  <h2 class="section-title">Decisions</h2>
   <div id="vocabulary-panel"
        hx-get="/review/suggest/partials/vocabulary?kb={{ kb }}"
        hx-trigger="decisionsChanged from:body"

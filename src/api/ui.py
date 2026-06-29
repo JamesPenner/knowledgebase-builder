@@ -63,6 +63,27 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         new_terms = get_new_terms_candidates(corpus_conn, kb_conn)
         sources = [{"id": r["id"], "path": r["path"], "file_count": r["file_count_ingested"] or 0} for r in get_sources(corpus_conn)]
         sets = [{"id": r["id"], "name": r["name"], "file_count": r["file_count"]} for r in get_file_sets(corpus_conn)]
+
+        # Register gate warnings
+        kb_folder = kb_path.parent
+        gate_warnings: dict[str, str | None] = {}
+        loc_csv = kb_folder / "reference" / "registers" / "Index_of_Locations.csv"
+        if not loc_csv.exists():
+            gate_warnings["geo_meta"] = "location_register_missing"
+        else:
+            try:
+                n = kb_conn.execute("SELECT COUNT(*) FROM entity_locations").fetchone()[0]
+                if n == 0:
+                    gate_warnings["geo_meta"] = "location_register_not_seeded"
+            except Exception:
+                gate_warnings["geo_meta"] = "location_register_not_seeded"
+        ppl_csv = kb_folder / "reference" / "registers" / "Index_of_People.csv"
+        if not ppl_csv.exists():
+            gate_warnings["face_meta"] = "people_register_missing"
+        else:
+            n_ppl = kb_conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+            if n_ppl == 0:
+                gate_warnings["face_meta"] = "people_register_not_seeded"
     finally:
         corpus_conn.close()
         kb_conn.close()
@@ -126,6 +147,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
                 "stage_counts": sc,
                 "touchpoint_before": TOUCHPOINT_BEFORE.get(name),
                 "manage_url": f"/knowledge/capture-rules?kb={kb_name}" if name == "normalize" else None,
+                "gate_warning": gate_warnings.get(name),
             })
         groups.append({**grp, "stages": stages})
 
@@ -545,27 +567,57 @@ async def ui_normalise_bulk(
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
+def _build_decisions_context(corpus_path: Path, kb_path: Path) -> dict:
+    """Compute all decided candidate lists for the vocabulary/decisions panel."""
+    from src.db.corpus import get_decided_candidates, open_corpus
+    from src.db.kb import get_stoplist_terms, get_vocabulary_terms, open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    vocab_terms = [dict(r) for r in get_vocabulary_terms(kb_conn)]
+    stoplist = get_stoplist_terms(kb_conn)
+    decided = get_decided_candidates(corpus_conn)
+    corpus_conn.close()
+    kb_conn.close()
+
+    ignored: list[dict] = []
+    rejected: list[dict] = []
+    corrected: list[dict] = []
+    for row in decided:
+        term = row["term"]
+        if row["status"] == "corrected":
+            corrected.append({"term": term, "corrected_to": row["corrected_to"]})
+        elif row["status"] == "rejected":
+            if term in stoplist:
+                ignored.append({"term": term})
+            else:
+                rejected.append({"term": term})
+
+    return {
+        "vocabulary": vocab_terms,
+        "ignored": ignored,
+        "rejected": rejected,
+        "corrected": corrected,
+    }
+
+
 @router.get("/review/suggest", include_in_schema=False)
 def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
     from src.db.corpus import get_candidate_counts, get_pending_candidates, has_level_b_clusters, open_corpus
-    from src.db.kb import get_vocabulary_terms, open_kb
 
     conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
     candidates = get_pending_candidates(conn, limit=100, offset=0)
     counts = get_candidate_counts(conn)
-    terms = get_vocabulary_terms(kb_conn)
     level_b_exists = has_level_b_clusters(conn)
     conn.close()
-    kb_conn.close()
     return templates.TemplateResponse(request, "suggest_review.html", {
         "kb": kb_name,
         "candidates": [dict(c) for c in candidates],
         "counts": counts,
-        "vocabulary": [dict(t) for t in terms],
         "has_level_b_clusters": level_b_exists,
+        **_build_decisions_context(corpus_path, kb_path),
     })
 
 
@@ -588,16 +640,11 @@ def suggest_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(r
 
 @router.get("/review/suggest/partials/vocabulary", include_in_schema=False)
 def suggest_vocabulary_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
-    _, kb_path = paths
+    corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
-    from src.db.kb import get_vocabulary_terms, open_kb
-
-    kb_conn = open_kb(kb_path)
-    terms = get_vocabulary_terms(kb_conn)
-    kb_conn.close()
     return templates.TemplateResponse(request, "partials/vocabulary_panel.html", {
         "kb": kb_name,
-        "vocabulary": [dict(t) for t in terms],
+        **_build_decisions_context(corpus_path, kb_path),
     })
 
 
@@ -608,7 +655,7 @@ async def ui_suggest_decide(
     corrected_to: str = Form(""),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.corpus import open_corpus, set_candidate_status
+    from src.db.corpus import open_corpus
     from src.db.kb import add_to_stoplist, add_vocabulary_term, bump_kb_version, open_kb
 
     corpus_path, kb_path = paths
@@ -624,22 +671,136 @@ async def ui_suggest_decide(
         if action == "accept":
             add_vocabulary_term(kb_conn, term)
             bump_kb_version(kb_conn, "vocabulary_term_added")
-            set_candidate_status(corpus_conn, candidate_id, "accepted")
+            corpus_conn.execute(
+                "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE term=? AND status='pending'",
+                (term,),
+            )
         elif action == "ignore":
             add_to_stoplist(kb_conn, term, source="domain")
-            set_candidate_status(corpus_conn, candidate_id, "rejected")
+            corpus_conn.execute(
+                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=? AND status='pending'",
+                (term,),
+            )
         elif action == "correct" and corrected_to:
             add_vocabulary_term(kb_conn, corrected_to)
             bump_kb_version(kb_conn, "vocabulary_term_added")
-            set_candidate_status(corpus_conn, candidate_id, "corrected", corrected_to=corrected_to)
+            corpus_conn.execute(
+                "UPDATE candidates SET status='corrected', corrected_to=? WHERE term=? AND status='pending'",
+                (corrected_to, term),
+            )
         elif action == "reject":
-            set_candidate_status(corpus_conn, candidate_id, "rejected")
+            corpus_conn.execute(
+                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=? AND status='pending'",
+                (term,),
+            )
 
     corpus_conn.commit()
     kb_conn.commit()
     corpus_conn.close()
     kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.post("/review/suggest/decide-all", include_in_schema=False)
+async def ui_suggest_decide_all(
+    action: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus
+    from src.db.kb import add_to_stoplist, add_vocabulary_term, bump_kb_version, open_kb
+
+    if action not in ("accept", "ignore", "reject"):
+        return Response(status_code=400)
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    rows = corpus_conn.execute(
+        "SELECT id, term FROM candidates WHERE status='pending'"
+    ).fetchall()
+
+    for row in rows:
+        term = row["term"]
+        if action == "accept":
+            add_vocabulary_term(kb_conn, term)
+            corpus_conn.execute(
+                "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE id=?",
+                (row["id"],),
+            )
+        elif action == "ignore":
+            add_to_stoplist(kb_conn, term, source="domain")
+            corpus_conn.execute(
+                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE id=?",
+                (row["id"],),
+            )
+        elif action == "reject":
+            corpus_conn.execute(
+                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE id=?",
+                (row["id"],),
+            )
+
+    if rows and action == "accept":
+        bump_kb_version(kb_conn, "vocabulary_term_added")
+
+    corpus_conn.commit()
+    kb_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
+
+
+@router.post("/review/suggest/reclassify", include_in_schema=False)
+async def ui_suggest_reclassify(
+    term: str = Form(...),
+    action: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.corpus import open_corpus
+    from src.db.kb import (
+        add_to_stoplist,
+        add_vocabulary_term,
+        bump_kb_version,
+        delete_vocabulary_term,
+        open_kb,
+        remove_from_stoplist,
+    )
+
+    if action not in ("accept", "ignore", "reject"):
+        return Response(status_code=400)
+
+    corpus_path, kb_path = paths
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+
+    # Undo any prior state unconditionally — safe because both are idempotent
+    delete_vocabulary_term(kb_conn, term)
+    remove_from_stoplist(kb_conn, term)
+
+    if action == "accept":
+        add_vocabulary_term(kb_conn, term)
+        bump_kb_version(kb_conn, "vocabulary_term_added")
+        corpus_conn.execute(
+            "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE term=?",
+            (term,),
+        )
+    elif action == "ignore":
+        add_to_stoplist(kb_conn, term, source="domain")
+        corpus_conn.execute(
+            "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=?",
+            (term,),
+        )
+    elif action == "reject":
+        corpus_conn.execute(
+            "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=?",
+            (term,),
+        )
+
+    corpus_conn.commit()
+    kb_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_DECISIONS})
 
 
 @router.delete("/review/suggest/decisions/{term}", include_in_schema=False)

@@ -119,6 +119,10 @@ def add_to_stoplist(
         "INSERT OR IGNORE INTO stoplist (term, scope, source) VALUES (?, ?, ?)",
         (term, scope, source),
     )
+
+
+def remove_from_stoplist(conn: sqlite3.Connection, term: str) -> None:
+    conn.execute("DELETE FROM stoplist WHERE term=? AND source='domain'", (term,))
     conn.commit()
 
 
@@ -351,6 +355,12 @@ def register_entity_table(
 def get_entity_tables(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM entity_table_registry ORDER BY table_name"
+    ).fetchall()
+
+
+def get_gps_entity_tables(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM entity_table_registry WHERE match_type = 'gps' ORDER BY table_name"
     ).fetchall()
 
 
@@ -1504,4 +1514,124 @@ def delete_stage_prompt(kb_conn: sqlite3.Connection, prompt_id: int) -> None:
                 "UPDATE stage_prompts SET is_active=1 WHERE id=?", (builtin["id"],)
             )
     kb_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Register seeding helpers
+# ---------------------------------------------------------------------------
+
+def seed_location_register(conn: sqlite3.Connection, csv_path) -> int:
+    """Import locations from CSV into entity_locations. Skip if already populated.
+
+    Returns the number of rows imported, or 0 if the table was already populated.
+    """
+    import csv as _csv
+    from pathlib import Path as _Path
+
+    try:
+        existing = conn.execute("SELECT COUNT(*) FROM entity_locations").fetchone()[0]
+        if existing > 0:
+            return 0
+    except Exception:
+        pass
+
+    with open(_Path(csv_path), newline="", encoding="utf-8-sig") as fh:
+        reader = _csv.DictReader(fh)
+        raw_headers = reader.fieldnames or []
+        headers = [h.strip().lower().replace(" ", "_") for h in raw_headers]
+        key_col = headers[0] if headers else "location"
+        create_entity_table(conn, "locations", headers, key_col)
+        register_entity_table(
+            conn,
+            table_name="locations",
+            display_name="Locations",
+            trigger_word="",
+            trigger_aliases_json="[]",
+            key_column=key_col,
+            match_type="gps",
+            source_csv=str(csv_path),
+        )
+        imported = 0
+        for raw_row in reader:
+            row = {h: raw_row.get(orig, "").strip() for h, orig in zip(headers, raw_headers)}
+            key_val = row.get(key_col, "")
+            if key_val in ("", "-"):
+                continue
+            upsert_entity_row(conn, "locations", row)
+            imported += 1
+    conn.commit()
+    return imported
+
+
+def seed_people_register(conn: sqlite3.Connection, csv_path) -> int:
+    """Import people from CSV into people/people_names/life_events. Skip if already populated.
+
+    Returns the number of people imported, or 0 if the table was already populated.
+    """
+    import csv as _csv
+    from pathlib import Path as _Path
+
+    existing = conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+    if existing > 0:
+        return 0
+
+    with open(_Path(csv_path), newline="", encoding="utf-8-sig") as fh:
+        rows = list(_csv.DictReader(fh))
+
+    nameid_to_pid: dict[str, int] = {}
+    for row in rows:
+        nameid = (row.get("NameID") or "").strip()
+        if not nameid:
+            continue
+        prefer_nick = (row.get("Prefer NickName") or "").strip().upper() == "TRUE"
+        nick_names = [n.strip() for n in (row.get("Nick Names") or "").split("|") if n.strip()]
+        if prefer_nick and nick_names:
+            preferred = nick_names[0]
+        else:
+            first = (row.get("First Name") or "").strip()
+            last = (row.get("Last Name") or "").strip()
+            preferred = " ".join(p for p in [first, last] if p) or nameid
+        person_id = upsert_person(
+            conn,
+            preferred_name=preferred,
+            title=(row.get("Title") or "").strip(),
+            first_name=(row.get("First Name") or "").strip(),
+            middle_name=(row.get("Middle Name") or "").strip(),
+            last_name=(row.get("Last Name") or "").strip(),
+            family=(row.get("Family") or "").strip().upper() == "TRUE",
+        )
+        nameid_to_pid[nameid] = person_id
+
+    for row in rows:
+        nameid = (row.get("NameID") or "").strip()
+        person_id = nameid_to_pid.get(nameid)
+        if not person_id:
+            continue
+        meta_name = (row.get("Metadata Name") or "").strip()
+        if meta_name:
+            add_person_name(conn, person_id, meta_name, is_metadata_form=True)
+        for name in (n.strip() for n in (row.get("Nick Names") or "").split("|") if n.strip()):
+            add_person_name(conn, person_id, name)
+        for name in (n.strip() for n in (row.get("Married Names") or "").split("|") if n.strip()):
+            add_person_name(conn, person_id, name)
+
+    for row in rows:
+        nameid = (row.get("NameID") or "").strip()
+        person_id = nameid_to_pid.get(nameid)
+        if not person_id:
+            continue
+        birth = (row.get("birth_date") or "").strip()
+        if birth:
+            add_life_event(conn, person_id, "birth", birth)
+        marriage = (row.get("date_marriage") or "").strip()
+        if marriage:
+            spouse_nameid = (row.get("SpouseID") or "").strip()
+            partner_id = nameid_to_pid.get(spouse_nameid) if spouse_nameid else None
+            add_life_event(conn, person_id, "marriage", marriage, partner_id)
+        death = (row.get("death_date") or "").strip()
+        if death:
+            add_life_event(conn, person_id, "death", death)
+
+    conn.commit()
+    return len(nameid_to_pid)
 
