@@ -70,6 +70,8 @@ def run_entity_match(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
@@ -201,7 +203,7 @@ def run_entity_match(
             "rows_by_key": entity_row_lookup.get(table_name, {}),
         })
 
-    text_files = get_files_for_text_match(corpus_conn)
+    text_files = get_files_for_text_match(corpus_conn, scope=scope)
     total_files += len(text_files)
 
     for i, file_row in enumerate(text_files):

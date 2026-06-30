@@ -1,9 +1,22 @@
 {% set pending_count = counts.total - counts.reviewed %}
-<p class="review-counts">
-  <strong>{{ pending_count }}</strong> pending
-  · <strong>{{ counts.reviewed }}</strong> decided
-  · {{ counts.total }} total
-</p>
+<span hidden data-pending-count="{{ pending_count }}"></span>
+<div class="queue-controls">
+  <div class="queue-controls-left">
+    <label class="page-size-label">Show
+      <select data-page-size>
+        {% for n in [5, 10, 20] %}
+        <option value="{{ n }}"{% if limit == n %} selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        <option value="9999"{% if limit >= 9999 %} selected{% endif %}>All</option>
+      </select>
+      groups
+    </label>
+  </div>
+  <div class="queue-controls-right">
+    Showing {{ groups|length }} of {{ total_groups }} group{{ '' if total_groups == 1 else 's' }}
+    · <strong>{{ pending_count }}</strong> pending · <strong>{{ counts.reviewed }}</strong> decided
+  </div>
+</div>
 {% if groups %}
 <div class="bulk-actions">
   <form class="action-form" hx-post="/review/normalise/bulk?kb={{ kb }}" hx-swap="none">
@@ -55,18 +68,14 @@
         </td>
         <td class="token-freq">{{ token.file_count }} files</td>
         <td class="token-actions">
-          <form class="action-form"
-                hx-post="/review/normalise/decide?kb={{ kb }}"
-                hx-swap="none">
+          <form class="token-action-form" data-kb="{{ kb }}">
             <input type="hidden" name="item_id" value="{{ token.id }}">
             <input type="hidden" name="action" value="accept">
             <button type="submit" class="btn btn--accept">Accept</button>
           </form>
 
           {% if sub.proposed_pattern and sub.proposed_action and sub.proposed_action != 'none' %}
-          <form class="action-form"
-                hx-post="/review/normalise/decide?kb={{ kb }}"
-                hx-swap="none">
+          <form class="token-action-form" data-kb="{{ kb }}">
             <input type="hidden" name="item_id" value="{{ token.id }}">
             <input type="hidden" name="action" value="capture">
             <input type="hidden" name="pattern" value="{{ sub.proposed_pattern }}">
@@ -79,26 +88,20 @@
           </form>
           {% endif %}
 
-          <form class="action-form"
-                hx-post="/review/normalise/decide?kb={{ kb }}"
-                hx-swap="none">
+          <form class="token-action-form" data-kb="{{ kb }}">
             <input type="hidden" name="item_id" value="{{ token.id }}">
             <input type="hidden" name="action" value="ignore">
             <button type="submit" class="btn btn--ignore">Ignore</button>
           </form>
 
-          <form class="action-form"
-                hx-post="/review/normalise/decide?kb={{ kb }}"
-                hx-swap="none">
+          <form class="token-action-form" data-kb="{{ kb }}">
             <input type="hidden" name="item_id" value="{{ token.id }}">
             <input type="hidden" name="action" value="correct">
             <input type="text" name="canonical_term" placeholder="Correct to…" class="input-text" required>
             <button type="submit" class="btn btn--correct">Correct</button>
           </form>
 
-          <form class="action-form"
-                hx-post="/review/normalise/decide?kb={{ kb }}"
-                hx-swap="none">
+          <form class="token-action-form" data-kb="{{ kb }}">
             <input type="hidden" name="item_id" value="{{ token.id }}">
             <input type="hidden" name="action" value="reject">
             <button type="submit" class="btn btn--reject">Reject</button>
@@ -112,6 +115,11 @@
   {% endfor %}
 </section>
 {% endfor %}
+{% if has_more %}
+<div class="load-more-bar">
+  <button class="btn" data-load-more>Load more — {{ total_groups - groups|length }} group{{ '' if (total_groups - groups|length) == 1 else 's' }} remaining</button>
+</div>
+{% endif %}
 {% else %}
 <p class="empty-state">All tokens reviewed.</p>
 {% endif %}

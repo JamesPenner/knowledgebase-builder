@@ -4,14 +4,13 @@
 <script>
   window.KB_NAME = {{ kb | tojson }};
   window.KB_CHECKPOINTS = {{ checkpoints_json | tojson }};
-  window.KB_GROUPS = {{ groups | map(attribute='id') | list | tojson }};
+  window.KB_GROUPS = {{ groups | selectattr('visible') | map(attribute='id') | list | tojson }};
   window.KB_GROUP_STAGES = {
-    {% for grp in groups %}
+    {% for grp in groups if grp.visible %}
     {{ grp.id | tojson }}: {{ grp.stages | map(attribute='name') | list | tojson }}{% if not loop.last %},{% endif %}
     {% endfor %}
   };
   window.KB_SOURCES = {{ sources | tojson }};
-  window.KB_SETS = {{ sets | tojson }};
 </script>
 {% endblock %}
 {% block content %}
@@ -31,8 +30,23 @@
         {% if total_files > 0 %}
           <span class="wb-sources-chip">{{ total_files }} files ingested</span>
         {% endif %}
+        {% if sources_need_sync %}
+          <span class="wb-sources-chip wb-sources-chip--warning">Needs sync</span>
+        {% elif ingest_checkpoint %}
+          <span class="wb-sources-chip">Last synced {{ ingest_checkpoint.last_run_at }}</span>
+        {% endif %}
       {% endif %}
     </span>
+    {% if sources | length > 0 %}
+    <div class="wb-sources-sync" onclick="event.stopPropagation()">
+      <button id="btn-sync-sources"
+              class="btn btn--sm{% if sources_need_sync %} btn--run{% endif %}"
+              onclick="WB.syncSources()">Sync</button>
+      <button id="btn-cancel-sync" class="btn btn--sm btn--cancel" style="display:none"
+              onclick="WB.cancelSync()">Cancel</button>
+      <span id="sync-progress" class="wb-sync-progress"></span>
+    </div>
+    {% endif %}
   </div>
   <div class="wb-sources-body" id="wb-sources-body">
     <div hx-get="/api/kb/{{ kb }}/sources/panel"
@@ -43,15 +57,46 @@
   </div>
 </div>
 
+<!-- Sets collapsible (below Sources) -->
+<div class="wb-sources wb-sets-collapsible" id="wb-sets">
+  <div class="wb-sources-header" onclick="WB.toggleSets()">
+    <span id="wb-sets-arrow" class="wb-sources-arrow">▸</span>
+    <span class="wb-sources-title">Sets</span>
+    <span id="wb-sets-chip" class="wb-sources-chips">
+      <span class="wb-sources-chip">Loading…</span>
+    </span>
+  </div>
+  <div class="wb-sources-body wb-sets-body" id="wb-sets-body" style="display:none;">
+    <div hx-get="/api/kb/{{ kb }}/sets/panel"
+         hx-trigger="load"
+         hx-swap="outerHTML"
+         id="sets-panel-loader">
+      <span class="sources-panel-loading">Loading sets…</span>
+    </div>
+  </div>
+</div>
+
 <!-- Scope bar (always visible) -->
-<div class="wb-scope-bar">
-  <div class="wb-scope-bar-item" id="scope-source-item">
+<div class="wb-scope-bar" id="wb-scope-bar">
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="scope-set">Set</label>
+    <select id="scope-set" class="wb-scope-bar-select wb-scope-bar-select--set" onchange="WB.onSetChange()">
+      <option value="">Custom</option>
+    </select>
+  </div>
+  <div class="wb-scope-bar-item">
     <label class="wb-scope-bar-label" for="scope-source">Source</label>
     <select id="scope-source" class="wb-scope-bar-select" onchange="WB.onScopeChange()">
       <option value="">All sources</option>
     </select>
   </div>
-  <div class="wb-scope-bar-item" id="scope-type-item">
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="scope-folder">Folder</label>
+    <select id="scope-folder" class="wb-scope-bar-select" onchange="WB.onScopeChange()">
+      <option value="">All folders</option>
+    </select>
+  </div>
+  <div class="wb-scope-bar-item">
     <label class="wb-scope-bar-label" for="scope-type">Type</label>
     <select id="scope-type" class="wb-scope-bar-select" onchange="WB.onScopeChange()">
       <option value="">All</option>
@@ -60,11 +105,34 @@
       <option value="audio">Audio</option>
     </select>
   </div>
-  <div class="wb-scope-bar-item" id="scope-set-item">
-    <label class="wb-scope-bar-label" for="scope-set">Set</label>
-    <select id="scope-set" class="wb-scope-bar-select" onchange="WB.onScopeChange()">
-      <option value="">None</option>
-    </select>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="scope-date-from">From</label>
+    <input type="date" id="scope-date-from" class="wb-scope-bar-date" onchange="WB.onScopeChange()">
+  </div>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="scope-date-to">To</label>
+    <input type="date" id="scope-date-to" class="wb-scope-bar-date" onchange="WB.onScopeChange()">
+  </div>
+  <div class="wb-scope-bar-item wb-scope-bar-item--wide">
+    <label class="wb-scope-bar-label" for="scope-name-pattern">Name</label>
+    <input type="text" id="scope-name-pattern" class="wb-scope-bar-text"
+           placeholder="e.g. IMG_*" oninput="WB.onScopeChange()">
+  </div>
+  <div class="wb-scope-bar-count">
+    <span id="scope-live-count">—</span> files
+  </div>
+  <div class="wb-scope-bar-actions">
+    <button class="btn btn--sm" id="scope-save-btn" onclick="WB.promptSaveSet()">
+      Save<span id="scope-dirty-dot" class="wb-dirty-dot" style="display:none;">●</span>
+    </button>
+    <button class="btn btn--sm btn--muted" onclick="WB.clearScope()">Clear</button>
+  </div>
+  <!-- Inline save form (hidden by default) -->
+  <div class="wb-scope-save-form" id="scope-save-form" style="display:none;">
+    <input type="text" id="scope-save-name" class="wb-scope-bar-text" placeholder="Set name" maxlength="64">
+    <button class="btn btn--sm btn--run" onclick="WB.confirmSaveSet()">Confirm</button>
+    <button class="btn btn--sm btn--muted" onclick="WB.cancelSaveSet()">Cancel</button>
+    <span id="scope-save-result" class="sources-preview-result"></span>
   </div>
 </div>
 
@@ -72,14 +140,16 @@
 <div class="wb-actions">
   <div class="wb-run-mode">
     <span class="wb-scope-bar-label">Mode</span>
-    <button class="wb-mode-btn wb-mode-btn--active" data-mode="resume" onclick="WB.setAllModes('resume')">Resume</button>
-    <button class="wb-mode-btn" data-mode="rerun" onclick="WB.setAllModes('rerun')">Re-run</button>
+    <div class="wb-seg">
+      <button class="wb-seg-opt wb-seg-opt--active" data-mode="resume" onclick="WB.setAllModes('resume')">Resume</button>
+      <button class="wb-seg-opt" data-mode="rerun" onclick="WB.setAllModes('rerun')">Re-run</button>
+    </div>
   </div>
   <button class="btn btn--run-all" onclick="WB.runAll()">Run all</button>
   <button id="btn-run-selected" class="btn btn--run" onclick="WB.runSelected()" disabled>Run selected</button>
 </div>
 
-{% for grp in groups %}
+{% for grp in groups if grp.visible %}
   {#
     Gates that precede the first stage in this group are rendered as banners
     ABOVE the group card. Gates that precede a mid-group stage are rendered
@@ -105,6 +175,9 @@
     <div class="wb-group-header">
       <span class="wb-group-label">{{ grp.label }}</span>
       <span class="wb-group-desc">{{ grp.description }}</span>
+      {% if not grp.scope_aware %}
+        <span class="wb-scope-badge wb-scope-badge--ignored" title="Scope filter is not applied to this group — all files are processed">All files</span>
+      {% endif %}
       <button class="btn btn--group" onclick="WB.runGroup('{{ grp.id }}')">Run group</button>
     </div>
     <table class="stage-table" style="margin:0">
@@ -154,6 +227,8 @@
                 {{ sc.done }} / {{ sc.total }}
                 {% if sc.failed %}<span class="count-failed"> · {{ sc.failed }} failed</span>{% endif %}
               {% endif %}
+            {% elif stage.actual_count is not none %}
+              {{ stage.actual_count }}
             {% elif stage.checkpoint %}
               {{ stage.checkpoint.files_processed }}
             {% else %}
@@ -168,7 +243,7 @@
               <button class="stage-run-mode" data-stage-mode-btn="{{ stage.name }}"
                       onclick="WB.toggleStageMode('{{ stage.name }}')"
                       {% if stage.state == 'blocked' %}disabled{% endif %}>
-                {%- if stage.name == 'ingest' %}Full scan{%- else %}Resume{%- endif %}
+                Resume
               </button>
             </div>
             <button id="btn-cancel-{{ stage.name }}" class="btn btn--cancel"
@@ -193,6 +268,48 @@
             {% endif %}
           </td>
         </tr>
+        {% if stage.gate_warning %}
+        <tr id="gate-{{ stage.name }}">
+          <td colspan="6" style="padding:0">
+            <div class="wb-gate wb-gate--pending" style="margin:0;border-radius:0;border-left:none;border-right:none">
+              <span class="wb-gate-status">⚠</span>
+              {% if stage.gate_warning == 'location_register_missing' %}
+                <span>No location register found.</span>
+                <button class="btn btn--sm"
+                        hx-post="/api/stages/generate-location-template?kb={{ kb }}"
+                        hx-target="#gate-{{ stage.name }}"
+                        hx-swap="outerHTML">
+                  Generate template
+                </button>
+              {% elif stage.gate_warning == 'location_register_not_seeded' %}
+                <span><em>Index_of_Locations.csv</em> found but not yet seeded.</span>
+                <button class="btn btn--sm"
+                        hx-post="/api/stages/seed-locations?kb={{ kb }}"
+                        hx-target="#gate-{{ stage.name }}"
+                        hx-swap="outerHTML">
+                  Seed Locations
+                </button>
+              {% elif stage.gate_warning == 'people_register_missing' %}
+                <span>No people register found.</span>
+                <button class="btn btn--sm"
+                        hx-post="/api/stages/generate-people-template?kb={{ kb }}"
+                        hx-target="#gate-{{ stage.name }}"
+                        hx-swap="outerHTML">
+                  Generate template
+                </button>
+              {% elif stage.gate_warning == 'people_register_not_seeded' %}
+                <span><em>Index_of_People.csv</em> found but not yet seeded.</span>
+                <button class="btn btn--sm"
+                        hx-post="/api/stages/seed-people?kb={{ kb }}"
+                        hx-target="#gate-{{ stage.name }}"
+                        hx-swap="outerHTML">
+                  Seed People
+                </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endif %}
       {% endfor %}
       </tbody>
     </table>

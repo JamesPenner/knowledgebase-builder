@@ -10,13 +10,12 @@ from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
-_VALID_SECTIONS = frozenset({"vocabulary", "corrections", "patterns", "field-map", "entities", "people"})
+_VALID_SECTIONS = frozenset({"vocabulary", "patterns", "field-map", "entities", "people"})
 
 # Maps section name → list of output file names it produces (for progress reporting)
 _SECTION_FILES = {
     "vocabulary":  ["vocabulary.csv", "stopwords.txt"],
-    "corrections": ["corrections.yaml"],
-    "patterns":    ["patterns.yaml", "reject_tokens.csv"],
+    "patterns":    ["patterns.yaml", "corrections.csv", "reject_tokens.csv"],
     "field-map":   ["field_map.csv"],
     "entities":    ["entities/"],
     "people":      ["people/"],
@@ -41,37 +40,36 @@ def _write_vocabulary(export_dir: Path, kb_conn) -> None:
     (export_dir / "stopwords.txt").write_text("\n".join(terms) + ("\n" if terms else ""), encoding="utf-8")
 
 
-def _write_corrections(export_dir: Path, kb_conn) -> None:
-    import yaml
-    from src.db.kb import get_export_corrections_exact
-
-    exact_rows = get_export_corrections_exact(kb_conn)
-    corrections_dict = {r["raw_term"]: r["canonical_term"] for r in exact_rows}
-    with open(export_dir / "corrections.yaml", "w", encoding="utf-8") as fh:
-        yaml.dump(corrections_dict, fh, allow_unicode=True, default_flow_style=False, sort_keys=True)
-
-
 def _write_patterns(export_dir: Path, kb_conn) -> None:
     import yaml
-    from src.db.kb import (
-        get_export_capture_rules,
-        get_export_corrections_pattern,
-        get_export_reject_tokens,
-        get_export_substitute_rules,
-    )
+    from src.db.kb import get_export_pattern_rules, get_export_substitute_rules
 
-    capture_rows = get_export_capture_rules(kb_conn)
-    capture_list = [
-        {
-            "pattern": r["pattern"],
-            "label": r["label"],
-            "extract_as": r["extract_as"],
-            "value_type": r["value_type"],
-            "format_str": r["format_str"],
-            "keep_token": bool(r["keep_token"]),
-        }
-        for r in capture_rows
-    ]
+    pattern_rows = get_export_pattern_rules(kb_conn)
+
+    # patterns.yaml: regex rules (all actions) + substitute_rules section
+    regex_rules = []
+    for r in pattern_rows:
+        if not r["is_regex"]:
+            continue
+        entry: dict = {"action": r["action"], "pattern": r["pattern"]}
+        if r["label"]:
+            entry["label"] = r["label"]
+        if r["action"] == "replace":
+            entry["replace_with"] = r["replace_with"]
+            if r["replace_type"]:
+                entry["replace_type"] = r["replace_type"]
+        elif r["action"] == "capture":
+            entry["extract_as"] = r["extract_as"]
+            if r["value_type"]:
+                entry["value_type"] = r["value_type"]
+            if r["format_str"]:
+                entry["format_str"] = r["format_str"]
+            entry["keep_token"] = bool(r["keep_token"])
+            if r["date_precision"]:
+                entry["date_precision"] = r["date_precision"]
+        if r["scope"] != "both":
+            entry["scope"] = r["scope"]
+        regex_rules.append(entry)
 
     substitute_rows = get_export_substitute_rules(kb_conn)
     substitute_list = [
@@ -84,35 +82,30 @@ def _write_patterns(export_dir: Path, kb_conn) -> None:
         for r in substitute_rows
     ]
 
-    pattern_corr_rows = get_export_corrections_pattern(kb_conn)
-    pattern_corr_list = [
-        {
-            "pattern": r["raw_term"],
-            "canonical": r["canonical_term"],
-            "correction_kind": r["correction_kind"],
-        }
-        for r in pattern_corr_rows
-    ]
-
-    patterns_data = {
-        "capture_rules": capture_list,
-        "substitute_rules": substitute_list,
-        "pattern_corrections": pattern_corr_list,
-    }
+    patterns_data = {"rules": regex_rules, "substitute_rules": substitute_list}
     with open(export_dir / "patterns.yaml", "w", encoding="utf-8") as fh:
         yaml.dump(patterns_data, fh, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
-    reject_rows = get_export_reject_tokens(kb_conn)
-    with open(export_dir / "reject_tokens.csv", "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["pattern", "is_regex", "label", "scope"])
+    # corrections.csv: exact replace rules
+    exact_replace = [r for r in pattern_rows if r["action"] == "replace" and not r["is_regex"]]
+    with open(export_dir / "corrections.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["raw", "canonical", "type"])
         writer.writeheader()
-        for r in reject_rows:
+        for r in exact_replace:
             writer.writerow({
-                "pattern": r["pattern"],
-                "is_regex": r["is_regex"],
-                "label": r["label"],
-                "scope": r["scope"],
+                "raw": r["pattern"],
+                "canonical": r["replace_with"],
+                "type": r["replace_type"] or "correction",
             })
+
+    # reject_tokens.csv: tokens rejected during Normalise Review
+    from src.db.kb import get_token_rejections
+    rejections = get_token_rejections(kb_conn)
+    with open(export_dir / "reject_tokens.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["token"])
+        writer.writeheader()
+        for r in rejections:
+            writer.writerow({"token": r["token"]})
 
 
 def _write_field_map(export_dir: Path, kb_path: Path) -> None:
@@ -159,10 +152,10 @@ def _write_entities(export_dir: Path, kb_conn) -> None:
                 writer.writerow({c: r[c] for c in columns})
 
 
-def _write_descriptions(export_dir: Path, corpus_conn) -> None:
+def _write_descriptions(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     from src.db.corpus import get_export_descriptions
 
-    rows = get_export_descriptions(corpus_conn)
+    rows = get_export_descriptions(corpus_conn, scope_where)
     with open(export_dir / "descriptions.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh, fieldnames=["file_path", "description", "model", "processed_at"]
@@ -177,10 +170,10 @@ def _write_descriptions(export_dir: Path, corpus_conn) -> None:
             })
 
 
-def _write_tags(export_dir: Path, corpus_conn) -> None:
+def _write_tags(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     from src.db.corpus import get_export_tags
 
-    rows = get_export_tags(corpus_conn)
+    rows = get_export_tags(corpus_conn, scope_where)
     with open(export_dir / "tags.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh, fieldnames=["file_path", "tags", "refined_description", "new_terms_proposed"]
@@ -195,19 +188,20 @@ def _write_tags(export_dir: Path, corpus_conn) -> None:
             })
 
 
-def _write_hashes(export_dir: Path, corpus_conn) -> None:
+def _write_hashes(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     rows = corpus_conn.execute(
-        """
+        f"""
         SELECT f.path, f.sha256,
-               fh.sha256_content, fh.phash, fh.dhash, fh.area_hash,
+               fh.sha256_content, fh.phash, fh.dhash,
                fh.video_collage_phash, fh.video_frame_phashes
         FROM files f
         LEFT JOIN file_hashes fh ON fh.file_id = f.id
+        WHERE 1=1 {scope_where}
         ORDER BY f.path
         """
     ).fetchall()
     fields = ["path", "sha256", "sha256_content", "phash", "dhash",
-              "area_hash", "video_collage_phash", "video_frame_phashes"]
+              "video_collage_phash", "video_frame_phashes"]
     with open(export_dir / "hashes.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
@@ -215,9 +209,9 @@ def _write_hashes(export_dir: Path, corpus_conn) -> None:
             writer.writerow({f: r[f] for f in fields})
 
 
-def _write_aesthetic_scores(export_dir: Path, corpus_conn) -> None:
+def _write_aesthetic_scores(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     rows = corpus_conn.execute(
-        """
+        f"""
         SELECT f.path,
                MAX(CASE WHEN fa.model_name = 'nima_mobilenet' THEN fa.score END) AS nima_score,
                MAX(CASE WHEN fa.model_name = 'nima_mobilenet' THEN fa.band  END) AS nima_band,
@@ -225,6 +219,7 @@ def _write_aesthetic_scores(export_dir: Path, corpus_conn) -> None:
                MAX(CASE WHEN fa.model_name = 'clip'           THEN fa.band  END) AS clip_band
         FROM files f
         JOIN file_aesthetic fa ON fa.file_id = f.id
+        WHERE 1=1 {scope_where}
         GROUP BY f.id
         ORDER BY f.path
         """
@@ -239,10 +234,10 @@ def _write_aesthetic_scores(export_dir: Path, corpus_conn) -> None:
             writer.writerow({f: r[f] for f in fields})
 
 
-def _write_temporal_fields(export_dir: Path, corpus_conn) -> None:
+def _write_temporal_fields(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     from src.db.corpus import get_export_temporal_fields
 
-    rows = get_export_temporal_fields(corpus_conn)
+    rows = get_export_temporal_fields(corpus_conn, scope_where)
     if not rows:
         return
     fields = ["path", "year", "decade", "month_name", "day_name", "season", "time_of_day", "holiday"]
@@ -253,9 +248,9 @@ def _write_temporal_fields(export_dir: Path, corpus_conn) -> None:
             writer.writerow({f: r[f] for f in fields})
 
 
-def _write_search_text(export_dir: Path, corpus_conn) -> None:
+def _write_search_text(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     rows = corpus_conn.execute(
-        """
+        f"""
         SELECT
             f.path,
             f.filename,
@@ -266,6 +261,7 @@ def _write_search_text(export_dir: Path, corpus_conn) -> None:
         LEFT JOIN file_derived_tags fdt ON fdt.file_id = f.id
         LEFT JOIN file_entity_matches fem ON fem.file_id = f.id AND fem.stale = 0
         LEFT JOIN descriptions d ON d.file_id = f.id
+        WHERE 1=1 {scope_where}
         GROUP BY f.id
         ORDER BY f.path
         """
@@ -284,10 +280,10 @@ def _write_search_text(export_dir: Path, corpus_conn) -> None:
             writer.writerow({"path": r["path"], "search_text": " ".join(p for p in parts if p)})
 
 
-def _write_coverage(export_dir: Path, corpus_conn) -> None:
+def _write_coverage(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     from src.db.corpus import get_coverage_per_file
 
-    rows = get_coverage_per_file(corpus_conn)
+    rows = get_coverage_per_file(corpus_conn, scope_where)
     fieldnames = [
         "path", "has_description", "has_tags", "has_entities", "has_gps",
         "has_aesthetic_score", "has_asset_date", "has_quality_score",
@@ -344,15 +340,15 @@ def _group_near_duplicates(rows, threshold: int) -> list[dict]:
     return result
 
 
-def _write_near_duplicates(export_dir: Path, corpus_conn, hamming_threshold: int) -> None:
+def _write_near_duplicates(export_dir: Path, corpus_conn, hamming_threshold: int, scope_where: str = "") -> None:
     rows = corpus_conn.execute(
-        """
+        f"""
         SELECT f.id, f.path, fh.phash,
                MAX(CASE WHEN fa.model_name = 'combined_rank' THEN fa.score ELSE NULL END) AS score
         FROM files f
         JOIN file_hashes fh ON fh.file_id = f.id
         LEFT JOIN file_aesthetic fa ON fa.file_id = f.id
-        WHERE f.canonical_id IS NULL AND fh.phash IS NOT NULL
+        WHERE f.canonical_id IS NULL AND fh.phash IS NOT NULL {scope_where}
         GROUP BY f.id
         ORDER BY score DESC NULLS LAST, f.id
         """
@@ -424,9 +420,23 @@ def _write_geolabels(export_dir: Path, corpus_conn) -> None:
         writer.writerows(dict(r) for r in rows)
 
 
-def _write_summaries(export_dir: Path, corpus_conn) -> None:
+def _write_location_labels(export_dir: Path, corpus_conn) -> None:
+    from src.db.corpus import get_location_labels_for_export
+
+    rows = get_location_labels_for_export(corpus_conn)
+    with open(export_dir / "location_labels.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=["path", "location", "city", "state", "country", "country_code",
+                        "distance_m", "matched_table", "matched_at"],
+        )
+        writer.writeheader()
+        writer.writerows(dict(r) for r in rows)
+
+
+def _write_summaries(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
     from src.db.corpus import get_export_summaries
-    rows = get_export_summaries(corpus_conn)
+    rows = get_export_summaries(corpus_conn, scope_where)
     if not rows:
         return
     with open(export_dir / "summaries.csv", "w", newline="", encoding="utf-8") as fh:
@@ -564,6 +574,8 @@ def run_export(
     progress: ProgressReporter,
     cancel_event: threading.Event,
     section: str | None = None,
+    *,
+    scope=None,
 ) -> None:
     from src.db.corpus import open_corpus, update_pipeline_checkpoint
     from src.db.kb import open_kb
@@ -574,6 +586,20 @@ def run_export(
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+
+    # Build a temp table of matching file IDs when a non-empty scope is active.
+    # All scoped _write_* functions reference this table via scope_where.
+    scope_where = ""
+    if scope is not None and not scope.is_empty():
+        frag, params = scope.to_sql_fragment()
+        corpus_conn.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS _export_scope (file_id INTEGER PRIMARY KEY)"
+        )
+        corpus_conn.execute(
+            f"INSERT OR IGNORE INTO _export_scope SELECT f.id FROM files f WHERE 1=1{frag}",
+            params,
+        )
+        scope_where = "AND f.id IN (SELECT file_id FROM _export_scope)"
 
     try:
         export_dir = kb_path.parent / "export"
@@ -591,8 +617,6 @@ def run_export(
 
             if sec == "vocabulary":
                 _write_vocabulary(export_dir, kb_conn)
-            elif sec == "corrections":
-                _write_corrections(export_dir, kb_conn)
             elif sec == "patterns":
                 _write_patterns(export_dir, kb_conn)
             elif sec == "field-map":
@@ -607,17 +631,18 @@ def run_export(
         # descriptions.csv, tags.csv, hashes.csv, aesthetic_scores.csv, search_text.csv
         # are only written on full export
         if not cancel_event.is_set() and section is None:
-            _write_descriptions(export_dir, corpus_conn)
-            _write_tags(export_dir, corpus_conn)
-            _write_hashes(export_dir, corpus_conn)
-            _write_aesthetic_scores(export_dir, corpus_conn)
-            _write_search_text(export_dir, corpus_conn)
-            _write_temporal_fields(export_dir, corpus_conn)
+            _write_descriptions(export_dir, corpus_conn, scope_where)
+            _write_tags(export_dir, corpus_conn, scope_where)
+            _write_hashes(export_dir, corpus_conn, scope_where)
+            _write_aesthetic_scores(export_dir, corpus_conn, scope_where)
+            _write_search_text(export_dir, corpus_conn, scope_where)
+            _write_temporal_fields(export_dir, corpus_conn, scope_where)
             _write_transcripts(export_dir, corpus_conn)
-            _write_summaries(export_dir, corpus_conn)
-            _write_coverage(export_dir, corpus_conn)
-            _write_near_duplicates(export_dir, corpus_conn, config.near_duplicate_hamming_threshold)
+            _write_summaries(export_dir, corpus_conn, scope_where)
+            _write_coverage(export_dir, corpus_conn, scope_where)
+            _write_near_duplicates(export_dir, corpus_conn, config.near_duplicate_hamming_threshold, scope_where)
             _write_geolabels(export_dir, corpus_conn)
+            _write_location_labels(export_dir, corpus_conn)
             _write_gps_clusters(export_dir, corpus_conn)
             _write_validation_report(export_dir, corpus_conn)
             _write_people(export_dir, kb_conn, corpus_conn, config.export_biometric)

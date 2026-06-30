@@ -97,9 +97,7 @@ def run_quality(
     progress: ProgressReporter,
     cancel_event: threading.Event,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope=None,
 ) -> dict:
     from src.db.corpus import (
         get_pending_quality_files,
@@ -115,7 +113,7 @@ def run_quality(
     start = time.monotonic()
 
     try:
-        pending = get_pending_quality_files(corpus_conn, source_id=source_id, file_type=file_type, set_id=set_id)
+        pending = get_pending_quality_files(corpus_conn, scope=scope)
         total = len(pending)
 
         for i, row in enumerate(pending):

@@ -1,4 +1,4 @@
-"""Integration tests for KB.P12 extended hashing — area hash + video hashes."""
+"""Integration tests for KB.P12 extended hashing — video hashes."""
 import json
 from pathlib import Path
 
@@ -39,39 +39,6 @@ def _setup_images(tmp_path: Path, names: list[str]) -> tuple[Path, Path]:
 
 
 # ---------------------------------------------------------------------------
-# Area hash (images)
-# ---------------------------------------------------------------------------
-
-def test_image_area_hash_is_64_cell_json_array(tmp_path):
-    corpus_path, kb_path = _setup_images(tmp_path, ["img.jpg"])
-    run_hash(corpus_path, kb_path, Config(), NullProgressReporter(), make_cancel_event())
-
-    conn = open_corpus(corpus_path)
-    row = conn.execute("SELECT area_hash FROM file_hashes").fetchone()
-    conn.close()
-
-    assert row is not None
-    assert row["area_hash"] is not None
-    cells = json.loads(row["area_hash"])
-    assert isinstance(cells, list)
-    assert len(cells) == 64   # 8×8 grid
-
-
-def test_image_area_hash_cells_are_hex_strings(tmp_path):
-    corpus_path, kb_path = _setup_images(tmp_path, ["img.jpg"])
-    run_hash(corpus_path, kb_path, Config(), NullProgressReporter(), make_cancel_event())
-
-    conn = open_corpus(corpus_path)
-    row = conn.execute("SELECT area_hash FROM file_hashes").fetchone()
-    conn.close()
-
-    cells = json.loads(row["area_hash"])
-    for cell in cells:
-        assert isinstance(cell, str)
-        assert len(cell) == 16   # pHash is 64-bit = 16 hex chars
-
-
-# ---------------------------------------------------------------------------
 # upsert isolation — ensure columns don't wipe each other
 # ---------------------------------------------------------------------------
 
@@ -86,7 +53,7 @@ def test_upsert_file_hash_does_not_wipe_video_columns(tmp_path):
 
     upsert_video_hash(conn, 1, "abcd1234", json.dumps(["hash1"]))
     conn.commit()
-    upsert_file_hash(conn, 1, "sha_content", "phash_val", "dhash_val", "[]")
+    upsert_file_hash(conn, 1, "sha_content", "phash_val", "dhash_val")
     conn.commit()
 
     row = conn.execute("SELECT * FROM file_hashes WHERE file_id = 1").fetchone()
@@ -104,7 +71,7 @@ def test_upsert_video_hash_does_not_wipe_image_columns(tmp_path):
     )
     conn.commit()
 
-    upsert_file_hash(conn, 1, "sha_content", "phash_val", "dhash_val", '["cell0"]')
+    upsert_file_hash(conn, 1, "sha_content", "phash_val", "dhash_val")
     conn.commit()
     upsert_video_hash(conn, 1, "vcphash", json.dumps(["vhash1"]))
     conn.commit()
@@ -112,7 +79,6 @@ def test_upsert_video_hash_does_not_wipe_image_columns(tmp_path):
     row = conn.execute("SELECT * FROM file_hashes WHERE file_id = 1").fetchone()
     conn.close()
     assert row["phash"] == "phash_val"
-    assert row["area_hash"] == '["cell0"]'
     assert row["video_collage_phash"] == "vcphash"
 
 

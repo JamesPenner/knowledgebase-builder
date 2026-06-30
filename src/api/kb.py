@@ -73,6 +73,7 @@ class SourceCreateRequest(BaseModel):
     path: str
     file_type: str = "all"
     recursive: bool = True
+    incremental: bool = False
     filters: dict = {}
     modified_after: str | None = None
     exclude_patterns: list[str] = []
@@ -88,13 +89,12 @@ def kb_add_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
     conn = open_corpus(folder / "corpus.db")
     try:
         spec = FilterSpec(
-            file_type=req.file_type,
             glob=req.filters.get("glob"),
             count_limit=req.filters.get("count_limit"),
             modified_after=req.modified_after,
             exclude_patterns=req.exclude_patterns,
         )
-        source_id = add_source(conn, req.path, req.file_type, req.recursive, spec.to_dict())
+        source_id = add_source(conn, req.path, req.file_type, req.recursive, spec.to_dict(), req.incremental)
         return {"id": source_id, "path": req.path}
     finally:
         conn.close()
@@ -103,6 +103,7 @@ def kb_add_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
 class SourceUpdateRequest(BaseModel):
     file_type: str = "all"
     recursive: bool = True
+    incremental: bool = False
     filters: dict = {}
     modified_after: str | None = None
     exclude_patterns: list[str] = []
@@ -116,13 +117,12 @@ def kb_update_source(name: str, source_id: int, req: SourceUpdateRequest) -> dic
     conn = open_corpus(folder / "corpus.db")
     try:
         spec = FilterSpec(
-            file_type=req.file_type,
             glob=req.filters.get("glob"),
             count_limit=req.filters.get("count_limit"),
             modified_after=req.modified_after,
             exclude_patterns=req.exclude_patterns,
         )
-        found = update_source(conn, source_id, req.file_type, req.recursive, spec.to_dict())
+        found = update_source(conn, source_id, req.file_type, req.recursive, spec.to_dict(), req.incremental)
         if not found:
             raise HTTPException(status_code=404, detail=f"Source {source_id} not found")
         return {"id": source_id, "updated": True}
@@ -163,7 +163,6 @@ def kb_preview_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
             break
 
     spec = FilterSpec(
-        file_type=req.file_type,
         glob=req.filters.get("glob"),
         count_limit=req.filters.get("count_limit"),
         modified_after=req.modified_after,
@@ -182,7 +181,7 @@ def kb_preview_source(name: str, req: SourceCreateRequest) -> dict[str, Any]:
 @router.get("/{name}/sources/panel", include_in_schema=False)
 def kb_sources_panel(name: str, request: Request):
     from fastapi.templating import Jinja2Templates
-    from src.db.corpus import get_file_sets, get_sources, open_corpus
+    from src.db.corpus import get_sources, open_corpus
     folder = _get_kb_folder(name)
     conn = open_corpus(folder / "corpus.db")
     try:
@@ -204,13 +203,12 @@ def kb_sources_panel(name: str, request: Request):
             if filters.get("exclude_patterns"):
                 parts.append(f"exclude: {', '.join(filters['exclude_patterns'])}")
             d["filters_summary"] = ", ".join(parts) if parts else ""
-            # Expose parsed filter fields for edit form pre-population
             d["f_glob"] = filters.get("glob") or ""
             d["f_count_limit"] = filters.get("count_limit") or ""
             d["f_modified_after"] = filters.get("modified_after") or ""
             d["f_exclude_patterns"] = ", ".join(filters.get("exclude_patterns") or [])
+            d["incremental"] = bool(d.get("incremental"))
             sources.append(d)
-        sets = [dict(r) for r in get_file_sets(conn)]
     finally:
         conn.close()
     tpl_dir = Path(__file__).parent.parent.parent / "templates"
@@ -218,14 +216,57 @@ def kb_sources_panel(name: str, request: Request):
     return tpl.TemplateResponse(request, "partials/sources_panel.html", {
         "kb": name,
         "sources": sources,
-        "sets": sets,
     })
+
+
+@router.get("/{name}/folders", tags=["kb"])
+def kb_folders(name: str, source_id: int | None = None) -> dict[str, Any]:
+    from src.db.corpus import get_distinct_folders, open_corpus
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    try:
+        return {"folders": get_distinct_folders(conn, source_id)}
+    finally:
+        conn.close()
+
+
+@router.get("/{name}/sets/preview", tags=["kb"])
+def kb_sets_preview(
+    name: str,
+    source_id: int | None = None,
+    folder_prefix: str | None = None,
+    file_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    name_pattern: str | None = None,
+) -> dict[str, Any]:
+    from src.db.corpus import count_files_matching, open_corpus
+    from src.pipeline.filter_spec import CorpusFilterSpec
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    spec = CorpusFilterSpec(
+        source_id=source_id,
+        folder_prefix=folder_prefix,
+        file_type=file_type,
+        date_from=date_from,
+        date_to=date_to,
+        name_pattern=name_pattern,
+    )
+    try:
+        return {"file_count": count_files_matching(conn, spec)}
+    finally:
+        conn.close()
 
 
 class SetCreateRequest(BaseModel):
     name: str
     description: str = ""
-    scope: dict = {}
+    source_id: int | None = None
+    folder_prefix: str | None = None
+    file_type: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    name_pattern: str | None = None
 
 
 @router.get("/{name}/sets", tags=["kb"])
@@ -234,45 +275,66 @@ def kb_list_sets(name: str) -> list[dict[str, Any]]:
     folder = _get_kb_folder(name)
     conn = open_corpus(folder / "corpus.db")
     try:
-        return [dict(r) for r in get_file_sets(conn)]
+        return get_file_sets(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/{name}/sets/panel", include_in_schema=False)
+def kb_sets_panel(name: str, request: Request):
+    from fastapi.templating import Jinja2Templates
+    from src.db.corpus import get_file_sets, open_corpus
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    try:
+        sets = get_file_sets(conn)
+    finally:
+        conn.close()
+    tpl_dir = Path(__file__).parent.parent.parent / "templates"
+    tpl = Jinja2Templates(directory=str(tpl_dir))
+    return tpl.TemplateResponse(request, "partials/sets_panel.html", {
+        "kb": name,
+        "sets": sets,
+    })
+
+
+@router.get("/{name}/sets/{set_id}", tags=["kb"])
+def kb_get_set(name: str, set_id: int) -> dict[str, Any]:
+    from src.db.corpus import get_file_set, open_corpus
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    try:
+        row = get_file_set(conn, set_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Set not found")
+        return row
     finally:
         conn.close()
 
 
 @router.post("/{name}/sets", tags=["kb"])
 def kb_create_set(name: str, req: SetCreateRequest) -> dict[str, Any]:
-    from src.db.corpus import create_file_set, open_corpus
+    from src.db.corpus import count_files_matching, create_file_set, open_corpus
+    from src.pipeline.filter_spec import CorpusFilterSpec
     folder = _get_kb_folder(name)
     conn = open_corpus(folder / "corpus.db")
+    spec = CorpusFilterSpec(
+        source_id=req.source_id,
+        folder_prefix=req.folder_prefix,
+        file_type=req.file_type,
+        date_from=req.date_from,
+        date_to=req.date_to,
+        name_pattern=req.name_pattern,
+    )
     try:
-        # Resolve scope to file IDs
-        scope = req.scope
-        source_id = scope.get("source_id")
-        file_type = scope.get("file_type")
-        set_filter_id = scope.get("set_id")
-
-        sql = "SELECT id FROM files WHERE 1=1"
-        params: list = []
-        if source_id is not None:
-            sql += " AND source_id = ?"
-            params.append(source_id)
-        if file_type:
-            sql += " AND file_type = ?"
-            params.append(file_type)
-        if set_filter_id is not None:
-            sql += " AND id IN (SELECT file_id FROM file_set_members WHERE set_id = ?)"
-            params.append(set_filter_id)
-
-        rows = conn.execute(sql, params).fetchall()
-        file_ids = [r["id"] for r in rows]
-
         try:
-            set_id = create_file_set(conn, req.name, req.description, file_ids)
+            set_id = create_file_set(conn, req.name, req.description, spec)
         except Exception as exc:
             if "UNIQUE" in str(exc):
                 raise HTTPException(status_code=422, detail=f"Set name already exists: {req.name}") from exc
             raise
-        return {"id": set_id, "file_count": len(file_ids)}
+        file_count = count_files_matching(conn, spec)
+        return {"id": set_id, "file_count": file_count, "criteria_summary": spec.summary()}
     finally:
         conn.close()
 

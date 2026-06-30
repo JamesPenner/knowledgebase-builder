@@ -24,6 +24,7 @@ DEPENDENCIES: dict[str, list[str]] = {
     "voice_diarize":       ["ingest"],
     "attribute_speakers":  ["transcribe", "voice_diarize"],
     "geolocate":           ["extract_fields"],
+    "geo_meta":            ["extract_fields"],
 }
 
 # Maps stage name → touchpoint that must be completed before that stage runs.
@@ -62,50 +63,66 @@ INVALIDATES: dict[str, list[str]] = {
     "voice_diarize":      [],
     "attribute_speakers": [],
     "geolocate":          [],
+    "geo_meta":           [],
 }
 
 STAGE_GROUPS: list[dict] = [
     {
+        "id": "sources",
+        "label": "Sources",
+        "description": "File discovery and corpus population",
+        "stages": ["ingest"],
+        "scope_aware": False,
+        "visible": False,  # rendered in the Sources header, not the pipeline table
+    },
+    {
         "id": "discovery",
         "label": "Discovery",
         "description": "Sets up what the corpus knows about",
-        "stages": ["ingest", "analyse"],
+        "stages": ["analyse"],
+        "scope_aware": False,
     },
     {
         "id": "metadata",
         "label": "Metadata",
         "description": "Fast, no ML — structural information and metadata-driven enrichment",
-        "stages": ["normalize", "extract_meta", "extract_fields", "hash", "validate", "temporal", "face_meta"],
+        "stages": ["normalize", "extract_meta", "extract_fields", "hash", "validate", "temporal", "face_meta", "geo_meta"],
+        "scope_aware": False,
     },
     {
         "id": "ml_analysis",
         "label": "ML Analysis",
         "description": "Slow, GPU-bound — content understanding",
         "stages": ["describe", "transcribe", "summarize", "quality", "face", "voice", "voice_diarize"],
+        "scope_aware": True,
     },
     {
         "id": "enrichment",
         "label": "Enrichment",
         "description": "Synthesis — cross-reference with knowledge base",
         "stages": ["entity_match", "classify", "geolocate", "attribute_speakers"],
+        "scope_aware": False,
     },
     {
         "id": "vocabulary",
         "label": "Vocabulary",
         "description": "Knowledge-building against review queues",
         "stages": ["suggest", "retag"],
+        "scope_aware": True,
     },
     {
         "id": "curation",
         "label": "Curation",
         "description": "Per-file scoring for export filtering and star-rating writeback",
         "stages": ["aesthetic"],
+        "scope_aware": True,
     },
     {
         "id": "output",
         "label": "Output",
         "description": "Finalise and deliver",
         "stages": ["writeback", "export"],
+        "scope_aware": True,
     },
 ]
 
@@ -130,6 +147,7 @@ STAGE_DESCRIPTIONS: dict[str, str] = {
     "entity_match":       "Links file metadata to registered locations, people, and events",
     "classify":           "Applies classification rules to assign domain-specific tags",
     "geolocate":          "Reverse-geocodes GPS coordinates to place names",
+    "geo_meta":           "Matches file GPS coordinates against the location register and writes structured location fields",
     "attribute_speakers": "Assigns speaker identities to transcript segments",
     "suggest":            "Proposes new vocabulary terms from descriptions and transcripts",
     "retag":              "Refines tags using LLM review against approved vocabulary (requires GPU)",

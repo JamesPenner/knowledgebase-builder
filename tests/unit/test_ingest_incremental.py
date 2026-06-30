@@ -1,4 +1,4 @@
-"""Tests for update_source_ingested and incremental re-ingest."""
+"""Tests for update_source_ingested and per-source incremental re-ingest."""
 import os
 import threading
 import time
@@ -37,7 +37,7 @@ class TestUpdateSourceIngested:
 # ---------------------------------------------------------------------------
 
 class TestIngestAlwaysUpdatesSource:
-    def test_last_ingested_at_written_without_incremental(self, tmp_path, dbs):
+    def test_last_ingested_at_written(self, tmp_path, dbs):
         corpus_conn, kb_conn, corpus_path, kb_path = dbs
         src_dir = tmp_path / "src"
         src_dir.mkdir()
@@ -58,7 +58,7 @@ class TestIngestAlwaysUpdatesSource:
 
 
 # ---------------------------------------------------------------------------
-# Incremental mode — first run (no last_ingested_at): full walk
+# Per-source incremental — first run (no last_ingested_at): full walk
 # ---------------------------------------------------------------------------
 
 class TestIncrementalFirstRun:
@@ -68,13 +68,13 @@ class TestIncrementalFirstRun:
         src_dir.mkdir()
         (src_dir / "a.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
         (src_dir / "b.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
-        add_source(corpus_conn, str(src_dir))
+        add_source(corpus_conn, str(src_dir), incremental=True)
         corpus_conn.close()
 
         from src.config import load_config
         cfg = load_config(None)
         cancel = threading.Event()
-        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel, incremental=True)
+        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel)
 
         conn = open_corpus(corpus_path)
         count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
@@ -83,7 +83,7 @@ class TestIncrementalFirstRun:
 
 
 # ---------------------------------------------------------------------------
-# Incremental mode — second run with prior last_ingested_at
+# Per-source incremental — second run with prior last_ingested_at
 # ---------------------------------------------------------------------------
 
 class TestIncrementalSecondRun:
@@ -94,14 +94,14 @@ class TestIncrementalSecondRun:
 
         old_file = src_dir / "old.jpg"
         old_file.write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
-        add_source(corpus_conn, str(src_dir))
+        add_source(corpus_conn, str(src_dir), incremental=True)
         corpus_conn.close()
 
         from src.config import load_config
         cfg = load_config(None)
         cancel = threading.Event()
 
-        # First run — no incremental — ingests old_file and writes last_ingested_at
+        # First run ingests old_file and writes last_ingested_at
         run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel)
 
         # Force old_file mtime to well before last_ingested_at
@@ -116,9 +116,9 @@ class TestIncrementalSecondRun:
         files_before = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         conn.close()
 
-        # Second run — incremental — should skip old_file, process new_file
+        # Second run — incremental source — should skip old_file, process new_file
         cancel2 = threading.Event()
-        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel2, incremental=True)
+        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel2)
 
         conn = open_corpus(corpus_path)
         files_after = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
@@ -134,7 +134,7 @@ class TestIncrementalSecondRun:
 
         for i in range(3):
             (src_dir / f"file{i}.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
-        add_source(corpus_conn, str(src_dir))
+        add_source(corpus_conn, str(src_dir), incremental=True)
         corpus_conn.close()
 
         from src.config import load_config
@@ -148,9 +148,39 @@ class TestIncrementalSecondRun:
             os.utime(str(f), (past, past))
 
         cancel2 = threading.Event()
-        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel2, incremental=True)
+        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel2)
 
         conn = open_corpus(corpus_path)
         count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         conn.close()
         assert count == 3
+
+    def test_non_incremental_source_always_full_walks(self, tmp_path, dbs):
+        """A source with incremental=False does a full walk even after a prior run."""
+        corpus_conn, kb_conn, corpus_path, kb_path = dbs
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+
+        (src_dir / "old.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
+        add_source(corpus_conn, str(src_dir), incremental=False)
+        corpus_conn.close()
+
+        from src.config import load_config
+        cfg = load_config(None)
+        cancel = threading.Event()
+        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel)
+
+        # Force mtime to the past
+        past = time.time() - 3600
+        os.utime(str(src_dir / "old.jpg"), (past, past))
+
+        # Add a new file
+        (src_dir / "new.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
+
+        cancel2 = threading.Event()
+        run_ingest(corpus_path, kb_path, cfg, NullProgressReporter(), cancel2)
+
+        conn = open_corpus(corpus_path)
+        count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        conn.close()
+        assert count == 2

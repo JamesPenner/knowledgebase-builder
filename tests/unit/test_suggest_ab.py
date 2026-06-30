@@ -256,3 +256,152 @@ def test_has_level_b_clusters_ignores_level_a(tmp_path):
     conn.commit()
     assert has_level_b_clusters(conn) is False
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Pattern filters for Suggest exclusion
+# ---------------------------------------------------------------------------
+
+def test_build_pattern_filters_capture_regex():
+    from src.stages.suggest import _build_pattern_filters
+    rules = [{"pattern": r"^[12][\dx]{7}c", "is_regex": 1, "action": "capture"}]
+    filters = _build_pattern_filters(rules)
+    assert len(filters) == 1
+    assert filters[0].search("20230807c")
+
+
+def test_build_pattern_filters_reject_and_ignore():
+    from src.stages.suggest import _build_pattern_filters
+    rules = [
+        {"pattern": r"^\d+$", "is_regex": 1, "action": "reject"},
+        {"pattern": r"^img_", "is_regex": 1, "action": "ignore"},
+    ]
+    filters = _build_pattern_filters(rules)
+    assert len(filters) == 2
+
+
+def test_build_pattern_filters_excludes_replace():
+    from src.stages.suggest import _build_pattern_filters
+    rules = [{"pattern": "colour", "is_regex": 0, "action": "replace"}]
+    filters = _build_pattern_filters(rules)
+    assert filters == []
+
+
+def test_build_pattern_filters_exact_string():
+    from src.stages.suggest import _build_pattern_filters, _matches_any_filter
+    rules = [{"pattern": "dscf", "is_regex": 0, "action": "reject"}]
+    filters = _build_pattern_filters(rules)
+    assert _matches_any_filter("dscf", filters)
+    assert not _matches_any_filter("dscfxyz", filters)
+
+
+def test_build_pattern_filters_skips_invalid_regex():
+    from src.stages.suggest import _build_pattern_filters
+    rules = [
+        {"pattern": "[invalid", "is_regex": 1, "action": "capture"},
+        {"pattern": r"^\d+$", "is_regex": 1, "action": "reject"},
+    ]
+    filters = _build_pattern_filters(rules)
+    assert len(filters) == 1
+
+
+def test_matches_any_filter_true():
+    from src.stages.suggest import _build_pattern_filters, _matches_any_filter
+    rules = [{"pattern": r"^[12][\dx]{7}c", "is_regex": 1, "action": "capture"}]
+    filters = _build_pattern_filters(rules)
+    assert _matches_any_filter("20230807c", filters)
+    assert _matches_any_filter("19991231c", filters)
+
+
+def test_matches_any_filter_false():
+    from src.stages.suggest import _build_pattern_filters, _matches_any_filter
+    rules = [{"pattern": r"^[12][\dx]{7}c", "is_regex": 1, "action": "capture"}]
+    filters = _build_pattern_filters(rules)
+    assert not _matches_any_filter("highway", filters)
+    assert not _matches_any_filter("bridge", filters)
+
+
+# ---------------------------------------------------------------------------
+# _clean_term
+# ---------------------------------------------------------------------------
+
+def test_clean_term_strips_leading_quote():
+    from src.stages.suggest import _clean_term
+    assert _clean_term('"nicol hotel museum') == "nicol hotel museum"
+
+
+def test_clean_term_strips_leading_hyphen():
+    from src.stages.suggest import _clean_term
+    assert _clean_term("-ground") == "ground"
+
+
+def test_clean_term_strips_leading_parenthesis():
+    from src.stages.suggest import _clean_term
+    assert _clean_term("(2nd generation") == "2nd generation"
+
+
+def test_clean_term_strips_leading_comma_space():
+    from src.stages.suggest import _clean_term
+    assert _clean_term(", large rugged mountain") == "large rugged mountain"
+
+
+def test_clean_term_leaves_clean_term_unchanged():
+    from src.stages.suggest import _clean_term
+    assert _clean_term("highway") == "highway"
+
+
+# ---------------------------------------------------------------------------
+# _build_metadata_text / _build_prose_text
+# ---------------------------------------------------------------------------
+
+def _make_ctx(**kwargs):
+    from src.stages.suggest import FileContext
+    defaults = dict(
+        file_id=1, filename="test.jpg", description=None, transcript=None,
+        transcript_attributed=False, summary_text=None, derived_tags=[],
+        entity_names=[], captured_fields=[], metadata_date=None,
+        metadata_location=None, enrichment_text="", vocab_terms=[],
+    )
+    defaults.update(kwargs)
+    return FileContext(**defaults)
+
+
+def test_metadata_text_uses_enrichment_and_tags():
+    from src.stages.suggest import _build_metadata_text
+    ctx = _make_ctx(enrichment_text="canyon river", derived_tags=["sunny", "outdoor"])
+    text = _build_metadata_text(ctx)
+    assert "canyon" in text
+    assert "sunny" in text
+    assert "outdoor" in text
+
+
+def test_metadata_text_excludes_prose_sources():
+    from src.stages.suggest import _build_metadata_text
+    ctx = _make_ctx(enrichment_text="canyon", description="a calm serene atmosphere", summary_text="overview")
+    text = _build_metadata_text(ctx)
+    assert "calm" not in text
+    assert "overview" not in text
+
+
+def test_prose_text_uses_description_summary_transcript():
+    from src.stages.suggest import _build_prose_text
+    ctx = _make_ctx(description="hiking in the mountains", summary_text="outdoor adventure", transcript="we went swimming")
+    text = _build_prose_text(ctx)
+    assert "hiking" in text
+    assert "outdoor" in text
+    assert "swimming" in text
+
+
+def test_prose_text_excludes_metadata():
+    from src.stages.suggest import _build_prose_text
+    ctx = _make_ctx(enrichment_text="canyon", derived_tags=["sunny"], description="a hike")
+    text = _build_prose_text(ctx)
+    assert "canyon" not in text
+    assert "sunny" not in text
+    assert "hike" in text
+
+
+def test_prose_text_empty_when_no_prose():
+    from src.stages.suggest import _build_prose_text
+    ctx = _make_ctx(enrichment_text="canyon river", derived_tags=["sunny"])
+    assert _build_prose_text(ctx).strip() == ""

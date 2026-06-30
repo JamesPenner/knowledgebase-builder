@@ -197,7 +197,7 @@ def test_reassign_to_correct_sets_canonical_term(kb_dbs):
     assert resp.status_code == 200
     decisions2 = client.get("/api/review/normalise/decisions", params={"kb": "test"}).json()["decisions"]
     assert len(decisions2) == 1
-    assert decisions2[0]["action"] == "correct"
+    assert decisions2[0]["action"] == "replace"   # correct → stored as replace in pattern_rules
     assert decisions2[0]["detail"] == "Kootenay"
 
 
@@ -279,7 +279,9 @@ def test_pipeline_page_has_run_buttons(kb_dbs):
 def test_pipeline_page_run_buttons_reference_stages(kb_dbs):
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
-    for stage in ("ingest", "hash", "describe", "retag", "export"):
+    # ingest is surfaced via the Sources header Sync button, not a pipeline table row
+    assert f"runStage('ingest'" not in resp.text
+    for stage in ("hash", "describe", "retag", "export"):
         assert f"runStage('{stage}'" in resp.text
 
 
@@ -704,10 +706,12 @@ def test_new_terms_decide_form_correct(kb_dbs):
     assert resp.status_code == 200
     from src.db.kb import open_kb
     kb_conn = open_kb(kb_path)
-    row = kb_conn.execute("SELECT canonical_term FROM corrections WHERE raw_term='brige'").fetchone()
+    row = kb_conn.execute(
+        "SELECT replace_with FROM pattern_rules WHERE pattern='brige' AND action='replace'"
+    ).fetchone()
     kb_conn.close()
     assert row is not None
-    assert row["canonical_term"] == "bridge"
+    assert row["replace_with"] == "bridge"
 
 
 def test_new_terms_delete_decision(kb_dbs):
@@ -771,3 +775,55 @@ def test_health_page_shows_four_groups(kb_dbs):
     assert "Optional Tools" in text
     assert "KB State" in text
     assert "KB Scaffold Files" in text
+
+
+# ---------------------------------------------------------------------------
+# Review infrastructure — KB.Z1
+# ---------------------------------------------------------------------------
+
+def test_review_js_served(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/static/js/review.js")
+    assert resp.status_code == 200
+    assert len(resp.content) > 0
+
+
+def test_normalise_review_includes_review_js(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    _seed_token(corpus_path, "highway")
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/review/normalise", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "review.js" in resp.text
+
+
+def test_normalise_review_page_has_action_legend(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/review/normalise", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert 'class="action-legend"' in resp.text
+
+
+def test_normalise_review_page_has_tab_nav(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/review/normalise", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "Pending" in resp.text
+    assert "Decided" in resp.text
+    assert 'class="review-tab' in resp.text
+
+
+def test_suggest_review_page_has_action_legend(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/review/suggest", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert 'class="action-legend"' in resp.text
+
+
+def test_suggest_review_page_has_tab_nav(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/review/suggest", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "Pending" in resp.text
+    assert "Decided" in resp.text
+    assert 'class="review-tab' in resp.text

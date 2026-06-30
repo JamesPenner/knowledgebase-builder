@@ -17,7 +17,7 @@ from src.db.corpus import (
     get_file_transcript_segments,
     get_file_transcription,
 )
-from src.db.kb import get_capture_rule_type, get_vocabulary_terms
+from src.db.kb import get_pattern_rule_type, get_vocabulary_terms
 
 
 @dataclass
@@ -88,7 +88,7 @@ def build_file_context(
     captured_field_rows = get_file_captured_fields(corpus_conn, file_id)
     captured_fields: list[dict] = []
     for row in captured_field_rows:
-        value_type = get_capture_rule_type(kb_conn, row["field_name"]) if kb_conn is not None else "text"
+        value_type = get_pattern_rule_type(kb_conn, row["field_name"]) if kb_conn is not None else "text"
         captured_fields.append({
             "field_name": row["field_name"],
             "value": row["value"],

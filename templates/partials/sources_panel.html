@@ -13,6 +13,7 @@
             <th>Path</th>
             <th>Type</th>
             <th>Filters</th>
+            <th>Incr.</th>
             <th>Files</th>
             <th>Last ingested</th>
             <th></th>
@@ -24,6 +25,7 @@
               <td class="sources-path">{{ src.path }}</td>
               <td>{{ src.file_type }}</td>
               <td class="sources-filters">{{ src.filters_summary or '—' }}</td>
+              <td>{% if src.incremental %}✓{% else %}—{% endif %}</td>
               <td>{{ src.file_count_ingested or 0 }}</td>
               <td class="sources-date">{{ src.last_ingested_at or '—' }}</td>
               <td class="sources-actions">
@@ -58,6 +60,10 @@
                       <input id="src-edit-recursive-{{ src.id }}" type="checkbox"
                              value="true" {% if src.recursive %}checked{% endif %}> Recursive
                     </label>
+                    <label class="sources-checkbox-label">
+                      <input id="src-edit-incremental-{{ src.id }}" type="checkbox"
+                             value="true" {% if src.incremental %}checked{% endif %}> Incremental
+                    </label>
                     <input id="src-edit-glob-{{ src.id }}" type="text"
                            class="sources-input" placeholder="Glob (e.g. 2024-*)"
                            value="{{ src.f_glob }}">
@@ -90,11 +96,7 @@
     {% endif %}
 
     <!-- Add source form -->
-    <form class="sources-add-form"
-          hx-post="/api/kb/{{ kb }}/sources"
-          hx-target="#sources-panel"
-          hx-swap="outerHTML"
-          hx-include="#src-form-path,#src-form-type,#src-form-recursive,#src-form-glob,#src-form-limit,#src-form-modified-after,#src-form-exclude">
+    <form class="sources-add-form" onsubmit="return false;">
       <div class="sources-form-row">
         <input id="src-form-path" name="path" type="text" class="sources-input sources-input--wide"
                placeholder="Directory path" required>
@@ -106,6 +108,9 @@
         </select>
         <label class="sources-checkbox-label">
           <input id="src-form-recursive" name="recursive" type="checkbox" checked value="true"> Recursive
+        </label>
+        <label class="sources-checkbox-label">
+          <input id="src-form-incremental" name="incremental" type="checkbox" value="true"> Incremental
         </label>
         <input id="src-form-glob" name="glob_pattern" type="text" class="sources-input"
                placeholder="Glob (e.g. 2024-*)">
@@ -120,56 +125,12 @@
         <button type="button" class="btn btn--sm"
                 onclick="previewSource('{{ kb }}')">Preview</button>
         <span id="src-preview-result" class="sources-preview-result"></span>
-        <button type="submit" class="btn btn--run btn--sm">Add</button>
+        <button type="button" class="btn btn--run btn--sm"
+                onclick="addSource('{{ kb }}')">Add</button>
       </div>
     </form>
   </div>
 
-  <!-- Saved sets section -->
-  <div class="sources-panel-section">
-    <h4 class="sources-panel-heading">Saved Sets</h4>
-
-    {% if not sets %}
-      <p class="sources-onboarding">No saved sets yet. Save the current scope as a set below.</p>
-    {% else %}
-      <table class="sources-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Files</th>
-            <th>Created</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for s in sets %}
-            <tr>
-              <td><strong>{{ s.name }}</strong></td>
-              <td>{{ s.description or '—' }}</td>
-              <td>{{ s.file_count }}</td>
-              <td class="sources-date">{{ s.created_at }}</td>
-              <td>
-                <button class="btn btn--sm btn--danger-outline"
-                  hx-delete="/api/kb/{{ kb }}/sets/{{ s.id }}"
-                  hx-target="#sources-panel"
-                  hx-swap="outerHTML"
-                  hx-confirm="Delete set '{{ s.name }}'?">Delete</button>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% endif %}
-
-    <!-- Save current scope as set -->
-    <div class="sources-save-set">
-      <span class="sources-save-label">Save current scope as set:</span>
-      <input id="set-name-input" type="text" class="sources-input" placeholder="Set name" maxlength="64">
-      <input id="set-desc-input" type="text" class="sources-input sources-input--wide" placeholder="Description (optional)">
-      <button class="btn btn--sm btn--run" onclick="saveCurrentScopeAsSet('{{ kb }}')">Save</button>
-      <span id="set-save-result" class="sources-preview-result"></span>
-    </div>
   </div>
 </div>
 
@@ -182,6 +143,7 @@ function toggleSourceEdit(id) {
 function saveSourceEdit(kb, id) {
   const fileType = document.getElementById('src-edit-type-' + id).value;
   const recursive = document.getElementById('src-edit-recursive-' + id).checked;
+  const incremental = document.getElementById('src-edit-incremental-' + id).checked;
   const glob = document.getElementById('src-edit-glob-' + id).value;
   const limit = document.getElementById('src-edit-limit-' + id).value;
   const modifiedAfter = document.getElementById('src-edit-modified-after-' + id).value;
@@ -194,7 +156,7 @@ function saveSourceEdit(kb, id) {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
-      file_type: fileType, recursive, filters,
+      file_type: fileType, recursive, incremental, filters,
       modified_after: modifiedAfter || null,
       exclude_patterns,
     }),
@@ -239,25 +201,35 @@ function previewSource(kb) {
   .catch(() => { el.textContent = 'Preview failed'; });
 }
 
-function saveCurrentScopeAsSet(kb) {
-  const name = document.getElementById('set-name-input').value.trim();
-  const desc = document.getElementById('set-desc-input').value.trim();
-  const result = document.getElementById('set-save-result');
-  if (!name) { result.textContent = 'Name required'; return; }
-  const scope = window.KB_SCOPE || {};
-  result.textContent = 'Saving…';
-  fetch('/api/kb/' + kb + '/sets', {
+function addSource(kb) {
+  const path = document.getElementById('src-form-path').value.trim();
+  if (!path) { return; }
+  const fileType = document.getElementById('src-form-type').value;
+  const recursive = document.getElementById('src-form-recursive').checked;
+  const incremental = document.getElementById('src-form-incremental').checked;
+  const glob = document.getElementById('src-form-glob').value;
+  const limit = document.getElementById('src-form-limit').value;
+  const modifiedAfter = (document.getElementById('src-form-modified-after') || {}).value || '';
+  const excludeRaw = (document.getElementById('src-form-exclude') || {}).value || '';
+  const filters = {};
+  if (glob) filters.glob = glob;
+  if (limit) filters.count_limit = parseInt(limit);
+  const exclude_patterns = excludeRaw ? excludeRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  fetch('/api/kb/' + kb + '/sources', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name, description: desc, scope}),
+    body: JSON.stringify({
+      path, file_type: fileType, recursive, incremental, filters,
+      modified_after: modifiedAfter || null,
+      exclude_patterns,
+    }),
   })
   .then(r => r.json())
   .then(d => {
-    if (d.detail) { result.textContent = 'Error: ' + d.detail; return; }
-    result.textContent = 'Saved: ' + d.file_count + ' files';
-    // Reload the panel via HTMX
+    if (d.detail) { alert('Add source failed: ' + d.detail); return; }
     htmx.ajax('GET', '/api/kb/' + kb + '/sources/panel', {target: '#sources-panel', swap: 'outerHTML'});
   })
-  .catch(() => { result.textContent = 'Save failed'; });
+  .catch(() => { alert('Add source failed'); });
 }
+
 </script>

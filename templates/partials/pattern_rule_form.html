@@ -1,0 +1,188 @@
+<div style="border:1px solid #334155;border-radius:6px;padding:1rem;background:#1e293b">
+  <h3 style="margin:0 0 .75rem;font-size:1rem;font-weight:600">{{ 'Edit rule' if rule else 'Add rule' }}</h3>
+
+  <form {% if rule %}
+        hx-post="/knowledge/pattern-rules/{{ rule.id }}/edit?kb={{ kb }}"
+        {% else %}
+        hx-post="/knowledge/pattern-rules/add?kb={{ kb }}"
+        {% endif %}
+        hx-target="#pattern-rule-form-status"
+        hx-swap="innerHTML"
+        style="display:flex;flex-direction:column;gap:.7rem">
+
+    <label style="font-size:.85rem;color:#94a3b8">Pattern <span style="color:#f87171">*</span>
+      <input id="pr-pattern" name="pattern" type="text"
+             value="{{ rule.pattern if rule else '' }}"
+             placeholder="^\d{8}$" required
+             oninput="prTestRegex()"
+             style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;font-family:monospace;box-sizing:border-box">
+      <span style="font-size:.75rem;color:#475569">Python-compatible regex. Toggle "Exact match" below to use literal strings.</span>
+    </label>
+
+    <label style="font-size:.85rem;color:#94a3b8;display:flex;align-items:center;gap:.4rem;cursor:pointer">
+      <input id="pr-is-regex" name="is_regex" type="checkbox" value="true"
+             {% if not rule or rule.is_regex %}checked{% endif %}
+             onchange="prUpdateRegexHint()">
+      Regex (uncheck for exact literal match)
+    </label>
+
+    <label style="font-size:.85rem;color:#94a3b8">Test pattern
+      <div style="display:flex;align-items:center;gap:.5rem;margin-top:.2rem">
+        <input id="pr-sample" type="text"
+               placeholder="Sample token (e.g. 20230415)"
+               oninput="prTestRegex()"
+               style="flex:1;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+        <span id="pr-test-result" style="font-size:.8rem;font-weight:600;white-space:nowrap"></span>
+      </div>
+    </label>
+
+    <label style="font-size:.85rem;color:#94a3b8">Action <span style="color:#f87171">*</span>
+      <select name="action" id="pr-action"
+              onchange="prToggleAction()"
+              style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+        <option value="capture" {% if not rule or rule.action == 'capture' %}selected{% endif %}>Capture — extract field value</option>
+        <option value="ignore" {% if rule and rule.action == 'ignore' %}selected{% endif %}>Ignore — drop from name (keep for models)</option>
+        <option value="replace" {% if rule and rule.action == 'replace' %}selected{% endif %}>Replace — substitute token value</option>
+        <option value="reject" {% if rule and rule.action == 'reject' %}selected{% endif %}>Reject — drop entirely</option>
+      </select>
+    </label>
+
+    <label style="font-size:.85rem;color:#94a3b8">Label
+      <input name="label" type="text"
+             value="{{ rule.label if rule else '' }}"
+             placeholder="Date YYYYMMDD"
+             style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+    </label>
+
+    <!-- Replace-specific fields -->
+    <div id="pr-replace-fields" style="{{ '' if (rule and rule.action == 'replace') else 'display:none' }}">
+      <div style="display:flex;flex-direction:column;gap:.7rem">
+        <label style="font-size:.85rem;color:#94a3b8">Replace With <span style="color:#f87171">*</span>
+          <input name="replace_with" type="text"
+                 value="{{ rule.replace_with if rule else '' }}"
+                 placeholder="canonical_term"
+                 style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+          <span style="font-size:.75rem;color:#475569">For regex: use format string syntax <code>{1}</code>. For exact: plain text value.</span>
+        </label>
+        <label style="font-size:.85rem;color:#94a3b8">Replace Type
+          <select name="replace_type"
+                  style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+            <option value="correction" {% if not rule or not rule.replace_type or rule.replace_type == 'correction' %}selected{% endif %}>correction — source is wrong (typo, abbreviation)</option>
+            <option value="synonym" {% if rule and rule.replace_type == 'synonym' %}selected{% endif %}>synonym — source is valid, canonical form differs</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <!-- Capture-specific fields -->
+    <div id="pr-capture-fields" style="{{ '' if (not rule or rule.action == 'capture') else 'display:none' }}">
+      <div style="display:flex;flex-direction:column;gap:.7rem">
+
+        <label style="font-size:.85rem;color:#94a3b8">Extract As <span style="color:#f87171">*</span>
+          <input id="pr-extract-as" name="extract_as" type="text"
+                 value="{{ rule.extract_as if rule else '' }}"
+                 placeholder="file_date_full"
+                 style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+          <span style="font-size:.75rem;color:#475569">Field name written to the corpus record.</span>
+        </label>
+
+        <label style="font-size:.85rem;color:#94a3b8">Value Type
+          <select name="value_type" id="pr-value-type"
+                  onchange="prToggleDatePrecision()"
+                  style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+            <option value="" {% if not rule or not rule.value_type %}selected{% endif %}>text</option>
+            <option value="date" {% if rule and rule.value_type == 'date' %}selected{% endif %}>date</option>
+            <option value="integer" {% if rule and rule.value_type == 'integer' %}selected{% endif %}>integer</option>
+            <option value="float" {% if rule and rule.value_type == 'float' %}selected{% endif %}>float</option>
+          </select>
+        </label>
+
+        <label id="pr-precision-field"
+               style="font-size:.85rem;color:#94a3b8;{{ '' if (rule and rule.value_type == 'date') else 'display:none' }}">Date Precision
+          <select name="date_precision"
+                  style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+            <option value="" {% if not rule or not rule.date_precision %}selected{% endif %}>—</option>
+            <option value="day" {% if rule and rule.date_precision == 'day' %}selected{% endif %}>day</option>
+            <option value="month" {% if rule and rule.date_precision == 'month' %}selected{% endif %}>month</option>
+            <option value="year" {% if rule and rule.date_precision == 'year' %}selected{% endif %}>year</option>
+            <option value="decade" {% if rule and rule.date_precision == 'decade' %}selected{% endif %}>decade</option>
+          </select>
+        </label>
+
+        <label style="font-size:.85rem;color:#94a3b8">Format String
+          <input name="format_str" type="text"
+                 value="{{ rule.format_str if rule else '' }}"
+                 placeholder="{1:0:4}-{1:4:6}-{1:6:8}"
+                 style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;font-family:monospace;box-sizing:border-box">
+          <span style="font-size:.75rem;color:#475569"><code>{0}</code> = full match · <code>{1}</code> = group 1 · <code>{1:4:6}</code> = chars 4–5 of group 1</span>
+        </label>
+
+        <label style="font-size:.85rem;color:#94a3b8;display:flex;align-items:center;gap:.4rem;cursor:pointer">
+          <input name="keep_token" type="checkbox" value="true"
+                 {% if rule and rule.keep_token %}checked{% endif %}>
+          Keep token in normalized filename
+        </label>
+
+      </div>
+    </div>
+
+    <div style="display:flex;gap:.5rem;margin-top:.25rem">
+      <button type="submit" class="btn-primary">{{ 'Save' if rule else 'Add rule' }}</button>
+      <button type="button" class="btn"
+              hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}"
+              hx-target="#pattern-rule-form"
+              hx-swap="innerHTML">Cancel</button>
+    </div>
+  </form>
+
+  <div id="pattern-rule-form-status" style="margin-top:.5rem"></div>
+</div>
+
+<script>
+(function () {
+  function prTestRegex() {
+    var patternEl = document.getElementById('pr-pattern');
+    var sampleEl = document.getElementById('pr-sample');
+    var resultEl = document.getElementById('pr-test-result');
+    var isRegexEl = document.getElementById('pr-is-regex');
+    if (!patternEl || !sampleEl || !resultEl) return;
+    var pattern = patternEl.value;
+    var sample = sampleEl.value;
+    if (!pattern || !sample) { resultEl.textContent = ''; return; }
+    var isRegex = isRegexEl ? isRegexEl.checked : true;
+    try {
+      var matched = isRegex ? new RegExp(pattern).test(sample) : (sample === pattern);
+      resultEl.textContent = matched ? 'match' : 'no match';
+      resultEl.style.color = matched ? '#4ade80' : '#f87171';
+    } catch (e) {
+      resultEl.textContent = 'invalid regex';
+      resultEl.style.color = '#f87171';
+    }
+  }
+
+  function prUpdateRegexHint() {
+    prTestRegex();
+  }
+
+  function prToggleDatePrecision() {
+    var vt = document.getElementById('pr-value-type');
+    var pf = document.getElementById('pr-precision-field');
+    if (vt && pf) pf.style.display = vt.value === 'date' ? '' : 'none';
+  }
+
+  function prToggleAction() {
+    var actionEl = document.getElementById('pr-action');
+    var captureFields = document.getElementById('pr-capture-fields');
+    var replaceFields = document.getElementById('pr-replace-fields');
+    if (!actionEl) return;
+    var action = actionEl.value;
+    if (captureFields) captureFields.style.display = action === 'capture' ? '' : 'none';
+    if (replaceFields) replaceFields.style.display = action === 'replace' ? '' : 'none';
+  }
+
+  window.prTestRegex = prTestRegex;
+  window.prUpdateRegexHint = prUpdateRegexHint;
+  window.prToggleDatePrecision = prToggleDatePrecision;
+  window.prToggleAction = prToggleAction;
+})();
+</script>

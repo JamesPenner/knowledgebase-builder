@@ -5,6 +5,8 @@ from unittest.mock import patch
 from src.config import Config
 from src.health import (
     HealthCheck,
+    _check_aesthetic_clip,
+    _check_aesthetic_nima,
     _check_audio_model,
     _check_corpus_files,
     _check_dates_yaml,
@@ -165,6 +167,70 @@ def test_check_audio_model_named_model():
         chk = _check_audio_model(_cfg(audio_model="base"))
     assert chk.ok
     assert "base" in chk.detail
+
+
+def test_check_aesthetic_nima_not_configured():
+    chk = _check_aesthetic_nima(Config())
+    assert not chk.ok
+    assert chk.id == "aesthetic_nima"
+    assert chk.severity == "warning"
+    assert chk.fix
+
+
+def test_check_aesthetic_nima_configured_present(tmp_path):
+    model = tmp_path / "nima.onnx"
+    model.write_bytes(b"")
+    chk = _check_aesthetic_nima(Config(aesthetic_nima=str(model)))
+    assert chk.ok
+    assert chk.severity == "warning"
+
+
+def test_check_aesthetic_nima_configured_missing():
+    chk = _check_aesthetic_nima(Config(aesthetic_nima="/no/such/nima.onnx"))
+    assert not chk.ok
+    assert chk.fix
+
+
+def test_check_aesthetic_clip_not_configured():
+    chk = _check_aesthetic_clip(Config())
+    assert not chk.ok
+    assert chk.id == "aesthetic_clip"
+    assert chk.severity == "warning"
+    assert chk.fix
+
+
+def test_check_aesthetic_clip_configured_present(tmp_path):
+    clip_dir = tmp_path / "clip"
+    clip_dir.mkdir()
+    (clip_dir / "visual.onnx").write_bytes(b"")
+    (clip_dir / "linear.npz").write_bytes(b"")
+    chk = _check_aesthetic_clip(Config(aesthetic_clip=str(clip_dir)))
+    assert chk.ok
+    assert chk.severity == "warning"
+
+
+def test_check_aesthetic_clip_configured_missing_dir():
+    chk = _check_aesthetic_clip(Config(aesthetic_clip="/no/such/dir"))
+    assert not chk.ok
+    assert chk.fix
+
+
+def test_check_aesthetic_clip_configured_missing_visual(tmp_path):
+    clip_dir = tmp_path / "clip"
+    clip_dir.mkdir()
+    (clip_dir / "linear.npz").write_bytes(b"")
+    chk = _check_aesthetic_clip(Config(aesthetic_clip=str(clip_dir)))
+    assert not chk.ok
+    assert "visual.onnx" in chk.detail
+
+
+def test_check_aesthetic_clip_configured_missing_linear(tmp_path):
+    clip_dir = tmp_path / "clip"
+    clip_dir.mkdir()
+    (clip_dir / "visual.onnx").write_bytes(b"")
+    chk = _check_aesthetic_clip(Config(aesthetic_clip=str(clip_dir)))
+    assert not chk.ok
+    assert "linear.npz" in chk.detail
 
 
 def test_check_spacy_model():
@@ -394,7 +460,7 @@ def test_run_checks_returns_24(tmp_path):
     from src.health import run_checks as _run
     cfg = _cfg()
     checks = _run(cfg, None, None, tmp_path)
-    assert len(checks) == 25
+    assert len(checks) == 28
     ids = [c.id for c in checks]
     assert "exiftool" in ids
     assert "audio_model" in ids

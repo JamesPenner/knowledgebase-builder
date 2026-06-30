@@ -16,8 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1415 passing, 2 skipped, ruff clean
-- **Last completed sprint:** KB.X1 (Face Metadata Stage, 1415 tests)
+- **Tests:** 1556 passing, 2 skipped
+- **Last completed sprint:** KB.AC1 (Unified Scope & Working Sets — `CorpusFilterSpec`, migration 0024, Sets panel, expanded scope bar with 6 controls, export scope, `scope_aware` badges, localStorage persistence; +55 net tests)
+- **Last fix:** Normalise Review reject — token_rejections table (migration 0007); rejected tokens no longer stored in pattern_rules
 - **Next planned sprint:** TBD
 
 ---

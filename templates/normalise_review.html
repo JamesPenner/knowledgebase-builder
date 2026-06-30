@@ -1,126 +1,83 @@
-{% extends "base.html" %}
+{% extends "review_base.html" %}
 {% block title %}Normalise Review — {{ kb }}{% endblock %}
-{% block head %}
-<script>
-(function () {
-  var filterText = '';
-  var filterAction = '';
-  var sortCol = null;
-  var sortDir = 1;
+{% block review_heading %}Normalisation Review{% endblock %}
 
-  function applyFilter() {
-    var rows = document.querySelectorAll('#decisions-panel .decision-row');
-    rows.forEach(function (row) {
-      var token = (row.querySelector('.decision-token') || {}).textContent || '';
-      var detail = (row.querySelector('.decision-detail') || {}).textContent || '';
-      var action = row.dataset.action || '';
-      var matchText = !filterText ||
-        token.toLowerCase().indexOf(filterText) !== -1 ||
-        detail.toLowerCase().indexOf(filterText) !== -1;
-      var matchAction = !filterAction || action === filterAction;
-      row.style.display = (matchText && matchAction) ? '' : 'none';
-    });
-  }
-
-  function sortTable() {
-    if (!sortCol) return;
-    var tbody = document.querySelector('#decisions-panel .decisions-table tbody');
-    if (!tbody) return;
-    var rows = Array.from(tbody.querySelectorAll('tr'));
-    rows.sort(function (a, b) {
-      var aVal = sortCol === 'action'
-        ? ((a.querySelector('.badge') || {}).textContent || '').trim()
-        : ((a.querySelector('.decision-' + sortCol) || {}).textContent || '').trim();
-      var bVal = sortCol === 'action'
-        ? ((b.querySelector('.badge') || {}).textContent || '').trim()
-        : ((b.querySelector('.decision-' + sortCol) || {}).textContent || '').trim();
-      return sortDir * aVal.localeCompare(bVal);
-    });
-    rows.forEach(function (row) { tbody.appendChild(row); });
-  }
-
-  function updateSortIndicators() {
-    document.querySelectorAll('.decisions-table th[data-sort]').forEach(function (th) {
-      th.classList.remove('sort-asc', 'sort-desc');
-      if (th.dataset.sort === sortCol) {
-        th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
-      }
-    });
-  }
-
-  function initSortHeaders() {
-    document.querySelectorAll('.decisions-table th[data-sort]').forEach(function (th) {
-      th.addEventListener('click', function () {
-        var col = this.dataset.sort;
-        if (sortCol === col) { sortDir *= -1; } else { sortCol = col; sortDir = 1; }
-        sortTable();
-        updateSortIndicators();
-        applyFilter();
-      });
-    });
-    updateSortIndicators();
-  }
-
-  document.addEventListener('htmx:afterSwap', function (e) {
-    if (e.detail && e.detail.target && e.detail.target.id === 'decisions-panel') {
-      initSortHeaders();
-      sortTable();
-      updateSortIndicators();
-      applyFilter();
-    }
-  });
-
-  document.addEventListener('DOMContentLoaded', function () {
-    var search = document.getElementById('decision-search');
-    if (search) {
-      search.addEventListener('input', function () {
-        filterText = this.value.toLowerCase();
-        applyFilter();
-      });
-    }
-    document.querySelectorAll('.filter-btn').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        document.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
-        this.classList.add('active');
-        filterAction = this.dataset.action;
-        applyFilter();
-      });
-    });
-    initSortHeaders();
-  });
-}());
-</script>
+{% block action_legend_items %}
+<dt>Accept</dt>
+<dd>Keeps the token in the normalized filename as-is. No rule is added to the KB.</dd>
+<dt>Capture</dt>
+<dd>Extracts the token as a structured field (e.g. a date or project code). The token is replaced by its captured value and excluded from the filename's free-text portion.</dd>
+<dt>Ignore</dt>
+<dd>Adds the token to the stoplist — permanently excluded from normalized filenames and LLM context. Apply to tokens that are genuine noise across all files.</dd>
+<dt>Correct</dt>
+<dd>Replaces the token with a canonical spelling or label. The correction is stored in the KB and applied in all future normalize runs.</dd>
+<dt>Reject</dt>
+<dd>Marks the token as noise. Excluded from normalized filenames but not added to the stoplist — use for tokens that are irrelevant in this corpus but may be valid elsewhere.</dd>
 {% endblock %}
-{% block content %}
-<h1 class="page-title">Normalisation Review</h1>
 
+{% block pending_tab_count %}{{ counts.total - counts.reviewed }}{% endblock %}
+{% block decided_tab_count %}{{ counts.reviewed }}{% endblock %}
+
+{% block pending_content %}
 <div id="pending-groups"
      hx-get="/review/normalise/partials/pending?kb={{ kb }}"
      hx-trigger="pendingChanged from:body"
      hx-swap="innerHTML">
   {% include "partials/pending_groups.html" %}
 </div>
+{% endblock %}
 
-<section class="decisions-section">
-  <h2 class="section-title">Decisions Made</h2>
-
-  <div class="decisions-filter">
-    <input type="text" id="decision-search" class="input-text" placeholder="Filter by token or detail…">
-    <div class="filter-action-group">
-      <button class="filter-btn active" data-action="">All</button>
-      <button class="filter-btn" data-action="accept"><span class="badge badge--accept">accept</span></button>
-      <button class="filter-btn" data-action="capture"><span class="badge badge--capture">capture</span></button>
-      <button class="filter-btn" data-action="ignore"><span class="badge badge--ignore">ignore</span></button>
-      <button class="filter-btn" data-action="correct"><span class="badge badge--correct">correct</span></button>
-      <button class="filter-btn" data-action="reject"><span class="badge badge--reject">reject</span></button>
-    </div>
+{% block decided_content %}
+<div class="decisions-filter">
+  <input type="text" id="decision-search" class="input-text" placeholder="Filter by token or detail…">
+  <div class="filter-action-group">
+    <button class="filter-btn active" data-action="">All</button>
+    <button class="filter-btn" data-action="accept"><span class="badge badge--accept">accept</span></button>
+    <button class="filter-btn" data-action="capture"><span class="badge badge--capture">capture</span></button>
+    <button class="filter-btn" data-action="ignore"><span class="badge badge--ignore">ignore</span></button>
+    <button class="filter-btn" data-action="correct"><span class="badge badge--correct">correct</span></button>
+    <button class="filter-btn" data-action="reject"><span class="badge badge--reject">reject</span></button>
   </div>
+</div>
+<div id="decisions-panel"
+     hx-get="/review/normalise/partials/decisions?kb={{ kb }}"
+     hx-trigger="decisionsChanged from:body"
+     hx-swap="innerHTML">
+  {% include "partials/decisions_panel.html" %}
+</div>
+{% endblock %}
 
-  <div id="decisions-panel"
-       hx-get="/review/normalise/partials/decisions?kb={{ kb }}"
-       hx-trigger="decisionsChanged from:body"
-       hx-swap="innerHTML">
-    {% include "partials/decisions_panel.html" %}
-  </div>
-</section>
+{% block page_scripts %}
+<script>
+ReviewQueue.init({
+  queueId:    'pending-groups',
+  partialUrl: '/review/normalise/partials/pending',
+  kb:         '{{ kb }}',
+  limit:      10,
+  step:       10,
+  hasSort:    false,
+});
+ReviewPage.init({
+  formClass:   'token-action-form',
+  rowIdPrefix: 'token-row-',
+  idField:     'item_id',
+  endpoint:    '/review/normalise/decide',
+  onRowRemoved: function (row) {
+    var tbody = row.parentElement;
+    row.remove();
+    if (!tbody || tbody.querySelectorAll('tr').length > 0) return;
+    var subgroup = tbody.closest('.subgroup');
+    if (!subgroup) return;
+    var section = subgroup.closest('.token-group');
+    subgroup.remove();
+    if (!section || section.querySelectorAll('.subgroup').length > 0) return;
+    section.remove();
+  },
+});
+ReviewFilter.init({
+  tableId:    'decisions-panel',
+  searchId:   'decision-search',
+  filterBtns: '.filter-btn',
+});
+</script>
 {% endblock %}

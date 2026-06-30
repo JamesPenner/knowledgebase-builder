@@ -55,8 +55,7 @@ def run_retag(
     progress: ProgressReporter,
     cancel_event: threading.Event,
     *,
-    source_id: int | None = None,
-    set_id: int | None = None,
+    scope=None,
 ) -> None:
     from src.db.corpus import (
         get_pending_retag_files,
@@ -78,7 +77,7 @@ def run_retag(
     try:
         system_prompt = load_stage_prompt(kb_conn, "retag", "system", default=_SYSTEM_PROMPT)
 
-        pending = get_pending_retag_files(corpus_conn, source_id=source_id, set_id=set_id)
+        pending = get_pending_retag_files(corpus_conn, scope=scope)
         total = len(pending)
         processed = skipped = errors = 0
 

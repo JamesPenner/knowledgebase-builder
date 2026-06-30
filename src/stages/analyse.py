@@ -144,9 +144,11 @@ def run_analyse(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     conn = open_corpus(corpus_path)
-    files = get_files_for_analyse(conn)
+    files = get_files_for_analyse(conn, scope=scope)
 
     if not files:
         progress.done()

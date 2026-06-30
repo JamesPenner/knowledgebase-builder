@@ -90,11 +90,13 @@ def update_voice_centroid(
 
 def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
     """Embed speaker voice from pending audio/video files and match to known people."""
+    import time as _time
     from src.db.corpus import (
         get_files_without_voice_embedding,
         get_has_speech,
         open_corpus,
         set_has_speech,
+        update_pipeline_checkpoint,
         upsert_voice_embedding,
     )
     from src.db.kb import (
@@ -111,6 +113,7 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
     files_matched = 0
     files_skipped = 0
     error_count = 0
+    _start = _time.monotonic()
 
     try:
         people_rows = get_people_with_voice_centroids(kb_conn)
@@ -203,6 +206,11 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
 
             progress.update(i + 1, total)
 
+        update_pipeline_checkpoint(
+            corpus_conn, "voice", files_processed, files_skipped,
+            error_count, _time.monotonic() - _start,
+        )
+        corpus_conn.commit()
         progress.done()
     finally:
         corpus_conn.close()
@@ -232,11 +240,47 @@ def diarize_audio(wav_path: Path, config) -> list[dict]:
     except ImportError as exc:
         raise ModelLoadError(f"pyannote.audio not installed: {exc}") from exc
 
+    import os
     try:
-        pipeline = Pipeline.from_pretrained(config.diarization_model)
-        diarization = pipeline(str(wav_path))
+        import numpy as np
+        import torch
+        with wave.open(str(wav_path), "rb") as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        waveform = torch.tensor(samples).unsqueeze(0)
+        audio_input = {"waveform": waveform, "sample_rate": sr}
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None
+        # When no token is set, use the local cache; avoids auth failures for already-downloaded models.
+        prev_offline = os.environ.get("HF_HUB_OFFLINE")
+        if not hf_token:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            pipeline = Pipeline.from_pretrained(config.diarization_model, token=hf_token)
+        finally:
+            if not hf_token:
+                if prev_offline is None:
+                    os.environ.pop("HF_HUB_OFFLINE", None)
+                else:
+                    os.environ["HF_HUB_OFFLINE"] = prev_offline
+        import time as _t
+        try:
+            import torch_directml as _dml
+            _device = _dml.device()
+            pipeline.to(_device)
+            logger.info("diarize_audio: using DirectML GPU (%s)", _device)
+        except (ImportError, Exception) as _dml_exc:
+            logger.info("diarize_audio: running on CPU (%s)", _dml_exc)
+        _dur_s = audio_input["waveform"].shape[-1] / audio_input["sample_rate"]
+        logger.info("diarize_audio: running pipeline on %.1fs of audio (%s)", _dur_s, wav_path.name)
+        _t0 = _t.monotonic()
+        result = pipeline(audio_input)
+        logger.info("diarize_audio: pipeline finished in %.1fs", _t.monotonic() - _t0)
+        # pyannote 4.x returns DiarizeOutput(speaker_diarization=Annotation, …)
+        # older versions returned the Annotation directly
+        diarization = result.speaker_diarization if hasattr(result, "speaker_diarization") else result
     except Exception as exc:
-        logger.warning("Diarization failed for %s: %s", wav_path, exc)
+        logger.warning("Diarization failed for %s: %s", wav_path, exc, exc_info=True)
         return []
 
     min_ms = config.voice_diarization_min_segment_ms
@@ -302,12 +346,14 @@ def embed_voice_segment(
 
 def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
     """Diarize audio/video files and match speaker segments to known people."""
+    import time as _time
     from src.db.corpus import (
         get_files_without_voice_segments,
         get_has_speech,
         get_voice_speaker_clusters,
         open_corpus,
         set_has_speech,
+        update_pipeline_checkpoint,
         upsert_voice_segment,
         upsert_voice_speaker_cluster,
     )
@@ -325,6 +371,7 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
     segments_found = 0
     segments_matched = 0
     error_count = 0
+    _start = _time.monotonic()
 
     try:
         people_rows = get_people_with_voice_centroids(kb_conn)
@@ -472,6 +519,11 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
 
             progress.update(i + 1, total)
 
+        update_pipeline_checkpoint(
+            corpus_conn, "voice_diarize", files_processed, 0,
+            error_count, _time.monotonic() - _start,
+        )
+        corpus_conn.commit()
         progress.done()
     finally:
         corpus_conn.close()

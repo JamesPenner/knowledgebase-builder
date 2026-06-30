@@ -1,0 +1,62 @@
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+  <span style="font-size:.85rem;color:#64748b">{{ rules | length }} rule{{ '' if rules | length == 1 else 's' }}</span>
+  <button class="btn btn--small"
+          hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}"
+          hx-target="#pattern-rule-form"
+          hx-swap="innerHTML">+ Add rule</button>
+</div>
+
+{% if rules %}
+<table class="data-table" style="width:100%">
+  <thead>
+    <tr>
+      <th>Pattern</th>
+      <th>Action</th>
+      <th>Summary</th>
+      <th>Label</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for rule in rules %}
+    <tr>
+      <td><code style="font-size:.8rem;color:#7dd3fc">{{ rule.pattern }}</code></td>
+      <td style="white-space:nowrap">
+        {% if rule.action == 'reject' %}
+          <span style="font-size:.75rem;background:#450a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:3px;padding:.1rem .35rem">reject</span>
+        {% elif rule.action == 'ignore' %}
+          <span style="font-size:.75rem;background:#0f172a;color:#94a3b8;border:1px solid #475569;border-radius:3px;padding:.1rem .35rem">ignore</span>
+        {% elif rule.action == 'replace' %}
+          <span style="font-size:.75rem;background:#1c1917;color:#fdba74;border:1px solid #78350f;border-radius:3px;padding:.1rem .35rem">replace</span>
+        {% elif rule.action == 'capture' %}
+          <span style="font-size:.75rem;background:#0c1a3e;color:#7dd3fc;border:1px solid #1e3a6e;border-radius:3px;padding:.1rem .35rem">capture</span>
+        {% endif %}
+      </td>
+      <td style="font-size:.85rem;color:#94a3b8">
+        {% if rule.action == 'replace' and rule.replace_with %}
+          → {{ rule.replace_with }}{% if rule.replace_type %} <span style="font-size:.75rem;color:#64748b">({{ rule.replace_type }})</span>{% endif %}
+        {% elif rule.action == 'capture' and rule.extract_as %}
+          → {{ rule.extract_as }}{% if rule.value_type %} <span style="font-size:.75rem;color:#64748b">{{ rule.value_type }}</span>{% endif %}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+      <td style="font-size:.85rem;color:#94a3b8">{{ rule.label or '—' }}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn--small"
+                hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}&rule_id={{ rule.id }}"
+                hx-target="#pattern-rule-form"
+                hx-swap="innerHTML">Edit</button>
+        <button class="btn btn--small btn--remove"
+                hx-post="/knowledge/pattern-rules/{{ rule.id }}/delete?kb={{ kb }}"
+                hx-target="#pattern-rule-form"
+                hx-swap="innerHTML"
+                hx-confirm="Delete rule '{{ rule.pattern }}'?">Delete</button>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No pattern rules yet. Add a rule to reject noise tokens, correct misspellings, or extract structured fields from filenames.</p>
+{% endif %}

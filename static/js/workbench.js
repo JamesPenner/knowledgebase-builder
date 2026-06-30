@@ -15,11 +15,9 @@ const WB = (() => {
   function setAllModes(mode) {
     _globalMode = mode;
     Object.keys(_stageModes).forEach(s => delete _stageModes[s]);
-    // Update global toggle buttons
-    document.querySelectorAll('.wb-mode-btn').forEach(btn => {
-      btn.classList.toggle('wb-mode-btn--active', btn.dataset.mode === mode);
+    document.querySelectorAll('.wb-seg-opt').forEach(btn => {
+      btn.classList.toggle('wb-seg-opt--active', btn.dataset.mode === mode);
     });
-    // Update all stage mode indicators
     document.querySelectorAll('[data-stage-mode-btn]').forEach(btn => {
       const stage = btn.dataset.stageModeBtn;
       _refreshStageModeBtn(stage);
@@ -28,23 +26,14 @@ const WB = (() => {
 
   function toggleStageMode(stage) {
     const current = getStageMode(stage);
-    if (stage === 'ingest') {
-      _stageModes[stage] = current === 'incremental' ? 'full' : 'incremental';
-    } else {
-      _stageModes[stage] = current === 'rerun' ? 'resume' : 'rerun';
-    }
+    _stageModes[stage] = current === 'rerun' ? 'resume' : 'rerun';
     _refreshStageModeBtn(stage);
   }
 
   function _refreshStageModeBtn(stage) {
     const btn = document.querySelector(`[data-stage-mode-btn="${stage}"]`);
     if (!btn) return;
-    const m = getStageMode(stage);
-    if (stage === 'ingest') {
-      btn.textContent = m === 'incremental' ? 'Incremental' : 'Full scan';
-    } else {
-      btn.textContent = m === 'rerun' ? 'Re-run' : 'Resume';
-    }
+    btn.textContent = getStageMode(stage) === 'rerun' ? 'Re-run' : 'Resume';
   }
 
   // ---------------------------------------------------------------------------
@@ -87,64 +76,390 @@ const WB = (() => {
   }
 
   // ---------------------------------------------------------------------------
+  // Sets collapsible
+  // ---------------------------------------------------------------------------
+
+  function toggleSets() {
+    const body = document.getElementById('wb-sets-body');
+    const arrow = document.getElementById('wb-sets-arrow');
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    if (arrow) arrow.textContent = open ? '▸' : '▾';
+    try {
+      localStorage.setItem('kb-sets-open-' + (window.KB_NAME || ''), open ? '0' : '1');
+    } catch (_) {}
+  }
+
+  function _initSets() {
+    const body = document.getElementById('wb-sets-body');
+    const arrow = document.getElementById('wb-sets-arrow');
+    if (!body) return;
+    try {
+      const stored = localStorage.getItem('kb-sets-open-' + (window.KB_NAME || ''));
+      const open = stored === '1';
+      body.style.display = open ? '' : 'none';
+      if (arrow) arrow.textContent = open ? '▾' : '▸';
+    } catch (_) {}
+  }
+
+  // ---------------------------------------------------------------------------
   // Scope bar
   // ---------------------------------------------------------------------------
 
+  let _liveCountTimer = null;
+  let _activeSetId = null;
+  let _savedScopeSnapshot = null;
+
   function getScope() {
     const srcSel = document.getElementById('scope-source');
+    const folderSel = document.getElementById('scope-folder');
     const typeSel = document.getElementById('scope-type');
-    const setSel = document.getElementById('scope-set');
-    const source_id = srcSel && srcSel.value ? parseInt(srcSel.value, 10) : null;
-    const file_type = typeSel && typeSel.value ? typeSel.value : null;
-    const set_id = setSel && setSel.value ? parseInt(setSel.value, 10) : null;
-    return {source_id, file_type, set_id};
+    const dateFrom = document.getElementById('scope-date-from');
+    const dateTo = document.getElementById('scope-date-to');
+    const nameEl = document.getElementById('scope-name-pattern');
+    return {
+      source_id: srcSel && srcSel.value ? parseInt(srcSel.value, 10) : null,
+      folder_prefix: folderSel && folderSel.value ? folderSel.value : null,
+      file_type: typeSel && typeSel.value ? typeSel.value : null,
+      date_from: dateFrom && dateFrom.value ? dateFrom.value : null,
+      date_to: dateTo && dateTo.value ? dateTo.value : null,
+      name_pattern: nameEl && nameEl.value.trim() ? nameEl.value.trim() : null,
+    };
   }
 
   function onScopeChange() {
-    window.KB_SCOPE = getScope();
-  }
-
-  function _initScopeBar() {
-    const sources = window.KB_SOURCES || [];
-    const sets = window.KB_SETS || [];
-
-    const srcSel = document.getElementById('scope-source');
-    if (srcSel) {
-      if (sources.length >= 2) {
-        sources.forEach(s => {
-          const opt = document.createElement('option');
-          opt.value = s.id;
-          opt.textContent = s.path;
-          srcSel.appendChild(opt);
-        });
-        srcSel.closest('.wb-scope-bar-item').style.display = '';
-      } else {
-        const item = srcSel.closest('.wb-scope-bar-item');
-        if (item) item.style.display = 'none';
+    if (_activeSetId !== null && _savedScopeSnapshot !== null) {
+      if (JSON.stringify(getScope()) !== _savedScopeSnapshot) {
+        _activeSetId = null;
+        _savedScopeSnapshot = null;
+        const setSel = document.getElementById('scope-set');
+        if (setSel) setSel.value = '';
       }
     }
+    window.KB_SCOPE = getScope();
+    _persistScope();
+    _scheduleLiveCount();
+    _updateDirtyIndicator();
+    const srcSel = document.getElementById('scope-source');
+    if (srcSel) _fetchFolders(srcSel.value ? parseInt(srcSel.value, 10) : null);
+  }
 
+  function onSetChange() {
     const setSel = document.getElementById('scope-set');
-    if (setSel) {
-      if (sets.length > 0) {
+    if (!setSel) return;
+    const val = setSel.value;
+    if (!val) {
+      _activeSetId = null;
+      _savedScopeSnapshot = null;
+      window.KB_SCOPE = getScope();
+      _persistScope();
+      _updateDirtyIndicator();
+    } else {
+      loadSet(parseInt(val, 10));
+    }
+  }
+
+  function _persistScope() {
+    try {
+      const kb = window.KB_NAME || '';
+      localStorage.setItem('kb-scope-' + kb, JSON.stringify(getScope()));
+      if (_activeSetId !== null) {
+        localStorage.setItem('kb-active-set-' + kb, String(_activeSetId));
+      } else {
+        localStorage.removeItem('kb-active-set-' + kb);
+      }
+    } catch (_) {}
+  }
+
+  function _scheduleLiveCount() {
+    clearTimeout(_liveCountTimer);
+    _liveCountTimer = setTimeout(_fetchLiveCount, 300);
+  }
+
+  function _fetchLiveCount() {
+    const scope = getScope();
+    const kb = window.KB_NAME || '';
+    const params = new URLSearchParams();
+    if (scope.source_id) params.set('source_id', scope.source_id);
+    if (scope.folder_prefix) params.set('folder_prefix', scope.folder_prefix);
+    if (scope.file_type) params.set('file_type', scope.file_type);
+    if (scope.date_from) params.set('date_from', scope.date_from);
+    if (scope.date_to) params.set('date_to', scope.date_to);
+    if (scope.name_pattern) params.set('name_pattern', scope.name_pattern);
+    const el = document.getElementById('scope-live-count');
+    if (!el) return;
+    fetch('/api/kb/' + kb + '/sets/preview?' + params.toString())
+      .then(r => r.json())
+      .then(d => { if (el) el.textContent = d.file_count; })
+      .catch(() => { if (el) el.textContent = '?'; });
+  }
+
+  function _fetchFolders(sourceId) {
+    const kb = window.KB_NAME || '';
+    const folderSel = document.getElementById('scope-folder');
+    if (!folderSel) return;
+    const url = '/api/kb/' + kb + '/folders' + (sourceId ? '?source_id=' + sourceId : '');
+    fetch(url)
+      .then(r => r.json())
+      .then(d => {
+        const prev = folderSel.value;
+        while (folderSel.options.length > 1) folderSel.remove(1);
+        (d.folders || []).forEach(f => {
+          const opt = document.createElement('option');
+          opt.value = f;
+          opt.textContent = f;
+          folderSel.appendChild(opt);
+        });
+        if (prev && Array.from(folderSel.options).some(o => o.value === prev)) {
+          folderSel.value = prev;
+        }
+      })
+      .catch(() => {});
+  }
+
+  function _updateDirtyIndicator() {
+    const dot = document.getElementById('scope-dirty-dot');
+    if (!dot) return;
+    if (_activeSetId === null || _savedScopeSnapshot === null) {
+      dot.style.display = 'none';
+      return;
+    }
+    const current = JSON.stringify(getScope());
+    dot.style.display = current !== _savedScopeSnapshot ? '' : 'none';
+  }
+
+  function loadSet(setId) {
+    const kb = window.KB_NAME || '';
+    fetch('/api/kb/' + kb + '/sets/' + setId)
+      .then(r => r.json())
+      .then(d => {
+        const srcSel = document.getElementById('scope-source');
+        const folderSel = document.getElementById('scope-folder');
+        const typeSel = document.getElementById('scope-type');
+        const dateFrom = document.getElementById('scope-date-from');
+        const dateTo = document.getElementById('scope-date-to');
+        const nameEl = document.getElementById('scope-name-pattern');
+        const setSel = document.getElementById('scope-set');
+        if (srcSel) srcSel.value = d.source_id || '';
+        if (typeSel) typeSel.value = d.file_type || '';
+        if (dateFrom) dateFrom.value = d.date_from || '';
+        if (dateTo) dateTo.value = d.date_to || '';
+        if (nameEl) nameEl.value = d.name_pattern || '';
+        if (setSel) setSel.value = String(setId);
+        _activeSetId = setId;
+
+        const finalize = () => {
+          _savedScopeSnapshot = JSON.stringify(getScope());
+          window.KB_SCOPE = getScope();
+          _persistScope();
+          _scheduleLiveCount();
+          _updateDirtyIndicator();
+        };
+
+        if (d.source_id) {
+          _fetchFolders(d.source_id);
+          setTimeout(() => {
+            if (folderSel && d.folder_prefix) folderSel.value = d.folder_prefix;
+            finalize();
+          }, 400);
+        } else {
+          _fetchFolders(null);
+          if (folderSel && d.folder_prefix) folderSel.value = d.folder_prefix;
+          finalize();
+        }
+      })
+      .catch(err => console.error('loadSet failed', err));
+  }
+
+  function _refreshSetDropdown() {
+    const kb = window.KB_NAME || '';
+    const setSel = document.getElementById('scope-set');
+    if (!setSel) return;
+    fetch('/api/kb/' + kb + '/sets')
+      .then(r => r.json())
+      .then(sets => {
+        while (setSel.options.length > 1) setSel.remove(1);
         sets.forEach(s => {
           const opt = document.createElement('option');
           opt.value = s.id;
-          opt.textContent = s.name + ' (' + s.file_count + ' files)';
+          opt.textContent = s.name;
           setSel.appendChild(opt);
         });
-        setSel.closest('.wb-scope-bar-item').style.display = '';
-      } else {
-        const item = setSel.closest('.wb-scope-bar-item');
-        if (item) item.style.display = 'none';
-      }
-    }
-
-    window.KB_SCOPE = getScope();
+        if (_activeSetId !== null && Array.from(setSel.options).some(o => parseInt(o.value, 10) === _activeSetId)) {
+          setSel.value = String(_activeSetId);
+        } else {
+          setSel.value = '';
+        }
+      })
+      .catch(() => {});
   }
 
-  // Keep for HTMX panel reload compatibility
-  function reloadSets() { _initScopeBar(); }
+  function deleteSet(setId, kb) {
+    const _k = kb || window.KB_NAME || '';
+    fetch('/api/kb/' + _k + '/sets/' + setId, {method: 'DELETE'})
+      .then(r => {
+        if (!r.ok) return;
+        if (_activeSetId !== null && parseInt(setId, 10) === _activeSetId) {
+          _activeSetId = null;
+          _savedScopeSnapshot = null;
+          _persistScope();
+          _updateDirtyIndicator();
+        }
+        _refreshSetDropdown();
+        htmx.ajax('GET', '/api/kb/' + _k + '/sets/panel', {target: '#sets-panel', swap: 'outerHTML'});
+      })
+      .catch(err => console.error('deleteSet error', err));
+  }
+
+  function _initScopeBar() {
+    const kb = window.KB_NAME || '';
+    const sources = window.KB_SOURCES || [];
+    const srcSel = document.getElementById('scope-source');
+    if (srcSel) {
+      sources.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.path;
+        srcSel.appendChild(opt);
+      });
+    }
+
+    // Restore scope + active set from localStorage
+    try {
+      const stored = localStorage.getItem('kb-scope-' + kb);
+      if (stored) {
+        const sc = JSON.parse(stored);
+        if (srcSel && sc.source_id) srcSel.value = sc.source_id;
+        const typeSel = document.getElementById('scope-type');
+        if (typeSel && sc.file_type) typeSel.value = sc.file_type;
+        const dateFrom = document.getElementById('scope-date-from');
+        if (dateFrom && sc.date_from) dateFrom.value = sc.date_from;
+        const dateTo = document.getElementById('scope-date-to');
+        if (dateTo && sc.date_to) dateTo.value = sc.date_to;
+        const nameEl = document.getElementById('scope-name-pattern');
+        if (nameEl && sc.name_pattern) nameEl.value = sc.name_pattern;
+
+        const activeSetStr = localStorage.getItem('kb-active-set-' + kb);
+        if (activeSetStr) {
+          _activeSetId = parseInt(activeSetStr, 10);
+          _savedScopeSnapshot = stored;
+        }
+      }
+    } catch (_) {}
+
+    // Populate set dropdown and restore selection
+    const setSel = document.getElementById('scope-set');
+    if (setSel) {
+      fetch('/api/kb/' + kb + '/sets')
+        .then(r => r.json())
+        .then(sets => {
+          sets.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            setSel.appendChild(opt);
+          });
+          if (_activeSetId !== null && Array.from(setSel.options).some(o => parseInt(o.value, 10) === _activeSetId)) {
+            setSel.value = String(_activeSetId);
+          }
+        })
+        .catch(() => {});
+    }
+
+    // Fetch initial folders
+    const srcVal = srcSel && srcSel.value ? parseInt(srcSel.value, 10) : null;
+    _fetchFolders(srcVal);
+
+    // Restore folder after folders load
+    try {
+      const stored = localStorage.getItem('kb-scope-' + kb);
+      if (stored) {
+        const sc = JSON.parse(stored);
+        if (sc.folder_prefix) {
+          setTimeout(() => {
+            const folderSel = document.getElementById('scope-folder');
+            if (folderSel) folderSel.value = sc.folder_prefix;
+          }, 400);
+        }
+      }
+    } catch (_) {}
+
+    window.KB_SCOPE = getScope();
+    _scheduleLiveCount();
+    _updateDirtyIndicator();
+  }
+
+  function clearScope() {
+    ['scope-set', 'scope-source', 'scope-folder', 'scope-type'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    ['scope-date-from', 'scope-date-to', 'scope-name-pattern'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    _activeSetId = null;
+    _savedScopeSnapshot = null;
+    window.KB_SCOPE = getScope();
+    _persistScope();
+    _scheduleLiveCount();
+    _updateDirtyIndicator();
+    _fetchFolders(null);
+  }
+
+  function promptSaveSet() {
+    const form = document.getElementById('scope-save-form');
+    if (!form) return;
+    const sc = getScope();
+    const parts = [];
+    if (sc.file_type) parts.push(sc.file_type);
+    if (sc.folder_prefix) parts.push(sc.folder_prefix.split('/').pop() || sc.folder_prefix);
+    if (sc.date_from || sc.date_to) parts.push((sc.date_from || '') + '–' + (sc.date_to || ''));
+    if (sc.name_pattern) parts.push(sc.name_pattern);
+    const nameEl = document.getElementById('scope-save-name');
+    if (nameEl) nameEl.value = parts.join(' ') || 'My Set';
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+  }
+
+  function confirmSaveSet() {
+    const kb = window.KB_NAME || '';
+    const name = (document.getElementById('scope-save-name') || {}).value || '';
+    const result = document.getElementById('scope-save-result');
+    if (!name.trim()) { if (result) result.textContent = 'Name required'; return; }
+    const sc = getScope();
+    const body = {name: name.trim(), description: ''};
+    if (sc.source_id) body.source_id = sc.source_id;
+    if (sc.folder_prefix) body.folder_prefix = sc.folder_prefix;
+    if (sc.file_type) body.file_type = sc.file_type;
+    if (sc.date_from) body.date_from = sc.date_from;
+    if (sc.date_to) body.date_to = sc.date_to;
+    if (sc.name_pattern) body.name_pattern = sc.name_pattern;
+    if (result) result.textContent = 'Saving…';
+    fetch('/api/kb/' + kb + '/sets', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    })
+    .then(r => r.json())
+    .then(d => {
+      if (d.detail) { if (result) result.textContent = 'Error: ' + d.detail; return; }
+      _activeSetId = d.id;
+      _savedScopeSnapshot = JSON.stringify(getScope());
+      _persistScope();
+      _updateDirtyIndicator();
+      if (result) result.textContent = 'Saved (' + d.file_count + ' files)';
+      setTimeout(() => { const f = document.getElementById('scope-save-form'); if (f) f.style.display = 'none'; }, 1500);
+      _refreshSetDropdown();
+      htmx.ajax('GET', '/api/kb/' + kb + '/sets/panel', {target: '#sets-panel', swap: 'outerHTML'});
+    })
+    .catch(() => { if (result) result.textContent = 'Save failed'; });
+  }
+
+  function cancelSaveSet() {
+    const form = document.getElementById('scope-save-form');
+    if (form) form.style.display = 'none';
+  }
 
   // ---------------------------------------------------------------------------
   // Checkbox / selection
@@ -182,7 +497,8 @@ const WB = (() => {
   async function _runPlan(stages) {
     const scope = getScope();
     window.KB_SCOPE = scope;
-    const completed = [...(window.KB_CHECKPOINTS || [])];
+    const stageSet = new Set(stages);
+    const completed = (window.KB_CHECKPOINTS || []).filter(s => !stageSet.has(s));
 
     let plan;
     try {
@@ -207,10 +523,73 @@ const WB = (() => {
     location.reload();
   }
 
+  // ---------------------------------------------------------------------------
+  // Sources sync (ingest stage, wired to the Sources header)
+  // ---------------------------------------------------------------------------
+
+  let _syncEs = null;
+
+  function syncSources() {
+    const kb = window.KB_NAME;
+    const runBtn = document.getElementById('btn-sync-sources');
+    const cancelBtn = document.getElementById('btn-cancel-sync');
+    const progressEl = document.getElementById('sync-progress');
+
+    if (runBtn) runBtn.disabled = true;
+    if (cancelBtn) cancelBtn.style.display = '';
+    if (progressEl) progressEl.textContent = 'Starting…';
+
+    const scope = window.KB_SCOPE || {};
+    fetch('/api/stages/ingest/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kb, run_mode: 'resume', ...scope}),
+    });
+
+    if (_syncEs) { _syncEs.close(); _syncEs = null; }
+    const es = new EventSource('/api/stages/ingest/stream');
+    _syncEs = es;
+
+    es.onmessage = function(e) {
+      const d = JSON.parse(e.data);
+      if (d.status === 'running') {
+        const msg = d.message || 'Running…';
+        const count = d.total > 0 ? ` · ${d.current} / ${d.total}` : '';
+        if (progressEl) progressEl.textContent = msg + count;
+      } else if (d.status === 'done') {
+        es.close(); _syncEs = null;
+        if (!window.WB_RUNNING_PLAN) location.reload();
+      } else if (d.status === 'failed') {
+        es.close(); _syncEs = null;
+        if (runBtn) runBtn.disabled = false;
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        if (progressEl) progressEl.textContent = d.message || 'Sync failed';
+      }
+    };
+    es.onerror = function() {
+      es.close(); _syncEs = null;
+      if (runBtn) runBtn.disabled = false;
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      if (progressEl) progressEl.textContent = '';
+    };
+  }
+
+  function cancelSync() {
+    fetch('/api/stages/ingest/cancel', {method: 'POST'});
+    if (_syncEs) { _syncEs.close(); _syncEs = null; }
+    const runBtn = document.getElementById('btn-sync-sources');
+    const cancelBtn = document.getElementById('btn-cancel-sync');
+    const progressEl = document.getElementById('sync-progress');
+    if (runBtn) runBtn.disabled = false;
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (progressEl) progressEl.textContent = '';
+  }
+
   function runSelected() { _runPlan(_checkedStages()); }
   function runGroup(groupId) { _runPlan((window.KB_GROUP_STAGES || {})[groupId] || []); }
   function runAll() {
-    const all = (window.KB_GROUPS || []).flatMap(id => (window.KB_GROUP_STAGES || {})[id] || []);
+    // Always include ingest as the first step so new sources are picked up.
+    const all = ['ingest', ...(window.KB_GROUPS || []).flatMap(id => (window.KB_GROUP_STAGES || {})[id] || [])];
     _runPlan(all);
   }
 
@@ -225,11 +604,14 @@ const WB = (() => {
 
   document.addEventListener('DOMContentLoaded', function () {
     _initSources();
+    _initSets();
     _initScopeBar();
   });
 
   return {
-    runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, getScope,
-    toggleSources, setAllModes, toggleStageMode, getStageMode, reloadSets,
+    runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, onSetChange, getScope,
+    toggleSources, toggleSets, setAllModes, toggleStageMode, getStageMode,
+    loadSet, deleteSet, clearScope, promptSaveSet, confirmSaveSet, cancelSaveSet,
+    syncSources, cancelSync,
   };
 })();

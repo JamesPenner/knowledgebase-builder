@@ -56,8 +56,25 @@ def _make_corpus_db() -> sqlite3.Connection:
     return conn
 
 
+def _make_wav(path, duration_ms: int = 200, sr: int = 16000):
+    """Write a minimal silent WAV file so wave.open succeeds in diarize_audio."""
+    import wave as _wave
+    n_samples = int(sr * duration_ms / 1000)
+    with _wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(b"\x00\x00" * n_samples)
+    return path
+
+
 def _make_fake_pyannote(segments: list[dict]):
-    """Build a minimal fake pyannote module returning given segments."""
+    """Build minimal fake pyannote + torch modules for diarize_audio tests.
+
+    Returns (pyannote_mod, audio_mod, torch_mod).  All three must be patched
+    into sys.modules so the real PyTorch C extension is never invoked across
+    sequential test runs (which causes segfaults on Windows).
+    """
     mod = types.ModuleType("pyannote")
     audio_mod = types.ModuleType("pyannote.audio")
 
@@ -76,12 +93,18 @@ def _make_fake_pyannote(segments: list[dict]):
         def from_pretrained(cls, model_id, **kwargs):
             return cls()
 
-        def __call__(self, path):
+        def __call__(self, audio_input):
             return _FakeDiarization()
 
     audio_mod.Pipeline = _FakePipeline
     mod.audio = audio_mod
-    return mod, audio_mod
+
+    torch_mod = types.ModuleType("torch")
+    _mock_tensor = mock.MagicMock()
+    _mock_tensor.unsqueeze.return_value = _mock_tensor
+    torch_mod.tensor = mock.MagicMock(return_value=_mock_tensor)
+
+    return mod, audio_mod, torch_mod
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +125,10 @@ class TestDiarizeAudio:
             {"start": 5.0, "end": 10.0, "label": "SPEAKER_01"},
             {"start": 0.0, "end": 4.0,  "label": "SPEAKER_00"},
         ]
-        pyannote_mod, audio_mod = _make_fake_pyannote(raw)
-        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
-            result = diarize_audio(tmp_path / "a.wav", self._config())
+        pyannote_mod, audio_mod, torch_mod = _make_fake_pyannote(raw)
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod, "torch": torch_mod}):
+            result = diarize_audio(wav, self._config())
         assert len(result) == 2
         assert result[0]["start_ms"] < result[1]["start_ms"]
 
@@ -114,15 +138,16 @@ class TestDiarizeAudio:
             {"start": 0.0, "end": 0.3, "label": "SPEAKER_00"},   # 300ms — below 500ms threshold
             {"start": 1.0, "end": 2.0, "label": "SPEAKER_01"},   # 1000ms — kept
         ]
-        pyannote_mod, audio_mod = _make_fake_pyannote(raw)
-        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
-            result = diarize_audio(tmp_path / "a.wav", self._config(min_ms=500))
+        pyannote_mod, audio_mod, torch_mod = _make_fake_pyannote(raw)
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod, "torch": torch_mod}):
+            result = diarize_audio(wav, self._config(min_ms=500))
         assert len(result) == 1
         assert result[0]["speaker_label"] == "SPEAKER_01"
 
     def test_returns_empty_on_error(self, tmp_path):
         from src.stages.voice import diarize_audio
-        pyannote_mod, audio_mod = _make_fake_pyannote([])
+        pyannote_mod, audio_mod, torch_mod = _make_fake_pyannote([])
 
         class _BrokenPipeline:
             @classmethod
@@ -132,8 +157,9 @@ class TestDiarizeAudio:
                 raise RuntimeError("codec error")
 
         audio_mod.Pipeline = _BrokenPipeline
-        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
-            result = diarize_audio(tmp_path / "a.wav", self._config())
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod, "torch": torch_mod}):
+            result = diarize_audio(wav, self._config())
         assert result == []
 
     def test_raises_model_load_error_if_not_installed(self, tmp_path):
@@ -145,18 +171,20 @@ class TestDiarizeAudio:
     def test_segment_fields(self, tmp_path):
         from src.stages.voice import diarize_audio
         raw = [{"start": 1.0, "end": 3.5, "label": "SPEAKER_00"}]
-        pyannote_mod, audio_mod = _make_fake_pyannote(raw)
-        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
-            result = diarize_audio(tmp_path / "a.wav", self._config())
+        pyannote_mod, audio_mod, torch_mod = _make_fake_pyannote(raw)
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod, "torch": torch_mod}):
+            result = diarize_audio(wav, self._config())
         assert result[0]["start_ms"] == 1000
         assert result[0]["end_ms"] == 3500
         assert result[0]["speaker_label"] == "SPEAKER_00"
 
     def test_empty_diarization_returns_empty_list(self, tmp_path):
         from src.stages.voice import diarize_audio
-        pyannote_mod, audio_mod = _make_fake_pyannote([])
-        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
-            result = diarize_audio(tmp_path / "a.wav", self._config())
+        pyannote_mod, audio_mod, torch_mod = _make_fake_pyannote([])
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod, "torch": torch_mod}):
+            result = diarize_audio(wav, self._config())
         assert result == []
 
 
@@ -368,4 +396,4 @@ class TestDiarizationHealthCheck:
     def test_total_check_count_is_24(self, tmp_path):
         from src.config import Config
         from src.health import run_checks
-        assert len(run_checks(Config(), None, None, tmp_path)) == 25
+        assert len(run_checks(Config(), None, None, tmp_path)) == 28

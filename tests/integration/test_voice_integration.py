@@ -279,7 +279,7 @@ class TestVoiceHealthCheck:
 
         config = Config()
         checks = run_checks(config, None, None, Path("."))
-        assert len(checks) == 25
+        assert len(checks) == 28
 
 
 # ---------------------------------------------------------------------------

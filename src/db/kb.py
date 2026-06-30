@@ -86,27 +86,98 @@ def open_kb(path: Path) -> sqlite3.Connection:
 # Normalization rule writers
 # ---------------------------------------------------------------------------
 
-def add_capture_rule(
+def add_pattern_rule(
     conn: sqlite3.Connection,
     pattern: str,
-    label: str,
-    extract_as: str,
+    action: str,
+    *,
+    is_regex: bool = True,
+    label: str = "",
+    replace_with: str = "",
+    replace_type: str = "",
+    extract_as: str = "",
     format_str: str = "",
     value_type: str = "",
     keep_token: bool = False,
     date_precision: str | None = None,
+    scope: str = "both",
 ) -> int:
     cur = conn.execute(
-        """
-        INSERT INTO capture_rules
-            (pattern, label, extract_as, format_str, value_type, keep_token, date_precision)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (pattern, label, extract_as, format_str or None, value_type or None,
-         int(keep_token), date_precision or None),
+        "INSERT INTO pattern_rules"
+        " (pattern, is_regex, action, label, replace_with, replace_type,"
+        "  extract_as, format_str, value_type, keep_token, date_precision, scope)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            pattern, int(is_regex), action, label or None,
+            replace_with or None, replace_type or None,
+            extract_as or None, format_str or None,
+            value_type or None, int(keep_token),
+            date_precision or None, scope,
+        ),
     )
     conn.commit()
+    if action == "replace" and replace_type == "synonym" and replace_with:
+        _add_synonym_to_vocabulary(conn, replace_with, pattern)
     return cur.lastrowid
+
+
+def update_pattern_rule(
+    conn: sqlite3.Connection,
+    rule_id: int,
+    pattern: str,
+    action: str,
+    *,
+    is_regex: bool = True,
+    label: str = "",
+    replace_with: str = "",
+    replace_type: str = "",
+    extract_as: str = "",
+    format_str: str = "",
+    value_type: str = "",
+    keep_token: bool = False,
+    date_precision: str | None = None,
+    scope: str = "both",
+) -> None:
+    conn.execute(
+        "UPDATE pattern_rules"
+        " SET pattern=?, is_regex=?, action=?, label=?, replace_with=?, replace_type=?,"
+        "     extract_as=?, format_str=?, value_type=?, keep_token=?, date_precision=?, scope=?"
+        " WHERE id=?",
+        (
+            pattern, int(is_regex), action, label or None,
+            replace_with or None, replace_type or None,
+            extract_as or None, format_str or None,
+            value_type or None, int(keep_token),
+            date_precision or None, scope, rule_id,
+        ),
+    )
+    conn.commit()
+    if action == "replace" and replace_type == "synonym" and replace_with:
+        _add_synonym_to_vocabulary(conn, replace_with, pattern)
+
+
+def delete_pattern_rule(conn: sqlite3.Connection, rule_id: int) -> None:
+    delete_decision(conn, "pattern_rules", rule_id)
+
+
+def _add_synonym_to_vocabulary(conn: sqlite3.Connection, canonical: str, synonym: str) -> None:
+    import json as _json
+    row = conn.execute(
+        "SELECT synonyms_json FROM vocabulary WHERE term=?", (canonical,)
+    ).fetchone()
+    if not row:
+        return
+    try:
+        synonyms = _json.loads(row["synonyms_json"] or "[]")
+    except (ValueError, TypeError):
+        synonyms = []
+    if synonym not in synonyms:
+        synonyms.append(synonym)
+        conn.execute(
+            "UPDATE vocabulary SET synonyms_json=? WHERE term=?",
+            (_json.dumps(synonyms, ensure_ascii=False), canonical),
+        )
+        conn.commit()
 
 
 def add_to_stoplist(
@@ -119,6 +190,7 @@ def add_to_stoplist(
         "INSERT OR IGNORE INTO stoplist (term, scope, source) VALUES (?, ?, ?)",
         (term, scope, source),
     )
+    conn.commit()
 
 
 def remove_from_stoplist(conn: sqlite3.Connection, term: str) -> None:
@@ -126,47 +198,22 @@ def remove_from_stoplist(conn: sqlite3.Connection, term: str) -> None:
     conn.commit()
 
 
-def add_correction(
-    conn: sqlite3.Connection,
-    raw_term: str,
-    canonical_term: str,
-    correction_kind: str = "typo",
-) -> int:
-    cur = conn.execute(
-        """
-        INSERT INTO corrections (raw_term, canonical_term, type, correction_kind)
-        VALUES (?, ?, 'exact', ?)
-        ON CONFLICT(raw_term, type) DO UPDATE SET
-            canonical_term  = excluded.canonical_term,
-            correction_kind = excluded.correction_kind
-        """,
-        (raw_term, canonical_term, correction_kind),
+def add_token_rejection(conn: sqlite3.Connection, token: str) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO token_rejections (token) VALUES (?)", (token,)
     )
     conn.commit()
-    if cur.lastrowid:
-        return cur.lastrowid
-    row = conn.execute(
-        "SELECT id FROM corrections WHERE raw_term=? AND type='exact'", (raw_term,)
-    ).fetchone()
-    return row["id"]
 
 
-def add_reject_token(
-    conn: sqlite3.Connection,
-    pattern: str,
-    is_regex: bool = False,
-    label: str = "",
-) -> int:
-    cur = conn.execute(
-        "INSERT INTO reject_tokens (pattern, is_regex, label) VALUES (?, ?, ?)",
-        (pattern, int(is_regex), label or None),
-    )
-    conn.commit()
-    return cur.lastrowid
+def get_token_rejections(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, token FROM token_rejections ORDER BY id"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def delete_decision(conn: sqlite3.Connection, table: str, row_id: int) -> None:
-    _ALLOWED = {"capture_rules", "stoplist", "corrections", "reject_tokens"}
+    _ALLOWED = {"pattern_rules", "stoplist", "token_rejections"}
     if table not in _ALLOWED:
         raise ValueError(f"Unknown decision table: {table!r}")
     if table == "stoplist":
@@ -180,9 +227,8 @@ def get_decision_token(conn: sqlite3.Connection, table: str, row_id: int) -> str
     """Return the token text for an existing KB decision row, or None if not found."""
     _COLUMN = {
         "stoplist": ("stoplist", "term", "WHERE rowid=?"),
-        "corrections": ("corrections", "raw_term", "WHERE id=?"),
-        "capture_rules": ("capture_rules", "pattern", "WHERE id=?"),
-        "reject_tokens": ("reject_tokens", "pattern", "WHERE id=?"),
+        "pattern_rules": ("pattern_rules", "pattern", "WHERE id=?"),
+        "token_rejections": ("token_rejections", "token", "WHERE id=?"),
     }
     if table not in _COLUMN:
         raise ValueError(f"Unknown decision table: {table!r}")
@@ -205,31 +251,28 @@ def get_decisions(conn: sqlite3.Connection) -> list[dict]:
         })
 
     for row in conn.execute(
-        "SELECT id, raw_term, canonical_term, correction_kind FROM corrections ORDER BY id"
+        "SELECT id, pattern, action, label, replace_with, extract_as FROM pattern_rules ORDER BY id"
     ).fetchall():
+        action = row["action"]
+        if action == "replace":
+            detail = row["replace_with"] or ""
+        elif action == "capture":
+            detail = row["extract_as"] or ""
+        else:
+            detail = ""
         decisions.append({
-            "id": f"corrections:{row['id']}",
-            "token": row["raw_term"],
-            "action": "correct",
-            "detail": row["canonical_term"],
+            "id": f"pattern_rules:{row['id']}",
+            "token": row["label"] or row["pattern"],
+            "action": action,
+            "detail": detail,
         })
 
     for row in conn.execute(
-        "SELECT id, pattern, extract_as, label FROM capture_rules ORDER BY id"
+        "SELECT id, token FROM token_rejections ORDER BY id"
     ).fetchall():
         decisions.append({
-            "id": f"capture_rules:{row['id']}",
-            "token": row["label"] or row["pattern"],
-            "action": "capture",
-            "detail": row["extract_as"],
-        })
-
-    for row in conn.execute(
-        "SELECT id, pattern, label FROM reject_tokens ORDER BY id"
-    ).fetchall():
-        decisions.append({
-            "id": f"reject_tokens:{row['id']}",
-            "token": row["label"] or row["pattern"],
+            "id": f"token_rejections:{row['id']}",
+            "token": row["token"],
             "action": "reject",
             "detail": "",
         })
@@ -246,52 +289,20 @@ def bump_kb_version(conn: sqlite3.Connection, change_type: str) -> None:
 # Normalize rule readers
 # ---------------------------------------------------------------------------
 
-def get_capture_rules(conn: sqlite3.Connection) -> list[dict]:
+def get_pattern_rules(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT pattern, extract_as, format_str, keep_token, value_type, date_precision"
-        " FROM capture_rules ORDER BY id"
+        "SELECT pattern, is_regex, action, replace_with, replace_type,"
+        "       extract_as, format_str, value_type, keep_token, date_precision"
+        " FROM pattern_rules ORDER BY id"
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def list_capture_rules(conn: sqlite3.Connection) -> list[dict]:
+def list_pattern_rules(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT id, pattern, label, extract_as, format_str,"
-        "       keep_token, value_type, date_precision"
-        " FROM capture_rules ORDER BY id"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def update_capture_rule(
-    conn: sqlite3.Connection,
-    rule_id: int,
-    pattern: str,
-    label: str,
-    extract_as: str,
-    format_str: str = "",
-    value_type: str = "",
-    keep_token: bool = False,
-    date_precision: str | None = None,
-) -> None:
-    conn.execute(
-        "UPDATE capture_rules"
-        " SET pattern=?, label=?, extract_as=?, format_str=?,"
-        "     value_type=?, keep_token=?, date_precision=?"
-        " WHERE id=?",
-        (pattern, label or None, extract_as, format_str or None,
-         value_type or None, int(keep_token), date_precision or None, rule_id),
-    )
-    conn.commit()
-
-
-def delete_capture_rule(conn: sqlite3.Connection, rule_id: int) -> None:
-    delete_decision(conn, "capture_rules", rule_id)
-
-
-def get_reject_tokens(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        "SELECT pattern, is_regex FROM reject_tokens ORDER BY id"
+        "SELECT id, pattern, is_regex, action, label, replace_with, replace_type,"
+        "       extract_as, format_str, value_type, keep_token, date_precision, scope"
+        " FROM pattern_rules ORDER BY id"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -301,13 +312,6 @@ def get_substitute_rules(conn: sqlite3.Connection) -> list[dict]:
         "SELECT pattern, replacement, applies_to FROM substitute_rules ORDER BY id"
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-def get_corrections_map(conn: sqlite3.Connection) -> dict[str, str]:
-    rows = conn.execute(
-        "SELECT raw_term, canonical_term FROM corrections WHERE type = 'exact'"
-    ).fetchall()
-    return {r["raw_term"]: r["canonical_term"] for r in rows}
 
 
 def get_stoplist_terms(conn: sqlite3.Connection, scope: str = "global") -> set[str]:
@@ -700,9 +704,9 @@ def get_vocabulary_terms(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM vocabulary ORDER BY term").fetchall()
 
 
-def get_capture_rule_type(conn: sqlite3.Connection, field_name: str) -> str:
+def get_pattern_rule_type(conn: sqlite3.Connection, field_name: str) -> str:
     row = conn.execute(
-        "SELECT value_type FROM capture_rules WHERE extract_as=? LIMIT 1",
+        "SELECT value_type FROM pattern_rules WHERE extract_as=? AND action='capture' LIMIT 1",
         (field_name,),
     ).fetchone()
     return row["value_type"] if row else "text"
@@ -729,35 +733,17 @@ def get_export_stopwords(conn: sqlite3.Connection) -> list[str]:
     return [r["term"] for r in rows]
 
 
-def get_export_corrections_exact(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_export_pattern_rules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT raw_term, canonical_term FROM corrections WHERE type='exact' ORDER BY raw_term"
-    ).fetchall()
-
-
-def get_export_corrections_pattern(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT raw_term, canonical_term, correction_kind FROM corrections"
-        " WHERE type='pattern' ORDER BY id"
-    ).fetchall()
-
-
-def get_export_capture_rules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT pattern, label, extract_as, value_type, format_str, keep_token"
-        " FROM capture_rules ORDER BY id"
+        "SELECT pattern, is_regex, action, label, replace_with, replace_type,"
+        "       extract_as, format_str, value_type, keep_token, date_precision, scope"
+        " FROM pattern_rules ORDER BY id"
     ).fetchall()
 
 
 def get_export_substitute_rules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT pattern, replacement, label, applies_to FROM substitute_rules ORDER BY id"
-    ).fetchall()
-
-
-def get_export_reject_tokens(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT pattern, is_regex, label, scope FROM reject_tokens ORDER BY id"
     ).fetchall()
 
 
@@ -897,36 +883,41 @@ def seed_stopwords(conn: sqlite3.Connection, terms: list[str], scope: str = "glo
     return inserted
 
 
-def seed_corrections_exact(conn: sqlite3.Connection, corrections: dict[str, str]) -> int:
-    inserted = 0
-    for raw, canonical in corrections.items():
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO corrections (raw_term, canonical_term, type)"
-            " SELECT ?, ?, 'exact'"
-            " WHERE NOT EXISTS (SELECT 1 FROM corrections WHERE raw_term=? AND type='exact')",
-            (raw, canonical, raw),
-        )
-        inserted += cur.rowcount
-    conn.commit()
-    return inserted
-
-
-def seed_capture_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
+def seed_pattern_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
     inserted = 0
     for rule in rules:
+        pattern = rule.get("pattern")
+        if not pattern:
+            continue
         cur = conn.execute(
-            "INSERT OR IGNORE INTO capture_rules"
-            " (pattern, label, extract_as, value_type, format_str, keep_token)"
-            " SELECT ?, ?, ?, ?, ?, ?"
-            " WHERE NOT EXISTS (SELECT 1 FROM capture_rules WHERE pattern=?)",
+            "INSERT OR IGNORE INTO pattern_rules"
+            " (pattern, is_regex, action, label, replace_with, replace_type,"
+            "  extract_as, format_str, value_type, keep_token, date_precision, scope)"
+            " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+            " WHERE NOT EXISTS (SELECT 1 FROM pattern_rules WHERE pattern=?)",
             (
-                rule.get("pattern"), rule.get("label"), rule.get("extract_as"),
-                rule.get("value_type"), rule.get("format_str"),
+                pattern,
+                int(bool(rule.get("is_regex", True))),
+                rule.get("action", "capture"),
+                rule.get("label"),
+                rule.get("replace_with"),
+                rule.get("replace_type"),
+                rule.get("extract_as"),
+                rule.get("format_str"),
+                rule.get("value_type"),
                 int(bool(rule.get("keep_token", False))),
-                rule.get("pattern"),
+                rule.get("date_precision"),
+                rule.get("scope", "both"),
+                pattern,
             ),
         )
-        inserted += cur.rowcount
+        if cur.rowcount:
+            inserted += 1
+            action = rule.get("action", "")
+            replace_type = rule.get("replace_type", "")
+            replace_with = rule.get("replace_with", "")
+            if action == "replace" and replace_type == "synonym" and replace_with:
+                _add_synonym_to_vocabulary(conn, replace_with, pattern)
     conn.commit()
     return inserted
 
@@ -949,22 +940,6 @@ def seed_substitute_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
     return inserted
 
 
-def seed_reject_tokens(conn: sqlite3.Connection, tokens: list[dict]) -> int:
-    inserted = 0
-    for tok in tokens:
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO reject_tokens (pattern, is_regex, label, scope)"
-            " SELECT ?, ?, ?, ?"
-            " WHERE NOT EXISTS (SELECT 1 FROM reject_tokens WHERE pattern=?)",
-            (
-                tok.get("pattern"), int(bool(tok.get("is_regex", False))),
-                tok.get("label"), tok.get("scope", "both"),
-                tok.get("pattern"),
-            ),
-        )
-        inserted += cur.rowcount
-    conn.commit()
-    return inserted
 
 
 # ---------------------------------------------------------------------------

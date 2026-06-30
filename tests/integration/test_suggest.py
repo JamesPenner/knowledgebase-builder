@@ -30,9 +30,14 @@ def _seed_keywords(conn, file_id, *keywords):
     conn.commit()
 
 
-def _make_fake_spacy(terms_per_doc: list[list[str]]):
-    """Return a fake spacy module whose nlp(text) returns tokens for successive calls."""
+def _make_fake_spacy(terms_per_doc: list[list[str]], chunks_per_doc: list[list[str]] | None = None):
+    """Return a fake spacy module whose nlp(text) returns tokens for successive calls.
+
+    chunks_per_doc: optional list of multi-word phrases to return as noun_chunks per call.
+    Each chunk entry is a string; len() returns word count via split().
+    """
     call_count = [0]
+    chunks_per_doc = chunks_per_doc or [[] for _ in terms_per_doc]
 
     class FakeToken:
         def __init__(self, lemma, pos):
@@ -40,10 +45,18 @@ def _make_fake_spacy(terms_per_doc: list[list[str]]):
             self.pos_ = pos
             self.is_stop = False
 
+    class FakeChunk:
+        def __init__(self, text):
+            self.text = text
+            self._words = text.split()
+
+        def __len__(self):
+            return len(self._words)
+
     class FakeDoc:
-        def __init__(self, terms):
+        def __init__(self, terms, chunks):
             self.tokens = [FakeToken(t, "NOUN") for t in terms]
-            self.noun_chunks = []
+            self.noun_chunks = [FakeChunk(c) for c in chunks]
 
         def __iter__(self):
             return iter(self.tokens)
@@ -52,7 +65,8 @@ def _make_fake_spacy(terms_per_doc: list[list[str]]):
         def __call__(self_inner, text):
             idx = call_count[0] % len(terms_per_doc)
             call_count[0] += 1
-            return FakeDoc(terms_per_doc[idx])
+            chunk_idx = idx % len(chunks_per_doc)
+            return FakeDoc(terms_per_doc[idx], chunks_per_doc[chunk_idx])
 
     fake_spacy = types.ModuleType("spacy")
 
@@ -266,6 +280,36 @@ def test_suggest_force_clears_pending(tmp_path, monkeypatch):
     ).fetchone()[0]
     conn.close()
     assert count_after_rerun == 1
+
+
+def test_level_a_extracts_noun_chunks_from_prose(tmp_path, monkeypatch):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    open_kb(kb_path).close()
+    _seed_files(corpus_conn, count=3)
+
+    # seed a description so _build_prose_text has content
+    for fid in (1, 2, 3):
+        corpus_conn.execute(
+            "INSERT INTO descriptions (file_id, description_raw, pass1_status) VALUES (?, 'dummy text', 'done')",
+            (fid,),
+        )
+    corpus_conn.commit()
+    corpus_conn.close()
+
+    # Each call: no individual tokens, but a noun chunk present in prose pass
+    chunks = [["golden hour"], ["golden hour"], ["golden hour"]]
+    fake = _make_fake_spacy([[], [], []], chunks_per_doc=chunks)
+    config = Config(suggest_min_files=2)
+    _run_level_a(corpus_path, kb_path, config, fake, monkeypatch)
+
+    conn = open_corpus(corpus_path)
+    terms = {r["term"] for r in conn.execute(
+        "SELECT term FROM candidates WHERE source='level_a' AND status='pending'"
+    ).fetchall()}
+    conn.close()
+    assert "golden hour" in terms
 
 
 # ---------------------------------------------------------------------------

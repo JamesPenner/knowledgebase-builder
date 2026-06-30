@@ -148,13 +148,18 @@ def run_temporal(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     from src.db.corpus import open_corpus, update_pipeline_checkpoint, upsert_temporal_fields
+    from src.pipeline.filter_spec import CorpusFilterSpec
 
     conn = open_corpus(corpus_path)
+    spec = scope or CorpusFilterSpec()
+    scope_frag, scope_params = spec.to_sql_fragment()
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT f.id,
                    MAX(CASE WHEN fmf.canonical_name = 'exif_date_taken' THEN fmf.value END) AS exif_date_taken,
                    MAX(CASE WHEN fcf.field_name     = 'file_date'        THEN fcf.value END) AS file_date
@@ -163,10 +168,11 @@ def run_temporal(
             LEFT JOIN file_captured_fields fcf ON fcf.file_id = f.id
             WHERE NOT EXISTS (
                 SELECT 1 FROM file_temporal_fields ft WHERE ft.file_id = f.id
-            )
+            ){scope_frag}
             GROUP BY f.id
             ORDER BY f.id
-            """
+            """,
+            scope_params,
         ).fetchall()
 
         total = len(rows)

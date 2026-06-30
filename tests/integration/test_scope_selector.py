@@ -212,7 +212,9 @@ def test_pipeline_page_scope_bar_present(tmp_path):
     assert "wb-scope-bar" in resp.text
     assert "scope-source" in resp.text
     assert "scope-type" in resp.text
-    assert "scope-set" in resp.text
+    assert "scope-folder" in resp.text
+    assert "scope-date-from" in resp.text
+    assert "scope-name-pattern" in resp.text
 
 
 def test_pipeline_page_sources_header_present(tmp_path):

@@ -1,27 +1,22 @@
-{% extends "base.html" %}
+{% extends "review_base.html" %}
 {% block title %}Suggestion Review — {{ kb }}{% endblock %}
-{% block content %}
-<h1 class="page-title">Suggestion Review</h1>
-<p class="review-counts">
-  <strong>{{ counts.pending }}</strong> pending
-  · <strong>{{ counts.accepted }}</strong> accepted
-  · <strong>{{ counts.rejected }}</strong> rejected
-  · {{ counts.total }} total
-</p>
-<details class="action-legend">
-  <summary>What do the actions do?</summary>
-  <dl class="action-legend__list">
-    <dt>Accept</dt>
-    <dd>Adds the term to your vocabulary. It will be included in LLM prompts (describe, retag, summarize) and written into file metadata.</dd>
-    <dt>Ignore</dt>
-    <dd>Adds the term to the stoplist — permanently excluded from future suggestion runs, even if candidates are reset. Does not enter LLM prompts.</dd>
-    <dt>Reject</dt>
-    <dd>Dismisses the term without adding it to vocabulary or stoplist. Will not resurface in the next suggestion run. Does not enter LLM prompts.</dd>
-    <dt>Correct</dt>
-    <dd>Accepts a corrected spelling or form of the term instead. The corrected term is added to vocabulary.</dd>
-  </dl>
-</details>
+{% block review_heading %}Suggestion Review{% endblock %}
 
+{% block action_legend_items %}
+<dt>Accept</dt>
+<dd>Adds the term to your vocabulary. It will be included in LLM prompts (describe, retag, summarize) and written into file metadata.</dd>
+<dt>Ignore</dt>
+<dd>Adds the term to the stoplist — permanently excluded from future suggestion runs, even if candidates are reset. Does not enter LLM prompts.</dd>
+<dt>Reject</dt>
+<dd>Dismisses the term without adding it to vocabulary or stoplist. Will not resurface in the next suggestion run. Does not enter LLM prompts.</dd>
+<dt>Correct</dt>
+<dd>Accepts a corrected spelling or form of the term instead. The corrected term is added to vocabulary.</dd>
+{% endblock %}
+
+{% block pending_tab_count %}{{ counts.pending }}{% endblock %}
+{% block decided_tab_count %}{{ counts.total - counts.pending }}{% endblock %}
+
+{% block review_extra %}
 <div class="level-c-controls">
   {% if has_level_b_clusters %}
   <button id="btn-run-level-c" class="btn btn--run"
@@ -34,24 +29,55 @@
   <button class="btn" disabled title="Run Level B (Suggest) first">Run Level C — run Level B first</button>
   {% endif %}
 </div>
+{% endblock %}
 
+{% block pending_content %}
 <div id="candidates-queue"
      hx-get="/review/suggest/partials/queue?kb={{ kb }}"
      hx-trigger="pendingChanged from:body"
      hx-swap="innerHTML">
   {% include "partials/candidates_queue.html" %}
 </div>
+{% endblock %}
 
-<section class="decisions-section">
-  <h2 class="section-title">Decisions</h2>
-  <div id="vocabulary-panel"
-       hx-get="/review/suggest/partials/vocabulary?kb={{ kb }}"
-       hx-trigger="decisionsChanged from:body"
-       hx-swap="innerHTML">
-    {% include "partials/vocabulary_panel.html" %}
-  </div>
-</section>
+{% block decided_content %}
+<input type="text" id="vocab-search" class="input-text" placeholder="Filter decisions…" style="margin-bottom:0.75rem">
+<div id="vocabulary-panel"
+     hx-get="/review/suggest/partials/vocabulary?kb={{ kb }}"
+     hx-trigger="decisionsChanged from:body"
+     hx-swap="innerHTML">
+  {% include "partials/vocabulary_panel.html" %}
+</div>
+{% endblock %}
+
+{% block page_scripts %}
 <script>
+ReviewQueue.init({
+  queueId:    'candidates-queue',
+  partialUrl: '/review/suggest/partials/queue',
+  kb:         '{{ kb }}',
+  limit:      50,
+  step:       50,
+  sortBy:     'file_count',
+  sortOrder:  'desc',
+  hasSort:    true,
+});
+ReviewPage.init({
+  formClass:   'candidate-action-form',
+  rowIdPrefix: 'candidate-row-',
+  idField:     'candidate_id',
+  endpoint:    '/review/suggest/decide',
+  onRowRemoved: function (row) {
+    var next = row.nextElementSibling;
+    if (next && next.classList.contains('notes-row')) next.remove();
+    row.remove();
+  },
+});
+ReviewFilter.init({
+  tableId:  'vocabulary-panel',
+  searchId: 'vocab-search',
+});
+
 function runLevelC(kb) {
   document.getElementById('btn-run-level-c').disabled = true;
   document.getElementById('btn-cancel-level-c').style.display = '';

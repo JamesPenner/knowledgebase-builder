@@ -135,9 +135,7 @@ def run_transcribe(
     progress: ProgressReporter,
     cancel_event: threading.Event,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope=None,
 ) -> None:
     from src.db.corpus import (
         delete_transcript_segments_for_file,
@@ -168,7 +166,7 @@ def run_transcribe(
     try:
         model = None
 
-        pending = get_pending_transcribe_files(corpus_conn, source_id=source_id, file_type=file_type, set_id=set_id)
+        pending = get_pending_transcribe_files(corpus_conn, scope=scope)
         total = len(pending)
 
         if total == 0:

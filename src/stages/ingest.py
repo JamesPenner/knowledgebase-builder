@@ -88,7 +88,6 @@ def run_ingest(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
-    incremental: bool = False,
 ) -> None:
     from datetime import datetime
 
@@ -99,18 +98,20 @@ def run_ingest(
         progress.done()
         return
 
-    # Build per-source incremental threshold (mtime must be >= threshold to re-process)
+    # Build mtime thresholds for sources that have incremental=True and a prior run timestamp.
+    # Sources without incremental=True are not keyed here, so they always do a full walk.
     source_thresholds: dict[int, float | None] = {}
-    if incremental:
-        for src in sources:
-            lia = src["last_ingested_at"]
-            if lia:
-                try:
-                    source_thresholds[src["id"]] = datetime.strptime(lia, "%Y-%m-%d %H:%M:%S").timestamp()
-                except ValueError:
-                    source_thresholds[src["id"]] = None
-            else:
+    for src in sources:
+        if not src["incremental"]:
+            continue
+        lia = src["last_ingested_at"]
+        if lia:
+            try:
+                source_thresholds[src["id"]] = datetime.strptime(lia, "%Y-%m-%d %H:%M:%S").timestamp()
+            except ValueError:
                 source_thresholds[src["id"]] = None
+        else:
+            source_thresholds[src["id"]] = None
 
     # First pass: collect all eligible files and count per source
     all_files: list[tuple[int, str, str, bool]] = []  # (source_id, filepath, file_type, matched)
@@ -171,17 +172,16 @@ def run_ingest(
         ext = p.suffix.lower()
 
         # Incremental shortcut: skip DB upsert for old files already in DB
-        if incremental:
-            threshold = source_thresholds.get(source_id)
-            if threshold is not None and mtime < threshold:
-                existing = conn.execute(
-                    "SELECT id FROM files WHERE path=?", (filepath,)
-                ).fetchone()
-                if existing:
-                    skipped += 1
-                    processed += 1
-                    progress.update(processed, total)
-                    continue
+        threshold = source_thresholds.get(source_id)
+        if threshold is not None and mtime < threshold:
+            existing = conn.execute(
+                "SELECT id FROM files WHERE path=?", (filepath,)
+            ).fetchone()
+            if existing:
+                skipped += 1
+                processed += 1
+                progress.update(processed, total)
+                continue
 
         # Check if unchanged: same path + size + mtime already in DB
         existing = conn.execute(

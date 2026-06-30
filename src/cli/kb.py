@@ -21,7 +21,6 @@ def _write_library_yaml(path: Path) -> None:
         },
         "hashing": {
             "phash_similarity_threshold": 10,
-            "area_hash_grid": 8,
             "video_frame_similarity_threshold": 10,
         },
         "video": {"collage_frames": 9, "collage_grid_cols": 3, "collage_grid_rows": 3},
@@ -221,8 +220,8 @@ def _populate_reference_files(kb_folder: Path) -> None:
 
 
 def _load_general_media_seed(kb_path: Path) -> None:
-    """Load general-media seed stopwords and capture rules into knowledge.db."""
-    from src.db.kb import open_kb, seed_capture_rules, seed_stopwords
+    """Load general-media seed stopwords and pattern rules into knowledge.db."""
+    from src.db.kb import open_kb, seed_pattern_rules, seed_stopwords
 
     seed_root = Path("seed") / "general-media"
     kb_conn = open_kb(kb_path)
@@ -235,11 +234,11 @@ def _load_general_media_seed(kb_path: Path) -> None:
             ]
             seed_stopwords(kb_conn, terms)
 
-        rules_file = seed_root / "capture_rules.yaml"
+        rules_file = seed_root / "pattern_rules.yaml"
         if rules_file.exists():
             import yaml
-            rules = yaml.safe_load(rules_file.read_text(encoding="utf-8")) or []
-            seed_capture_rules(kb_conn, rules)
+            data = yaml.safe_load(rules_file.read_text(encoding="utf-8")) or {}
+            seed_pattern_rules(kb_conn, data.get("rules") or [])
     finally:
         kb_conn.close()
 
@@ -250,9 +249,7 @@ def _import_kb_bundle(kb_path: Path, bundle_path: Path) -> None:
     from src.db.kb import (
         add_vocabulary_term,
         open_kb,
-        seed_capture_rules,
-        seed_corrections_exact,
-        seed_reject_tokens,
+        seed_pattern_rules,
         seed_stopwords,
         seed_substitute_rules,
     )
@@ -274,37 +271,48 @@ def _import_kb_bundle(kb_path: Path, bundle_path: Path) -> None:
             ]
             seed_stopwords(kb_conn, terms)
 
-        corrections_file = bundle_path / "corrections.yaml"
-        if corrections_file.exists():
-            import yaml
-            data = yaml.safe_load(corrections_file.read_text(encoding="utf-8")) or {}
-            if isinstance(data, dict):
-                seed_corrections_exact(kb_conn, data)
-
+        # New format: patterns.yaml (flat rules list + substitute_rules)
         patterns_file = bundle_path / "patterns.yaml"
         if patterns_file.exists():
             import yaml
             data = yaml.safe_load(patterns_file.read_text(encoding="utf-8")) or {}
-            seed_capture_rules(kb_conn, data.get("capture_rules") or [])
+            seed_pattern_rules(kb_conn, data.get("rules") or [])
             seed_substitute_rules(kb_conn, data.get("substitute_rules") or [])
-            # pattern_corrections go into corrections table with type='pattern'
-            for pc in (data.get("pattern_corrections") or []):
-                kb_conn.execute(
-                    "INSERT OR IGNORE INTO corrections (raw_term, canonical_term, type, correction_kind)"
-                    " SELECT ?, ?, 'pattern', ?"
-                    " WHERE NOT EXISTS (SELECT 1 FROM corrections"
-                    " WHERE raw_term=? AND type='pattern')",
-                    (pc.get("pattern"), pc.get("canonical"), pc.get("correction_kind"), pc.get("pattern")),
-                )
-            kb_conn.commit()
 
+        # Old format backward-compat: corrections.yaml → pattern_rules replace/correction
+        corrections_csv = bundle_path / "corrections.csv"
+        if corrections_csv.exists():
+            rules = []
+            with open(corrections_csv, newline="", encoding="utf-8") as fh:
+                for row in _csv.DictReader(fh):
+                    rules.append({
+                        "pattern": row["raw"],
+                        "action": "replace",
+                        "is_regex": False,
+                        "replace_with": row["canonical"],
+                        "replace_type": row.get("type") or "correction",
+                    })
+            seed_pattern_rules(kb_conn, rules)
+        elif (bundle_path / "corrections.yaml").exists():
+            import yaml
+            data = yaml.safe_load((bundle_path / "corrections.yaml").read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict):
+                rules = [
+                    {"pattern": raw, "action": "replace", "is_regex": False,
+                     "replace_with": canonical, "replace_type": "correction"}
+                    for raw, canonical in data.items()
+                ]
+                seed_pattern_rules(kb_conn, rules)
+
+        # reject_tokens.csv: tokens rejected during Normalise Review
         reject_file = bundle_path / "reject_tokens.csv"
         if reject_file.exists():
-            tokens = []
+            from src.db.kb import add_token_rejection
             with open(reject_file, newline="", encoding="utf-8") as fh:
                 for row in _csv.DictReader(fh):
-                    tokens.append(row)
-            seed_reject_tokens(kb_conn, tokens)
+                    token = row.get("token") or row.get("pattern", "")
+                    if token:
+                        add_token_rejection(kb_conn, token)
 
         entities_dir = bundle_path / "entities"
         if entities_dir.exists():
@@ -494,6 +502,54 @@ def kb_health(
 
     if has_error:
         raise typer.Exit(1)
+
+
+@app.command("seed-registers")
+def kb_seed_registers(
+    kb: str | None = typer.Option(None, "--kb", help="KB name (defaults to active KB)"),
+) -> None:
+    """Import Index_of_Locations.csv and Index_of_People.csv if not already loaded."""
+    from src.db.kb import open_kb, seed_location_register, seed_people_register
+    from src.db.registry import get_active_kb_path, get_kb_path, open_registry
+
+    reg = open_registry(Path("."))
+    try:
+        kb_folder = get_kb_path(reg, kb) if kb else get_active_kb_path(reg)
+        if kb_folder is None:
+            typer.echo("Error: no active KB. Use --kb <name>.", err=True)
+            raise typer.Exit(1)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    kb_conn = open_kb(kb_folder / "knowledge.db")
+
+    loc_csv = kb_folder / "reference" / "registers" / "Index_of_Locations.csv"
+    if not loc_csv.exists():
+        typer.echo("Locations: register not found at reference/registers/Index_of_Locations.csv")
+    else:
+        n = seed_location_register(kb_conn, loc_csv)
+        if n == 0:
+            try:
+                existing = kb_conn.execute("SELECT COUNT(*) FROM entity_locations").fetchone()[0]
+            except Exception:
+                existing = 0
+            typer.echo(f"Locations: already imported ({existing} rows), skipped")
+        else:
+            typer.echo(f"Locations: imported {n} rows")
+
+    ppl_csv = kb_folder / "reference" / "registers" / "Index_of_People.csv"
+    if not ppl_csv.exists():
+        typer.echo("People: register not found at reference/registers/Index_of_People.csv")
+    else:
+        n = seed_people_register(kb_conn, ppl_csv)
+        if n == 0:
+            existing = kb_conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+            typer.echo(f"People: already imported ({existing} rows), skipped")
+        else:
+            typer.echo(f"People: imported {n} rows")
+
+    kb_conn.close()
 
 
 @app.command("generate-taxonomy")

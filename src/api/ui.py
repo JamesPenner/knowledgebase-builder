@@ -40,9 +40,9 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         get_analyse_token_counts,
         get_candidate_counts,
         get_describe_counts,
-        get_file_sets,
         get_new_terms_candidates,
         get_pipeline_checkpoints,
+        get_pipeline_stage_counts,
         get_sources,
         get_transcribe_counts,
         open_corpus,
@@ -58,11 +58,13 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
             "describe": get_describe_counts(corpus_conn),
             "transcribe": get_transcribe_counts(corpus_conn),
         }
+        actual_counts = get_pipeline_stage_counts(corpus_conn)
         token_counts = get_analyse_token_counts(corpus_conn)
         candidate_counts = get_candidate_counts(corpus_conn)
         new_terms = get_new_terms_candidates(corpus_conn, kb_conn)
         sources = [{"id": r["id"], "path": r["path"], "file_count": r["file_count_ingested"] or 0} for r in get_sources(corpus_conn)]
-        sets = [{"id": r["id"], "name": r["name"], "file_count": r["file_count"]} for r in get_file_sets(corpus_conn)]
+        sources_need_sync = bool(sources) and any(s["file_count"] == 0 for s in sources)
+        ingest_checkpoint = checkpoints.get("ingest")
 
         # Register gate warnings
         kb_folder = kb_path.parent
@@ -94,7 +96,7 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         "normalise_review": {
             "completed": token_counts["total"] > 0 and token_counts["reviewed"] == token_counts["total"],
             "url": f"/review/normalise?kb={kb_name}",
-            "manage_url": f"/knowledge/capture-rules?kb={kb_name}",
+            "manage_url": f"/knowledge/pattern-rules?kb={kb_name}",
             "label": "Normalise Review",
             "description": "Approve or reject candidate vocabulary terms before continuing",
             "pending": _norm_pending,
@@ -145,11 +147,12 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
                 "blocking_dep": _blocking_dep(name),
                 "checkpoint": cp,
                 "stage_counts": sc,
+                "actual_count": actual_counts.get(name),
                 "touchpoint_before": TOUCHPOINT_BEFORE.get(name),
-                "manage_url": f"/knowledge/capture-rules?kb={kb_name}" if name == "normalize" else None,
+                "manage_url": f"/knowledge/pattern-rules?kb={kb_name}" if name == "normalize" else None,
                 "gate_warning": gate_warnings.get(name),
             })
-        groups.append({**grp, "stages": stages})
+        groups.append({**grp, "stages": stages, "visible": grp.get("visible", True)})
 
     return templates.TemplateResponse(request, "pipeline.html", {
         "kb": kb_name,
@@ -158,7 +161,8 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         "checkpoints_json": list(checkpoints.keys()),
         "stage_descriptions": STAGE_DESCRIPTIONS,
         "sources": sources,
-        "sets": sets,
+        "sources_need_sync": sources_need_sync,
+        "ingest_checkpoint": ingest_checkpoint,
         # keep legacy keys so any other code that uses them doesn't break
         "checkpoints": checkpoints,
         "all_stages": list(DEPENDENCIES.keys()),
@@ -178,7 +182,7 @@ def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(r
     from src.db.kb import get_decisions, open_kb
     conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
-    groups = get_grouped_analyse_tokens(conn)
+    groups, total_groups = get_grouped_analyse_tokens(conn, limit=10)
     counts = get_analyse_token_counts(conn)
     decisions = get_decisions(kb_conn)
     conn.close()
@@ -188,6 +192,9 @@ def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(r
         "groups": groups,
         "counts": counts,
         "decisions": decisions,
+        "limit": 10,
+        "has_more": len(groups) < total_groups,
+        "total_groups": total_groups,
     })
 
 
@@ -320,19 +327,26 @@ def knowledge_locations_page(request: Request, paths: tuple[Path, Path] = Depend
 def pending_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, _ = paths
     kb_name = request.query_params.get("kb", "")
+    try:
+        limit = int(request.query_params.get("limit", "10"))
+    except ValueError:
+        limit = 10
     from src.db.corpus import (
         get_analyse_token_counts,
         get_grouped_analyse_tokens,
         open_corpus,
     )
     conn = open_corpus(corpus_path)
-    groups = get_grouped_analyse_tokens(conn)
+    groups, total_groups = get_grouped_analyse_tokens(conn, limit=limit)
     counts = get_analyse_token_counts(conn)
     conn.close()
     return templates.TemplateResponse(request, "partials/pending_groups.html", {
         "kb": kb_name,
         "groups": groups,
         "counts": counts,
+        "limit": limit,
+        "has_more": len(groups) < total_groups,
+        "total_groups": total_groups,
     })
 
 
@@ -469,9 +483,7 @@ async def ui_normalise_decide(
 ) -> Response:
     from src.db.corpus import open_corpus, set_token_decided
     from src.db.kb import (
-        add_capture_rule,
-        add_correction,
-        add_reject_token,
+        add_pattern_rule,
         add_to_stoplist,
         bump_kb_version,
         open_kb,
@@ -484,16 +496,18 @@ async def ui_normalise_decide(
     if action == "accept":
         pass  # no KB rule — token is kept as-is by normalize
     elif action == "capture":
-        add_capture_rule(
+        add_pattern_rule(
             kb_conn,
             pattern=pattern,
+            action="capture",
+            is_regex=True,
             label=label or extract_as,
             extract_as=extract_as,
             format_str=format_str,
             value_type=value_type,
             keep_token=keep_token.lower() == "true",
         )
-        bump_kb_version(kb_conn, "capture_rule_added")
+        bump_kb_version(kb_conn, "pattern_rule_added")
     elif action == "ignore":
         token_row = corpus_conn.execute(
             "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
@@ -506,20 +520,28 @@ async def ui_normalise_decide(
             "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
         ).fetchone()
         if token_row:
-            add_correction(
+            add_pattern_rule(
                 kb_conn,
-                raw_term=token_row["token"],
-                canonical_term=canonical_term,
-                correction_kind="typo",
+                pattern=token_row["token"],
+                action="replace",
+                is_regex=False,
+                replace_with=canonical_term,
+                replace_type="correction",
             )
-            bump_kb_version(kb_conn, "correction_added")
+            bump_kb_version(kb_conn, "pattern_rule_added")
     elif action == "reject":
         token_row = corpus_conn.execute(
             "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
         ).fetchone()
         if token_row:
-            add_reject_token(kb_conn, pattern=token_row["token"], is_regex=False, label=token_row["token"])
-            bump_kb_version(kb_conn, "reject_token_added")
+            add_pattern_rule(
+                kb_conn,
+                pattern=token_row["token"],
+                action="reject",
+                is_regex=False,
+                label=token_row["token"],
+            )
+            bump_kb_version(kb_conn, "pattern_rule_added")
 
     set_token_decided(corpus_conn, item_id)
     corpus_conn.close()
@@ -537,7 +559,7 @@ async def ui_normalise_bulk(
         open_corpus,
         set_all_pending_decided,
     )
-    from src.db.kb import add_reject_token, add_to_stoplist, bump_kb_version, open_kb
+    from src.db.kb import add_pattern_rule, add_to_stoplist, bump_kb_version, open_kb
 
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
@@ -557,9 +579,9 @@ async def ui_normalise_bulk(
     elif action == "reject_all":
         rows = get_all_pending_tokens(corpus_conn)
         for row in rows:
-            add_reject_token(kb_conn, pattern=row["token"], is_regex=False, label=row["token"])
+            add_pattern_rule(kb_conn, pattern=row["token"], action="reject", is_regex=False, label=row["token"])
         if rows:
-            bump_kb_version(kb_conn, "reject_token_added")
+            bump_kb_version(kb_conn, "pattern_rule_added")
         set_all_pending_decided(corpus_conn)
 
     corpus_conn.close()
@@ -608,7 +630,7 @@ def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(res
     from src.db.corpus import get_candidate_counts, get_pending_candidates, has_level_b_clusters, open_corpus
 
     conn = open_corpus(corpus_path)
-    candidates = get_pending_candidates(conn, limit=100, offset=0)
+    candidates = get_pending_candidates(conn, limit=50, offset=0, sort_by="file_count", sort_order="desc")
     counts = get_candidate_counts(conn)
     level_b_exists = has_level_b_clusters(conn)
     conn.close()
@@ -616,6 +638,10 @@ def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(res
         "kb": kb_name,
         "candidates": [dict(c) for c in candidates],
         "counts": counts,
+        "sort_by": "file_count",
+        "sort_order": "desc",
+        "limit": 50,
+        "has_more": len(candidates) < counts["pending"],
         "has_level_b_clusters": level_b_exists,
         **_build_decisions_context(corpus_path, kb_path),
     })
@@ -625,16 +651,26 @@ def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(res
 def suggest_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, _ = paths
     kb_name = request.query_params.get("kb", "")
+    sort_by = request.query_params.get("sort_by", "file_count")
+    sort_order = request.query_params.get("sort_order", "desc")
+    try:
+        limit = int(request.query_params.get("limit", "50"))
+    except ValueError:
+        limit = 50
     from src.db.corpus import get_candidate_counts, get_pending_candidates, open_corpus
 
     conn = open_corpus(corpus_path)
-    candidates = get_pending_candidates(conn, limit=100, offset=0)
+    candidates = get_pending_candidates(conn, limit=limit, offset=0, sort_by=sort_by, sort_order=sort_order)
     counts = get_candidate_counts(conn)
     conn.close()
     return templates.TemplateResponse(request, "partials/candidates_queue.html", {
         "kb": kb_name,
         "candidates": [dict(c) for c in candidates],
         "counts": counts,
+        "sort_by": sort_by,
+        "sort_order": sort_order,
+        "limit": limit,
+        "has_more": len(candidates) < counts["pending"],
     })
 
 
@@ -890,8 +926,7 @@ async def ui_new_terms_decide(
 ) -> Response:
     from src.db.corpus import merge_new_term_into_tags, open_corpus
     from src.db.kb import (
-        add_correction,
-        add_reject_token,
+        add_pattern_rule,
         add_to_stoplist,
         add_vocabulary_term,
         bump_kb_version,
@@ -911,10 +946,11 @@ async def ui_new_terms_decide(
         add_to_stoplist(kb_conn, term, source="domain")
         kb_conn.commit()
     elif action == "reject":
-        add_reject_token(kb_conn, pattern=term, is_regex=False, label=term)
+        add_pattern_rule(kb_conn, pattern=term, action="reject", is_regex=False, label=term)
         kb_conn.commit()
     elif action == "correct" and corrected_to:
-        add_correction(kb_conn, raw_term=term, canonical_term=corrected_to)
+        add_pattern_rule(kb_conn, pattern=term, action="replace", is_regex=False,
+                         replace_with=corrected_to, replace_type="correction")
         add_vocabulary_term(kb_conn, corrected_to)
         bump_kb_version(kb_conn, "vocabulary_term_added")
         kb_conn.commit()
@@ -987,9 +1023,9 @@ async def ui_normalise_reassign(
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
     from src.db.kb import (
-        add_correction,
-        add_reject_token,
+        add_pattern_rule,
         add_to_stoplist,
+        add_token_rejection,
         bump_kb_version,
         delete_decision,
         get_decision_token,
@@ -1021,11 +1057,11 @@ async def ui_normalise_reassign(
         add_to_stoplist(kb_conn, token_text)
         bump_kb_version(kb_conn, "stoplist_updated")
     elif new_action == "correct":
-        add_correction(kb_conn, raw_term=token_text, canonical_term=canonical_term, correction_kind="typo")
-        bump_kb_version(kb_conn, "correction_added")
+        add_pattern_rule(kb_conn, pattern=token_text, action="replace", is_regex=False,
+                         replace_with=canonical_term, replace_type="correction")
+        bump_kb_version(kb_conn, "pattern_rule_added")
     elif new_action == "reject":
-        add_reject_token(kb_conn, pattern=token_text, is_regex=False, label=token_text)
-        bump_kb_version(kb_conn, "reject_token_added")
+        add_token_rejection(kb_conn, token_text)
     # new_action == "accept": no KB rule needed; token stays decided in corpus
 
     kb_conn.close()
@@ -1739,89 +1775,108 @@ def prompt_library_page(request: Request, paths: tuple[Path, Path] = Depends(res
 
 
 # ---------------------------------------------------------------------------
-# Capture Rules manager
+# Pattern Rules manager
 # ---------------------------------------------------------------------------
 
 _HX_TRIGGER_RULES = '{"rulesChanged": null}'
 
 
-@router.get("/knowledge/capture-rules", include_in_schema=False)
-def capture_rules_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+@router.get("/knowledge/pattern-rules", include_in_schema=False)
+def pattern_rules_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     _, kb_path = paths
     kb_name = request.query_params.get("kb", "")
-    return templates.TemplateResponse(request, "capture_rules.html", {"kb": kb_name})
+    return templates.TemplateResponse(request, "pattern_rules.html", {"kb": kb_name})
 
 
-@router.get("/knowledge/capture-rules/partials/list", include_in_schema=False)
-def capture_rules_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+@router.get("/knowledge/pattern-rules/partials/list", include_in_schema=False)
+def pattern_rules_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     _, kb_path = paths
     kb_name = request.query_params.get("kb", "")
-    from src.db.kb import list_capture_rules, open_kb
+    from src.db.kb import list_pattern_rules, open_kb
     kb_conn = open_kb(kb_path)
-    rules = list_capture_rules(kb_conn)
+    rules = list_pattern_rules(kb_conn)
     kb_conn.close()
-    return templates.TemplateResponse(request, "partials/capture_rule_list.html", {
+    return templates.TemplateResponse(request, "partials/pattern_rule_list.html", {
         "kb": kb_name,
         "rules": rules,
     })
 
 
-@router.get("/knowledge/capture-rules/partials/form", include_in_schema=False)
-def capture_rules_form_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+@router.get("/knowledge/pattern-rules/partials/form", include_in_schema=False)
+def pattern_rules_form_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     _, kb_path = paths
     kb_name = request.query_params.get("kb", "")
     rule_id_str = request.query_params.get("rule_id", "")
     rule = None
     if rule_id_str:
-        from src.db.kb import list_capture_rules, open_kb
+        from src.db.kb import list_pattern_rules, open_kb
         kb_conn = open_kb(kb_path)
-        rules = list_capture_rules(kb_conn)
+        rules = list_pattern_rules(kb_conn)
         kb_conn.close()
         try:
             rule_id = int(rule_id_str)
             rule = next((r for r in rules if r["id"] == rule_id), None)
         except ValueError:
             pass
-    return templates.TemplateResponse(request, "partials/capture_rule_form.html", {
+    return templates.TemplateResponse(request, "partials/pattern_rule_form.html", {
         "kb": kb_name,
         "rule": rule,
     })
 
 
-@router.post("/knowledge/capture-rules/add", include_in_schema=False)
-async def ui_capture_rule_add(
+@router.post("/knowledge/pattern-rules/add", include_in_schema=False)
+async def ui_pattern_rule_add(
     request: Request,
     pattern: str = Form(...),
-    extract_as: str = Form(...),
+    action: str = Form("capture"),
     label: str = Form(""),
+    is_regex: str = Form("true"),
+    replace_with: str = Form(""),
+    replace_type: str = Form("correction"),
+    extract_as: str = Form(""),
     format_str: str = Form(""),
     value_type: str = Form(""),
     keep_token: str = Form("false"),
     date_precision: str = Form(""),
+    scope: str = Form("both"),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.kb import add_capture_rule, open_kb
+    from src.db.kb import add_pattern_rule, open_kb
     _, kb_path = paths
+    if action == "capture" and not extract_as.strip():
+        return Response(
+            content="<p style='color:#dc2626'>Extract As is required for capture rules.</p>",
+            media_type="text/html",
+        )
+    if action == "replace" and not replace_with.strip():
+        return Response(
+            content="<p style='color:#dc2626'>Replace With is required for replace rules.</p>",
+            media_type="text/html",
+        )
     kb_conn = open_kb(kb_path)
     try:
         existing = kb_conn.execute(
-            "SELECT id FROM capture_rules WHERE pattern=?", (pattern,)
+            "SELECT id FROM pattern_rules WHERE pattern=?", (pattern,)
         ).fetchone()
         if existing:
-            kb_conn.close()
             return Response(
                 content="<p style='color:#dc2626'>A rule with that pattern already exists.</p>",
                 media_type="text/html",
             )
-        add_capture_rule(
+        add_pattern_rule(
             kb_conn,
             pattern=pattern,
+            action=action,
+            is_regex=is_regex.lower() == "true",
             label=label,
+            replace_with=replace_with,
+            replace_type=replace_type,
             extract_as=extract_as,
             format_str=format_str,
             value_type=value_type,
             keep_token=keep_token.lower() == "true",
             date_precision=date_precision or None,
+            scope=scope,
         )
     finally:
         kb_conn.close()
@@ -1832,39 +1887,58 @@ async def ui_capture_rule_add(
     )
 
 
-@router.post("/knowledge/capture-rules/{rule_id}/edit", include_in_schema=False)
-async def ui_capture_rule_edit(
+@router.post("/knowledge/pattern-rules/{rule_id}/edit", include_in_schema=False)
+async def ui_pattern_rule_edit(
     rule_id: int,
     pattern: str = Form(...),
-    extract_as: str = Form(...),
+    action: str = Form("capture"),
     label: str = Form(""),
+    is_regex: str = Form("true"),
+    replace_with: str = Form(""),
+    replace_type: str = Form("correction"),
+    extract_as: str = Form(""),
     format_str: str = Form(""),
     value_type: str = Form(""),
     keep_token: str = Form("false"),
     date_precision: str = Form(""),
+    scope: str = Form("both"),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.kb import open_kb, update_capture_rule
+    from src.db.kb import open_kb, update_pattern_rule
     _, kb_path = paths
+    if action == "capture" and not extract_as.strip():
+        return Response(
+            content="<p style='color:#dc2626'>Extract As is required for capture rules.</p>",
+            media_type="text/html",
+        )
+    if action == "replace" and not replace_with.strip():
+        return Response(
+            content="<p style='color:#dc2626'>Replace With is required for replace rules.</p>",
+            media_type="text/html",
+        )
     kb_conn = open_kb(kb_path)
     try:
         existing = kb_conn.execute(
-            "SELECT id FROM capture_rules WHERE id=?", (rule_id,)
+            "SELECT id FROM pattern_rules WHERE id=?", (rule_id,)
         ).fetchone()
         if not existing:
-            kb_conn.close()
             return Response(content="<p style='color:#dc2626'>Rule not found.</p>",
                             media_type="text/html", status_code=404)
-        update_capture_rule(
+        update_pattern_rule(
             kb_conn,
             rule_id=rule_id,
             pattern=pattern,
+            action=action,
+            is_regex=is_regex.lower() == "true",
             label=label,
+            replace_with=replace_with,
+            replace_type=replace_type,
             extract_as=extract_as,
             format_str=format_str,
             value_type=value_type,
             keep_token=keep_token.lower() == "true",
             date_precision=date_precision or None,
+            scope=scope,
         )
     finally:
         kb_conn.close()
@@ -1875,23 +1949,23 @@ async def ui_capture_rule_edit(
     )
 
 
-@router.post("/knowledge/capture-rules/{rule_id}/delete", include_in_schema=False)
-async def ui_capture_rule_delete(
+@router.post("/knowledge/pattern-rules/{rule_id}/delete", include_in_schema=False)
+async def ui_pattern_rule_delete(
     rule_id: int,
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.kb import delete_capture_rule, open_kb
+    from src.db.kb import delete_pattern_rule, open_kb
     _, kb_path = paths
     kb_conn = open_kb(kb_path)
     try:
         existing = kb_conn.execute(
-            "SELECT id FROM capture_rules WHERE id=?", (rule_id,)
+            "SELECT id FROM pattern_rules WHERE id=?", (rule_id,)
         ).fetchone()
         if not existing:
             kb_conn.close()
             return Response(content="<p style='color:#dc2626'>Rule not found.</p>",
                             media_type="text/html", status_code=404)
-        delete_capture_rule(kb_conn, rule_id)
+        delete_pattern_rule(kb_conn, rule_id)
     finally:
         kb_conn.close()
     return Response(

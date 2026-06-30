@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{% block review_title %}Review{% endblock %} — {{ kb }}{% endblock %}
+{% block head %}
+<script src="/static/js/review.js"></script>
+{% block page_scripts %}{% endblock %}
+{% endblock %}
+{% block content %}
+<h1 class="page-title">{% block review_heading %}Review{% endblock %}</h1>
+
+{% block review_extra %}{% endblock %}
+
+<details class="action-legend">
+  <summary>What do the actions do?</summary>
+  <dl class="action-legend__list">
+    {% block action_legend_items %}{% endblock %}
+  </dl>
+</details>
+
+<nav class="review-tabs">
+  <button class="review-tab review-tab--active" data-panel="review-pending">
+    Pending
+    <span class="review-tab-badge" id="tab-badge-pending">{% block pending_tab_count %}0{% endblock %}</span>
+  </button>
+  <button class="review-tab" data-panel="review-decided">
+    Decided
+    <span class="review-tab-badge" id="tab-badge-decided">{% block decided_tab_count %}0{% endblock %}</span>
+  </button>
+</nav>
+
+<div id="review-pending" class="review-tab-panel">
+  {% block pending_content %}{% endblock %}
+</div>
+
+<div id="review-decided" class="review-tab-panel review-tab-panel--hidden">
+  {% block decided_content %}{% endblock %}
+</div>
+
+<script>
+ReviewTabs.init({
+  pendingPanelId: 'review-pending',
+  decidedPanelId: 'review-decided',
+  pendingBadgeId: 'tab-badge-pending',
+  storageKey: 'review-tab-{{ kb }}'
+});
+</script>
+{% endblock %}

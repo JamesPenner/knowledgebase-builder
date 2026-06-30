@@ -1,0 +1,38 @@
+<span id="wb-sets-chip" class="wb-sources-chips" hx-swap-oob="true">
+  {% if sets %}
+    <span class="wb-sources-chip">{{ sets | length }} set{{ '' if sets | length == 1 else 's' }}</span>
+  {% else %}
+    <span class="wb-sources-chip">No sets</span>
+  {% endif %}
+</span>
+<div id="sets-panel" class="wb-sets-panel">
+  {% if not sets %}
+    <p class="sources-onboarding">No saved sets yet. Use the scope bar below and click Save to create a set.</p>
+  {% else %}
+    <table class="sources-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Criteria</th>
+          <th>Files</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sets %}
+          <tr>
+            <td><strong>{{ s.name }}</strong></td>
+            <td class="wb-sets-criteria">{{ s.criteria_summary or '—' }}</td>
+            <td>{{ s.file_count }}</td>
+            <td class="sources-date">{{ s.created_at[:10] if s.created_at else '' }}</td>
+            <td class="wb-sets-actions">
+              <button class="btn btn--sm btn--danger-outline"
+                onclick="WB.deleteSet({{ s.id }}, '{{ kb }}')">Delete</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>

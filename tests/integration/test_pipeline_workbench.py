@@ -199,13 +199,18 @@ def test_pipeline_page_context_has_groups(tmp_path):
         assert gid in resp.text
 
 
-def test_pipeline_page_stage_ready_when_no_deps(tmp_path):
-    """Ingest has no deps — should appear as ready on a fresh corpus."""
+def test_pipeline_page_sources_sync_button_present(tmp_path):
+    """Sources header shows Sync button when sources are configured."""
+    from src.db.corpus import add_source, open_corpus
     corpus_path, kb_path = _open_dbs(tmp_path)
+    conn = open_corpus(corpus_path)
+    add_source(conn, str(tmp_path / "photos"), "images", True)
+    conn.commit()
+    conn.close()
     client = _make_client(corpus_path, kb_path)
     resp = client.get("/pipeline?kb=test")
-    # ingest badge should be 'ready' not 'blocked'
-    assert "badge-ready" in resp.text or "ready" in resp.text
+    assert "btn-sync-sources" in resp.text
+    assert "Needs sync" in resp.text
 
 
 def test_pipeline_page_touchpoints_keys_present(tmp_path):

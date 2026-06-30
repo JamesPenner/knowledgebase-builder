@@ -225,7 +225,9 @@ def test_reject_adds_to_reject_tokens(tmp_path):
     assert resp.status_code == 200
 
     kb_conn = open_kb(kb_path)
-    row = kb_conn.execute("SELECT * FROM reject_tokens WHERE pattern='xyzzy'").fetchone()
+    row = kb_conn.execute(
+        "SELECT * FROM pattern_rules WHERE pattern='xyzzy' AND action='reject'"
+    ).fetchone()
     kb_conn.close()
     assert row is not None
 
@@ -249,10 +251,12 @@ def test_correct_adds_correction(tmp_path):
     assert resp.status_code == 200
 
     kb_conn = open_kb(kb_path)
-    row = kb_conn.execute("SELECT * FROM corrections WHERE raw_term='brige'").fetchone()
+    row = kb_conn.execute(
+        "SELECT * FROM pattern_rules WHERE pattern='brige' AND action='replace'"
+    ).fetchone()
     kb_conn.close()
     assert row is not None
-    assert row["canonical_term"] == "bridge"
+    assert row["replace_with"] == "bridge"
 
 
 def test_unknown_action_returns_400(tmp_path):

@@ -161,7 +161,7 @@ def test_reset_file_hashes_clears_table_and_sha256(tmp_path):
     fid = _seed_file(conn)
     conn.execute("UPDATE files SET sha256 = 'abc123' WHERE id = ?", (fid,))
     conn.execute(
-        "INSERT INTO file_hashes (file_id, sha256_content, phash, dhash, area_hash, hashed_at) VALUES (?, 'abc123', 'ph', 'dh', '[]', datetime('now'))",
+        "INSERT INTO file_hashes (file_id, sha256_content, phash, dhash, hashed_at) VALUES (?, 'abc123', 'ph', 'dh', datetime('now'))",
         (fid,),
     )
     conn.commit()

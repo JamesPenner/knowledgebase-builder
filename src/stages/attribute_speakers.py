@@ -37,11 +37,13 @@ def _best_overlap(ts_start, ts_end, voice_segments) -> object | None:
 
 def run_attribute_speakers(corpus_path, kb_path, config, progress, cancel) -> dict:
     """Attribute speaker labels to transcript segments via time-overlap matching."""
+    import time as _time
     from src.db.corpus import (
         get_files_pending_speaker_attribution,
         get_voice_segments_for_file,
         get_voice_speaker_clusters,
         open_corpus,
+        update_pipeline_checkpoint,
         set_transcript_segment_speaker,
     )
     from src.db.kb import get_all_people, open_kb
@@ -53,6 +55,7 @@ def run_attribute_speakers(corpus_path, kb_path, config, progress, cancel) -> di
     segments_attributed = 0
     segments_skipped = 0
     error_count = 0
+    _start = _time.monotonic()
 
     try:
         people_map: dict[int, str] = {
@@ -96,6 +99,12 @@ def run_attribute_speakers(corpus_path, kb_path, config, progress, cancel) -> di
 
             progress.update(i + 1, total, "Attributing speakers…")
 
+        update_pipeline_checkpoint(
+            corpus_conn, "attribute_speakers", files_processed, segments_skipped,
+            error_count, _time.monotonic() - _start,
+        )
+        corpus_conn.commit()
+        progress.done()
     finally:
         corpus_conn.close()
         kb_conn.close()

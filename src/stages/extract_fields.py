@@ -24,6 +24,8 @@ def run_extract_fields(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     kb_folder = kb_path.parent
     csv_path = kb_folder / "reference" / "field_map.csv"
@@ -46,7 +48,7 @@ def run_extract_fields(
         group.sort(key=lambda r: r["Priority"])
 
     conn = open_corpus(corpus_path)
-    files = get_files_with_exif(conn)
+    files = get_files_with_exif(conn, scope=scope)
     total = len(files)
     start = time.monotonic()
 

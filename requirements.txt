@@ -31,6 +31,7 @@ scikit-learn>=1.5.0
 # --- Geospatial enrichment (KB.P21) ---
 geopandas>=1.0.0
 shapely>=2.0.0
+pyshp>=2.3.0
 
 # --- Aesthetic scoring (KB.9) ---
 # onnxruntime>=1.19.0       # CPU (uncomment instead of directml for non-Windows)
@@ -41,10 +42,10 @@ onnxruntime-directml>=1.19.0  # shared with aesthetic scoring above
 # opencv-python>=4.10.0
 
 # --- Voice fingerprinting (KB.P16) ---
-# resemblyzer>=0.1.1.post1
+resemblyzer>=0.1.1.post1
 
 # --- Voice diarization (KB.P17) ---
-# pyannote.audio>=3.3.0
+pyannote.audio>=3.3.0
 
 # --- Vision describe / retag / summarize (Stage 3a, 3c, 5) ---
 # Vulkan build: GPU acceleration on AMD/Intel/NVIDIA via Vulkan (Windows).

@@ -2,21 +2,15 @@ const _sources = {};
 
 function _getStageModeFromDom(stage) {
   const btn = document.querySelector('[data-stage-mode-btn="' + stage + '"]');
-  if (!btn) return stage === 'ingest' ? 'full' : 'resume';
-  const text = btn.textContent.trim();
-  if (stage === 'ingest') return text === 'Incremental' ? 'incremental' : 'full';
-  return text === 'Re-run' ? 'rerun' : 'resume';
+  if (!btn) return 'resume';
+  return btn.textContent.trim() === 'Re-run' ? 'rerun' : 'resume';
 }
 
 function _buildBody(stage, kb) {
   const scope = window.KB_SCOPE || {};
-  if (stage === 'ingest') {
-    const incremental = _getStageModeFromDom('ingest') === 'incremental';
-    return JSON.stringify({kb, incremental});
-  }
-  const {source_id, file_type, set_id} = scope;
+  const {source_id, folder_prefix, file_type, date_from, date_to, name_pattern} = scope;
   const run_mode = _getStageModeFromDom(stage);
-  const body = {kb, run_mode, source_id, file_type, set_id};
+  const body = {kb, run_mode, source_id, folder_prefix, file_type, date_from, date_to, name_pattern};
   if (stage === 'suggest') {
     body.levels = ['a', 'b'];
   }
@@ -61,20 +55,18 @@ async function runStage(stage, kb) {
   const cancelBtn = document.getElementById('btn-cancel-' + stage);
   const badge = document.getElementById('badge-' + stage);
 
-  runBtn.disabled = true;
-  cancelBtn.style.display = '';
-  badge.className = 'badge badge-running';
-  badge.textContent = 'running';
+  if (runBtn) runBtn.disabled = true;
+  if (cancelBtn) cancelBtn.style.display = '';
+  if (badge) { badge.className = 'badge badge-running'; badge.textContent = 'running'; }
 
   let body;
   try {
     body = _buildBody(stage, kb);
   } catch (err) {
     console.error('runStage: body build failed for', stage, err);
-    runBtn.disabled = false;
-    cancelBtn.style.display = 'none';
-    badge.className = 'badge badge-pending';
-    badge.textContent = 'pending';
+    if (runBtn) runBtn.disabled = false;
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (badge) { badge.className = 'badge badge-pending'; badge.textContent = 'pending'; }
     return;
   }
 
@@ -91,20 +83,22 @@ async function runStage(stage, kb) {
     const d = JSON.parse(e.data);
     _renderProgress(stage, d);
     if (d.status === 'done') {
-      badge.className = 'badge badge-done';
-      badge.textContent = 'done';
-      document.getElementById('btn-run-' + stage).disabled = false;
-      document.getElementById('btn-cancel-' + stage).style.display = 'none';
+      if (badge) { badge.className = 'badge badge-done'; badge.textContent = 'done'; }
+      const rb = document.getElementById('btn-run-' + stage);
+      const cb = document.getElementById('btn-cancel-' + stage);
+      if (rb) rb.disabled = false;
+      if (cb) cb.style.display = 'none';
       es.close();
       delete _sources[stage];
       // Reload so gate banners reflect updated touchpoint state.
       // Suppressed during multi-stage runs (workbench.js sets this flag and reloads at plan end).
       if (!window.WB_RUNNING_PLAN) location.reload();
     } else if (d.status === 'failed') {
-      badge.className = 'badge badge-failed';
-      badge.textContent = 'failed';
-      document.getElementById('btn-run-' + stage).disabled = false;
-      document.getElementById('btn-cancel-' + stage).style.display = 'none';
+      if (badge) { badge.className = 'badge badge-failed'; badge.textContent = 'failed'; }
+      const rb = document.getElementById('btn-run-' + stage);
+      const cb = document.getElementById('btn-cancel-' + stage);
+      if (rb) rb.disabled = false;
+      if (cb) cb.style.display = 'none';
       const progEl = document.getElementById('progress-' + stage);
       if (progEl) progEl.innerHTML =
         '<span class="progress-detail" style="color:#991b1b">' +

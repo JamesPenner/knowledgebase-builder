@@ -84,7 +84,7 @@ def test_decide_capture_writes_capture_rule(tmp_path):
     assert resp.status_code == 200
 
     kb_conn = open_kb(kb_path)
-    row = kb_conn.execute("SELECT * FROM capture_rules").fetchone()
+    row = kb_conn.execute("SELECT * FROM pattern_rules WHERE action='capture'").fetchone()
     kb_conn.close()
     assert row is not None
     assert row["extract_as"] == "file_date"
@@ -133,11 +133,11 @@ def test_decide_correct_writes_corrections(tmp_path):
 
     kb_conn = open_kb(kb_path)
     row = kb_conn.execute(
-        "SELECT * FROM corrections WHERE raw_term='tuckinleted'"
+        "SELECT * FROM pattern_rules WHERE pattern='tuckinleted' AND action='replace'"
     ).fetchone()
     kb_conn.close()
     assert row is not None
-    assert row["canonical_term"] == "Tuck Inlet"
+    assert row["replace_with"] == "Tuck Inlet"
 
 
 def test_decide_reject_writes_reject_token(tmp_path):
@@ -157,9 +157,16 @@ def test_decide_reject_writes_reject_token(tmp_path):
     assert resp.status_code == 200
 
     kb_conn = open_kb(kb_path)
-    row = kb_conn.execute("SELECT * FROM reject_tokens WHERE pattern='2019govbc'").fetchone()
+    row = kb_conn.execute(
+        "SELECT * FROM token_rejections WHERE token='2019govbc'"
+    ).fetchone()
+    # must NOT appear in pattern_rules
+    pr_row = kb_conn.execute(
+        "SELECT * FROM pattern_rules WHERE pattern='2019govbc'"
+    ).fetchone()
     kb_conn.close()
     assert row is not None
+    assert pr_row is None
 
 
 def test_decide_accept_marks_decided_with_no_kb_rule(tmp_path):
@@ -183,11 +190,9 @@ def test_decide_accept_marks_decided_with_no_kb_rule(tmp_path):
     conn.close()
     assert row["status"] == "decided"
 
-    # Accept adds no KB rules (reject_tokens, corrections, capture_rules are always empty on a fresh KB)
+    # Accept adds no KB rules (pattern_rules is always empty on a fresh KB)
     kb_conn = open_kb(kb_path)
-    assert kb_conn.execute("SELECT COUNT(*) FROM reject_tokens").fetchone()[0] == 0
-    assert kb_conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
-    assert kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM pattern_rules").fetchone()[0] == 0
     kb_conn.close()
 
 
@@ -235,8 +240,8 @@ def test_decisions_list_reflects_all_kinds(tmp_path):
     assert resp.status_code == 200
     actions = {d["action"] for d in resp.json()["decisions"]}
     assert "ignore" in actions
-    assert "correct" in actions
-    assert "reject" in actions
+    assert "replace" in actions   # correct → stored as replace in pattern_rules
+    assert "reject" in actions    # stored in token_rejections
 
 
 def test_delete_decision_reverts_token_to_pending(tmp_path):
@@ -263,7 +268,7 @@ def test_delete_decision_reverts_token_to_pending(tmp_path):
     resp = client.get("/api/review/normalise/decisions", params={"kb": "test"})
     decisions = resp.json()["decisions"]
     capture_decision = next(d for d in decisions if d["action"] == "capture")
-    decision_id = capture_decision["id"]  # e.g. "capture_rules:1"
+    decision_id = capture_decision["id"]  # e.g. "pattern_rules:1"
 
     del_resp = client.delete(
         f"/api/review/normalise/decisions/{decision_id}",
@@ -279,7 +284,7 @@ def test_delete_decision_reverts_token_to_pending(tmp_path):
 
     # Capture rule should be gone
     kb_conn = open_kb(kb_path)
-    count = kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0]
+    count = kb_conn.execute("SELECT COUNT(*) FROM pattern_rules WHERE action='capture'").fetchone()[0]
     kb_conn.close()
     assert count == 0
 
@@ -309,9 +314,7 @@ def test_bulk_accept_all_marks_all_decided_no_kb_rules(tmp_path):
     assert pending == 0
 
     kb_conn = open_kb(kb_path)
-    assert kb_conn.execute("SELECT COUNT(*) FROM reject_tokens").fetchone()[0] == 0
-    assert kb_conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
-    assert kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM pattern_rules").fetchone()[0] == 0
     kb_conn.close()
 
 
@@ -360,9 +363,11 @@ def test_bulk_reject_all_adds_all_to_reject_tokens(tmp_path):
     assert pending == 0
 
     kb_conn = open_kb(kb_path)
-    rows = kb_conn.execute("SELECT pattern FROM reject_tokens WHERE pattern IN ('img0042','dsc9999')").fetchall()
+    rows = kb_conn.execute(
+        "SELECT token FROM token_rejections WHERE token IN ('img0042','dsc9999')"
+    ).fetchall()
     kb_conn.close()
-    assert {r["pattern"] for r in rows} == {"img0042", "dsc9999"}
+    assert {r["token"] for r in rows} == {"img0042", "dsc9999"}
 
 
 def test_bulk_invalid_action_returns_400(tmp_path):
@@ -404,26 +409,27 @@ def test_get_decision_token_stoplist(tmp_path):
     assert result == "construction"
 
 
-def test_get_decision_token_corrections(tmp_path):
-    from src.db.kb import add_correction, get_decision_token
+def test_get_decision_token_pattern_rules_replace(tmp_path):
+    from src.db.kb import add_pattern_rule, get_decision_token
 
     kb_path = tmp_path / "knowledge.db"
     kb_conn = open_kb(kb_path)
-    add_correction(kb_conn, raw_term="tuckinleted", canonical_term="Tuck Inlet", correction_kind="typo")
-    row = kb_conn.execute("SELECT id FROM corrections WHERE raw_term='tuckinleted'").fetchone()
-    result = get_decision_token(kb_conn, "corrections", row["id"])
+    add_pattern_rule(kb_conn, pattern="tuckinleted", action="replace", is_regex=False,
+                     replace_with="Tuck Inlet", replace_type="correction")
+    row = kb_conn.execute("SELECT id FROM pattern_rules WHERE pattern='tuckinleted'").fetchone()
+    result = get_decision_token(kb_conn, "pattern_rules", row["id"])
     kb_conn.close()
     assert result == "tuckinleted"
 
 
-def test_get_decision_token_reject_tokens(tmp_path):
-    from src.db.kb import add_reject_token, get_decision_token
+def test_get_decision_token_token_rejections(tmp_path):
+    from src.db.kb import add_token_rejection, get_decision_token
 
     kb_path = tmp_path / "knowledge.db"
     kb_conn = open_kb(kb_path)
-    add_reject_token(kb_conn, pattern="img0042", is_regex=False, label="img0042")
-    row = kb_conn.execute("SELECT id FROM reject_tokens WHERE pattern='img0042'").fetchone()
-    result = get_decision_token(kb_conn, "reject_tokens", row["id"])
+    add_token_rejection(kb_conn, "img0042")
+    row = kb_conn.execute("SELECT id FROM token_rejections WHERE token='img0042'").fetchone()
+    result = get_decision_token(kb_conn, "token_rejections", row["id"])
     kb_conn.close()
     assert result == "img0042"
 

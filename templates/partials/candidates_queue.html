@@ -1,4 +1,20 @@
 {% if candidates %}
+<span hidden data-pending-count="{{ counts.pending }}"></span>
+<div class="queue-controls">
+  <div class="queue-controls-left">
+    <label class="page-size-label">Show
+      <select data-page-size>
+        {% for n in [50, 100, 250] %}
+        <option value="{{ n }}"{% if limit == n %} selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        <option value="9999"{% if limit >= 9999 %} selected{% endif %}>All</option>
+      </select>
+    </label>
+  </div>
+  <div class="queue-controls-right">
+    Showing {{ candidates|length }} of {{ counts.pending }} pending
+  </div>
+</div>
 <div class="bulk-actions">
   <span class="bulk-label">All pending:</span>
   <form class="action-form"
@@ -15,43 +31,51 @@
     <button type="submit" class="btn btn--ignore"
             title="Add all pending terms to stoplist — permanently excluded from future suggestions">Ignore All</button>
   </form>
-  <form class="action-form"
-        hx-post="/review/suggest/decide-all?kb={{ kb }}"
-        hx-swap="none">
-    <input type="hidden" name="action" value="reject">
-    <button type="submit" class="btn btn--reject"
-            title="Dismiss all pending terms — won't resurface next run, stoplist unchanged">Reject All</button>
-  </form>
+  <details class="bulk-reject-details">
+    <summary class="btn btn--reject">Reject All</summary>
+    <div class="bulk-reject-confirm">
+      <p class="bulk-reject-warning">
+        This will dismiss all <strong>{{ counts.pending }}</strong> pending term{{ '' if counts.pending == 1 else 's' }} without adding them to the stoplist.
+        Rejected terms won't resurface in the next suggestion run but remain eligible if candidates are reset.
+      </p>
+      <form class="action-form"
+            hx-post="/review/suggest/decide-all?kb={{ kb }}"
+            hx-swap="none">
+        <input type="hidden" name="action" value="reject">
+        <button type="submit" class="btn btn--reject">Confirm: reject {{ counts.pending }} term{{ '' if counts.pending == 1 else 's' }}</button>
+      </form>
+    </div>
+  </details>
 </div>
 <table class="token-table">
+  <thead>
+    <tr>
+      <th data-sort-by="term" class="col-term{% if sort_by == 'term' %} sort-{{ sort_order }}{% endif %}">Term</th>
+      <th data-sort-by="file_count" class="col-files{% if sort_by == 'file_count' %} sort-{{ sort_order }}{% endif %}">Files</th>
+      <th class="col-actions">Actions</th>
+    </tr>
+  </thead>
   <tbody>
   {% for c in candidates %}
   <tr class="token-row" id="candidate-row-{{ c.id }}">
-    <td class="token-name">
-      {{ c.term }}
-    </td>
+    <td class="token-name">{{ c.term }}</td>
+    <td class="token-freq">{{ c.file_count }}</td>
     <td class="token-actions">
-      <form class="action-form"
-            hx-post="/review/suggest/decide?kb={{ kb }}"
-            hx-swap="none">
+      <form class="candidate-action-form" data-kb="{{ kb }}">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="accept">
         <button type="submit" class="btn btn--capture"
                 title="Add to vocabulary — term will be included in LLM prompts">Accept</button>
       </form>
 
-      <form class="action-form"
-            hx-post="/review/suggest/decide?kb={{ kb }}"
-            hx-swap="none">
+      <form class="candidate-action-form" data-kb="{{ kb }}">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="ignore">
         <button type="submit" class="btn btn--ignore"
                 title="Add to stoplist — permanently excluded from future suggestions">Ignore</button>
       </form>
 
-      <form class="action-form"
-            hx-post="/review/suggest/decide?kb={{ kb }}"
-            hx-swap="none">
+      <form class="candidate-action-form" data-kb="{{ kb }}">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="correct">
         <input type="text" name="corrected_to" placeholder="Correct to…" class="input-text" required>
@@ -59,9 +83,7 @@
                 title="Accept a corrected form — adds the corrected term to vocabulary">Correct</button>
       </form>
 
-      <form class="action-form"
-            hx-post="/review/suggest/decide?kb={{ kb }}"
-            hx-swap="none">
+      <form class="candidate-action-form" data-kb="{{ kb }}">
         <input type="hidden" name="candidate_id" value="{{ c.id }}">
         <input type="hidden" name="action" value="reject">
         <button type="submit" class="btn btn--reject"
@@ -71,7 +93,7 @@
   </tr>
   {% if c.notes %}
   <tr class="notes-row">
-    <td colspan="2">
+    <td colspan="3">
       <details class="level-c-notes">
         <summary>Reasoning</summary>
         <p class="notes-text">{{ c.notes }}</p>
@@ -82,6 +104,11 @@
   {% endfor %}
   </tbody>
 </table>
+{% if has_more %}
+<div class="load-more-bar">
+  <button class="btn" data-load-more>Load more — {{ counts.pending - candidates|length }} remaining</button>
+</div>
+{% endif %}
 {% else %}
 <p class="empty-state">No pending candidates. Run <code>enrich pipeline suggest</code> to generate suggestions.</p>
 {% endif %}

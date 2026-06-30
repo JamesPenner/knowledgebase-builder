@@ -3,7 +3,6 @@ from src.pipeline.filter_spec import FilterSpec
 
 def test_filter_spec_defaults():
     spec = FilterSpec()
-    assert spec.file_type == "all"
     assert spec.glob is None
     assert spec.count_limit is None
     assert spec.modified_after is None

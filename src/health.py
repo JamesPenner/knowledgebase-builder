@@ -32,6 +32,8 @@ def run_checks(
         _check_text_model(config),
         _check_audio_model(config),
         _check_spacy_model(),
+        _check_aesthetic_nima(config),
+        _check_aesthetic_clip(config),
         _check_face_detection_model(config),
         _check_face_embedding_model(config),
         _check_voice_model(),
@@ -50,6 +52,7 @@ def run_checks(
         _check_geolocate_data(kb_folder),
         _check_privacy_zones(kb_folder),
         _check_validation_freshness(corpus_conn),
+        _check_location_register(kb_folder, kb_conn),
     ]
 
 
@@ -241,6 +244,78 @@ def _check_field_map(kb_folder: Path) -> HealthCheck:
         ok=exists,
         detail="present" if exists else "missing — extract_fields stage will skip",
         fix="" if exists else "Run the Extract Fields stage to generate it",
+    )
+
+
+def _check_aesthetic_nima(config) -> HealthCheck:
+    configured = config.aesthetic_nima
+    if configured:
+        found = Path(configured).is_file()
+        return HealthCheck(
+            id="aesthetic_nima",
+            label="NIMA aesthetic model present",
+            severity="warning",
+            ok=found,
+            detail=configured if found else f"file not found: '{configured}'",
+            fix="" if found else "Update models.aesthetic_nima in config.yaml",
+        )
+    return HealthCheck(
+        id="aesthetic_nima",
+        label="NIMA aesthetic model present",
+        severity="warning",
+        ok=False,
+        detail="not configured — aesthetic scoring will be skipped",
+        fix="Run 'enrich aesthetic download --nima-model' or set models.aesthetic_nima in config.yaml",
+    )
+
+
+def _check_aesthetic_clip(config) -> HealthCheck:
+    configured = config.aesthetic_clip
+    if configured:
+        dir_path = Path(configured)
+        visual = dir_path / "visual.onnx"
+        linear = dir_path / "linear.npz"
+        if not dir_path.is_dir():
+            return HealthCheck(
+                id="aesthetic_clip",
+                label="CLIP aesthetic model present",
+                severity="warning",
+                ok=False,
+                detail=f"directory not found: '{configured}'",
+                fix="Update models.aesthetic_clip in config.yaml",
+            )
+        if not visual.exists():
+            return HealthCheck(
+                id="aesthetic_clip",
+                label="CLIP aesthetic model present",
+                severity="warning",
+                ok=False,
+                detail=f"visual.onnx not found in '{configured}'",
+                fix="Re-run 'enrich aesthetic download --clip-model'",
+            )
+        if not linear.exists():
+            return HealthCheck(
+                id="aesthetic_clip",
+                label="CLIP aesthetic model present",
+                severity="warning",
+                ok=False,
+                detail=f"linear.npz not found in '{configured}'",
+                fix="Re-run 'enrich aesthetic download --clip-model'",
+            )
+        return HealthCheck(
+            id="aesthetic_clip",
+            label="CLIP aesthetic model present",
+            severity="warning",
+            ok=True,
+            detail=configured,
+        )
+    return HealthCheck(
+        id="aesthetic_clip",
+        label="CLIP aesthetic model present",
+        severity="warning",
+        ok=False,
+        detail="not configured — aesthetic scoring will be skipped",
+        fix="Run 'enrich aesthetic download --clip-model' or set models.aesthetic_clip in config.yaml",
     )
 
 
@@ -575,4 +650,48 @@ def _check_validation_freshness(corpus_conn: sqlite3.Connection | None) -> Healt
         severity="info",
         ok=True,
         detail=f"Last run: {row['run_at']} — {row['files_checked']} files checked, all ok",
+    )
+
+
+def _check_location_register(kb_folder: Path, kb_conn: sqlite3.Connection | None) -> HealthCheck:
+    csv_path = kb_folder / "reference" / "registers" / "Index_of_Locations.csv"
+    if not csv_path.exists():
+        return HealthCheck(
+            id="location_register",
+            label="Location register",
+            severity="info",
+            ok=True,
+            detail="No location register found at reference/registers/Index_of_Locations.csv",
+        )
+
+    if kb_conn is None:
+        return HealthCheck(
+            id="location_register",
+            label="Location register",
+            severity="info",
+            ok=True,
+            detail="database unavailable",
+        )
+
+    try:
+        count = kb_conn.execute("SELECT COUNT(*) FROM entity_locations").fetchone()[0]
+    except Exception:
+        count = 0
+
+    if count == 0:
+        return HealthCheck(
+            id="location_register",
+            label="Location register",
+            severity="warning",
+            ok=False,
+            detail="Index_of_Locations.csv found but entity_locations is empty",
+            fix="Run: enrich kb seed-registers --kb <name>",
+        )
+
+    return HealthCheck(
+        id="location_register",
+        label="Location register",
+        severity="info",
+        ok=True,
+        detail=f"{count} locations loaded",
     )

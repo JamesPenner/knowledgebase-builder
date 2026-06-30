@@ -58,6 +58,7 @@ class Config:
     face_meta_quality_threshold: float = 0.3
     face_meta_min_centroid_similarity: float = 0.25
     face_meta_recalibrate_min_samples: int = 5
+    geo_meta_default_threshold_m: float = 500.0
     voice_similarity_threshold: float = 0.75
     voice_diarization_min_segment_ms: int = 500
     near_duplicate_hamming_threshold: int = 10
@@ -156,6 +157,7 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
     fields["face_meta_quality_threshold"] = _typed(thresholds.get("face_meta_quality_threshold", defaults.face_meta_quality_threshold), float, defaults.face_meta_quality_threshold, "thresholds.face_meta_quality_threshold")
     fields["face_meta_min_centroid_similarity"] = _typed(thresholds.get("face_meta_min_centroid_similarity", defaults.face_meta_min_centroid_similarity), float, defaults.face_meta_min_centroid_similarity, "thresholds.face_meta_min_centroid_similarity")
     fields["face_meta_recalibrate_min_samples"] = _typed(thresholds.get("face_meta_recalibrate_min_samples", defaults.face_meta_recalibrate_min_samples), int, defaults.face_meta_recalibrate_min_samples, "thresholds.face_meta_recalibrate_min_samples")
+    fields["geo_meta_default_threshold_m"] = _typed(thresholds.get("geo_meta_default_threshold_m", defaults.geo_meta_default_threshold_m), float, defaults.geo_meta_default_threshold_m, "thresholds.geo_meta_default_threshold_m")
     fields["voice_similarity_threshold"] = _typed(thresholds.get("voice_similarity_threshold", defaults.voice_similarity_threshold), float, defaults.voice_similarity_threshold, "thresholds.voice_similarity_threshold")
     fields["voice_diarization_min_segment_ms"] = _typed(thresholds.get("voice_diarization_min_segment_ms", defaults.voice_diarization_min_segment_ms), int, defaults.voice_diarization_min_segment_ms, "thresholds.voice_diarization_min_segment_ms")
     fields["near_duplicate_hamming_threshold"] = _typed(thresholds.get("near_duplicate_hamming_threshold", defaults.near_duplicate_hamming_threshold), int, defaults.near_duplicate_hamming_threshold, "thresholds.near_duplicate_hamming_threshold")
@@ -244,6 +246,7 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
         "face_meta_quality_threshold": ("face_meta_quality_threshold", float),
         "face_meta_min_centroid_similarity": ("face_meta_min_centroid_similarity", float),
         "face_meta_recalibrate_min_samples": ("face_meta_recalibrate_min_samples", int),
+        "geo_meta_default_threshold_m": ("geo_meta_default_threshold_m", float),
         "voice_similarity_threshold": ("voice_similarity_threshold", float),
         "voice_diarization_min_segment_ms": ("voice_diarization_min_segment_ms", int),
         "gps_cluster_eps_km": ("gps_cluster_eps_km", float),

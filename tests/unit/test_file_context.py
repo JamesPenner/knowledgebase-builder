@@ -289,20 +289,35 @@ class TestSummarizePromptConstruction:
 
 
 class TestSuggestTextPool:
-    def test_text_pool_includes_description_enrichment_and_summary(self):
-        from src.stages.suggest import _build_file_text
+    def test_metadata_text_includes_enrichment_and_tags(self):
+        from src.stages.suggest import _build_metadata_text
+        ctx = _make_ctx(
+            enrichment_text="Vancouver BC 2023",
+            derived_tags=["outdoor", "sunny"],
+        )
+        text = _build_metadata_text(ctx)
+        assert "Vancouver BC 2023" in text
+        assert "outdoor" in text
+
+    def test_prose_text_includes_description_summary_transcript(self):
+        from src.stages.suggest import _build_prose_text
         ctx = _make_ctx(
             description="A mountain landscape.",
-            enrichment_text="Vancouver BC 2023",
             summary_text="A sweeping view of mountains near Vancouver.",
+            transcript="The guide points to the peak.",
         )
-        text = _build_file_text(ctx)
+        text = _build_prose_text(ctx)
         assert "mountain landscape" in text
-        assert "Vancouver BC 2023" in text
         assert "sweeping view" in text
+        assert "guide points" in text
 
-    def test_text_pool_handles_missing_optional_fields(self):
-        from src.stages.suggest import _build_file_text
+    def test_metadata_text_handles_missing_optional_fields(self):
+        from src.stages.suggest import _build_metadata_text
         ctx = _make_ctx(enrichment_text="only enrichment")
-        text = _build_file_text(ctx)
+        text = _build_metadata_text(ctx)
         assert "only enrichment" in text
+
+    def test_prose_text_empty_when_no_prose_sources(self):
+        from src.stages.suggest import _build_prose_text
+        ctx = _make_ctx(enrichment_text="canyon river", derived_tags=["sunny"])
+        assert _build_prose_text(ctx).strip() == ""

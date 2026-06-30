@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Pattern Rules — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Pattern Rules</h1>
+<p style="color:#64748b;margin-bottom:1.25rem;font-size:.9rem">
+  Ordered rules applied to filename tokens during Normalize. Actions: Reject (drop from everything), Ignore (drop from name), Replace (substitute value), Capture (extract field).
+</p>
+
+<div style="display:flex;gap:1.5rem;align-items:flex-start">
+  <div id="pattern-rule-list"
+       style="flex:1;min-width:0"
+       hx-get="/knowledge/pattern-rules/partials/list?kb={{ kb }}"
+       hx-trigger="load, rulesChanged from:body"
+       hx-swap="innerHTML">
+    <p class="empty-state">Loading…</p>
+  </div>
+  <div id="pattern-rule-form" style="width:440px;flex-shrink:0"
+       hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+  </div>
+</div>
+{% endblock %}

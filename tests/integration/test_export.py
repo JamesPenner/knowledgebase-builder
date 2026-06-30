@@ -9,10 +9,9 @@ import yaml
 from src.config import Config
 from src.db.corpus import open_corpus
 from src.db.kb import (
-    add_capture_rule,
-    add_correction,
-    add_reject_token,
+    add_pattern_rule,
     add_to_stoplist,
+    add_token_rejection,
     add_vocabulary_term,
     bump_kb_version,
     create_entity_table,
@@ -45,14 +44,16 @@ def _seed_kb(kb_conn, corpus_conn):
     add_to_stoplist(kb_conn, "temp_noise", source="domain")
     # builtin stopwords like "the" already seeded by open_kb
 
-    # Corrections
-    add_correction(kb_conn, "Brdg", "Bridge")
+    # Replace rule (correction)
+    add_pattern_rule(kb_conn, pattern="Brdg", action="replace", is_regex=False,
+                     replace_with="Bridge", replace_type="correction")
 
     # Capture rule
-    add_capture_rule(kb_conn, r"^(\d{8})$", "date_8", "file_date", "20{1}", "date")
+    add_pattern_rule(kb_conn, pattern=r"^(\d{8})$", action="capture", is_regex=True,
+                     label="date_8", extract_as="file_date", format_str="20{1}", value_type="date")
 
     # Reject token
-    add_reject_token(kb_conn, "untitled", is_regex=False, label="noise")
+    add_token_rejection(kb_conn, "untitled")
 
     # Entity table
     register_entity_table(kb_conn, "bridge", "Bridges", "bridge", "[]", "name", "text")
@@ -139,31 +140,30 @@ def test_export_stopwords_excludes_builtin(tmp_path):
     assert "a" not in terms     # builtin
 
 
-def test_export_corrections_yaml_exact_only(tmp_path):
+def test_export_corrections_csv_exact_only(tmp_path):
     corpus_path = tmp_path / "corpus.db"
     kb_path = tmp_path / "knowledge.db"
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
     _seed_kb(kb_conn, corpus_conn)
-    # Add a pattern-type correction — must NOT appear in corrections.yaml
-    kb_conn.execute(
-        "INSERT INTO corrections (raw_term, canonical_term, type) VALUES ('Hwy', 'Highway', 'pattern')"
-    )
-    kb_conn.commit()
+    # Add a regex replace rule — must NOT appear in corrections.csv (only exact rules do)
+    add_pattern_rule(kb_conn, pattern=r"^hwy\d+$", action="replace", is_regex=True,
+                     replace_with="Highway", replace_type="correction")
     corpus_conn.close()
     kb_conn.close()
 
     _run(corpus_path, kb_path)
 
-    corr_file = tmp_path / "export" / "corrections.yaml"
+    corr_file = tmp_path / "export" / "corrections.csv"
     assert corr_file.exists()
-    data = yaml.safe_load(corr_file.read_text(encoding="utf-8")) or {}
-    assert "Brdg" in data
-    assert data["Brdg"] == "Bridge"
-    assert "Hwy" not in data   # pattern corrections must not appear here
+    with open(corr_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    raws = {r["raw"] for r in rows}
+    assert "Brdg" in raws
+    assert not any(r["raw"] == r"^hwy\d+$" for r in rows)  # regex rules excluded
 
 
-def test_export_patterns_yaml_three_sections(tmp_path):
+def test_export_patterns_yaml_flat_list(tmp_path):
     corpus_path = tmp_path / "corpus.db"
     kb_path = tmp_path / "knowledge.db"
     corpus_conn = open_corpus(corpus_path)
@@ -177,10 +177,12 @@ def test_export_patterns_yaml_three_sections(tmp_path):
     patterns_file = tmp_path / "export" / "patterns.yaml"
     assert patterns_file.exists()
     data = yaml.safe_load(patterns_file.read_text(encoding="utf-8"))
-    assert "capture_rules" in data
+    assert "rules" in data
     assert "substitute_rules" in data
-    assert "pattern_corrections" in data
-    assert len(data["capture_rules"]) >= 1
+    assert isinstance(data["rules"], list)
+    # The regex capture rule seeded in _seed_kb should appear
+    actions = {r["action"] for r in data["rules"]}
+    assert "capture" in actions
 
 
 def test_export_reject_tokens_csv(tmp_path):
@@ -198,8 +200,8 @@ def test_export_reject_tokens_csv(tmp_path):
     assert rt_file.exists()
     with open(rt_file, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
-    patterns = {r["pattern"] for r in rows}
-    assert "untitled" in patterns
+    tokens = {r["token"] for r in rows}
+    assert "untitled" in tokens
 
 
 def test_export_field_map_csv_copied(tmp_path):
@@ -343,7 +345,7 @@ def test_export_section_vocabulary_only(tmp_path):
 
     assert (tmp_path / "export" / "vocabulary.csv").exists()
     assert (tmp_path / "export" / "stopwords.txt").exists()
-    assert not (tmp_path / "export" / "corrections.yaml").exists()
+    assert not (tmp_path / "export" / "corrections.csv").exists()
     assert not (tmp_path / "export" / "patterns.yaml").exists()
     assert not (tmp_path / "export" / "descriptions.csv").exists()
     assert not (tmp_path / "export" / "tags.csv").exists()
@@ -375,8 +377,8 @@ def _seed_with_hashes(corpus_conn, kb_conn):
     corpus_conn.execute(
         """
         INSERT INTO file_hashes
-            (file_id, sha256_content, phash, dhash, area_hash, hashed_at)
-        VALUES (1, 'sha_content_hex', 'phash_hex', 'dhash_hex', '["cell0"]', datetime('now'))
+            (file_id, sha256_content, phash, dhash, hashed_at)
+        VALUES (1, 'sha_content_hex', 'phash_hex', 'dhash_hex', datetime('now'))
         """
     )
     # derived tag for search_text
@@ -404,13 +406,12 @@ def test_export_hashes_csv_present_with_all_columns(tmp_path):
         reader = csv.DictReader(fh)
         expected_cols = {
             "path", "sha256", "sha256_content", "phash", "dhash",
-            "area_hash", "video_collage_phash", "video_frame_phashes",
+            "video_collage_phash", "video_frame_phashes",
         }
         assert expected_cols.issubset(set(reader.fieldnames))
         rows = list(reader)
     assert len(rows) == 1
     assert rows[0]["phash"] == "phash_hex"
-    assert rows[0]["area_hash"] == '["cell0"]'
 
 
 def test_export_aesthetic_scores_csv_absent_when_no_scores(tmp_path):
@@ -473,3 +474,149 @@ def test_export_search_text_csv_present(tmp_path):
     assert "a.jpg" in search_text        # filename
     assert "Summer" in search_text       # derived tag
     assert "bridge" in search_text.lower()  # description
+
+
+# ---------------------------------------------------------------------------
+# Export scope via CorpusFilterSpec
+# ---------------------------------------------------------------------------
+
+from src.db.corpus import add_source, upsert_file  # noqa: E402
+from src.pipeline.filter_spec import CorpusFilterSpec  # noqa: E402
+
+
+def _run_scoped(corpus_path, kb_path, scope):
+    run_export(
+        corpus_path,
+        kb_path,
+        Config(),
+        NullProgressReporter(),
+        threading.Event(),
+        scope=scope,
+    )
+
+
+def _seed_two_sources(corpus_conn, kb_conn):
+    src1 = add_source(corpus_conn, "/photos/2023", "images", True)
+    src2 = add_source(corpus_conn, "/photos/2024", "images", True)
+    fid1 = upsert_file(corpus_conn, src1, "/photos/2023/a.jpg", "a.jpg", ".jpg", "images", 1000, 0.0)
+    fid2 = upsert_file(corpus_conn, src2, "/photos/2024/b.jpg", "b.jpg", ".jpg", "images", 1001, 0.0)
+    for fid, desc in [(fid1, "A castle."), (fid2, "A beach.")]:
+        corpus_conn.execute(
+            "INSERT INTO descriptions (file_id, description_raw, model, pass1_status)"
+            " VALUES (?, ?, 'dummy', 'done')",
+            (fid, desc),
+        )
+    corpus_conn.commit()
+    return src1, src2, fid1, fid2
+
+
+def test_export_scope_by_source_filters_descriptions(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    src1, _src2, _fid1, _fid2 = _seed_two_sources(corpus_conn, kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+
+    _run_scoped(corpus_path, kb_path, CorpusFilterSpec(source_id=src1))
+
+    desc_file = tmp_path / "export" / "descriptions.csv"
+    assert desc_file.exists()
+    with open(desc_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
+    assert "castle" in rows[0]["description"]
+
+
+def test_export_scope_by_file_type_filters_descriptions(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    src = add_source(corpus_conn, "/media", "all", True)
+    fid_img = upsert_file(corpus_conn, src, "/media/img.jpg", "img.jpg", ".jpg", "images", 1000, 0.0)
+    fid_vid = upsert_file(corpus_conn, src, "/media/vid.mp4", "vid.mp4", ".mp4", "video", 1001, 0.0)
+    for fid, desc in [(fid_img, "A photo."), (fid_vid, "A video.")]:
+        corpus_conn.execute(
+            "INSERT INTO descriptions (file_id, description_raw, model, pass1_status)"
+            " VALUES (?, ?, 'dummy', 'done')",
+            (fid, desc),
+        )
+    corpus_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+
+    _run_scoped(corpus_path, kb_path, CorpusFilterSpec(file_type="images"))
+
+    desc_file = tmp_path / "export" / "descriptions.csv"
+    assert desc_file.exists()
+    with open(desc_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
+    assert "photo" in rows[0]["description"]
+
+
+def test_export_scope_empty_spec_exports_all(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    _seed_two_sources(corpus_conn, kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+
+    _run_scoped(corpus_path, kb_path, CorpusFilterSpec())
+
+    desc_file = tmp_path / "export" / "descriptions.csv"
+    assert desc_file.exists()
+    with open(desc_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 2
+
+
+def test_export_scope_by_folder_prefix(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    src = add_source(corpus_conn, "/photos", "images", True)
+    fid1 = upsert_file(corpus_conn, src, "/photos/Italy/a.jpg", "a.jpg", ".jpg", "images", 1000, 0.0)
+    fid2 = upsert_file(corpus_conn, src, "/photos/France/b.jpg", "b.jpg", ".jpg", "images", 1001, 0.0)
+    for fid, desc in [(fid1, "Rome."), (fid2, "Paris.")]:
+        corpus_conn.execute(
+            "INSERT INTO descriptions (file_id, description_raw, model, pass1_status)"
+            " VALUES (?, ?, 'dummy', 'done')",
+            (fid, desc),
+        )
+    corpus_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+
+    _run_scoped(corpus_path, kb_path, CorpusFilterSpec(folder_prefix="/photos/Italy"))
+
+    desc_file = tmp_path / "export" / "descriptions.csv"
+    assert desc_file.exists()
+    with open(desc_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
+    assert "Rome" in rows[0]["description"]
+
+
+def test_export_scope_none_identical_to_empty_spec(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    _seed_two_sources(corpus_conn, kb_conn)
+    corpus_conn.close()
+    kb_conn.close()
+
+    # scope=None should behave the same as an empty CorpusFilterSpec
+    run_export(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    desc_file = tmp_path / "export" / "descriptions.csv"
+    assert desc_file.exists()
+    with open(desc_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 2

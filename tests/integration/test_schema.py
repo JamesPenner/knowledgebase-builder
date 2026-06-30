@@ -24,15 +24,15 @@ _CORPUS_TABLES = {
     "file_gps_cluster_assignments",
     "file_summaries",
     "file_sets",
-    "file_set_members",
+    "file_location_labels",
 }
 
 _KB_TABLES = {
-    "_migrations", "vocabulary", "stoplist", "corrections", "capture_rules",
-    "substitute_rules", "reject_tokens", "kb_version", "ignored_fields",
+    "_migrations", "vocabulary", "stoplist", "pattern_rules",
+    "substitute_rules", "kb_version", "ignored_fields",
     "entity_table_registry", "entity_table_links",
     "classify_rules", "people", "people_names", "life_events",
-    "stage_prompts",
+    "stage_prompts", "token_rejections",
 }
 
 
@@ -117,10 +117,8 @@ def test_sources_has_filters_json_column(tmp_path):
 def test_file_sets_schema(tmp_path):
     conn = open_corpus(tmp_path / "corpus.db")
     cols = {row[1] for row in conn.execute("PRAGMA table_info(file_sets)")}
-    assert cols == {"id", "name", "description", "created_at"}
-
-
-def test_file_set_members_schema(tmp_path):
-    conn = open_corpus(tmp_path / "corpus.db")
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(file_set_members)")}
-    assert cols == {"set_id", "file_id"}
+    assert cols == {
+        "id", "name", "description", "created_at",
+        "source_id", "folder_prefix", "file_type",
+        "date_from", "date_to", "name_pattern", "criteria_summary",
+    }

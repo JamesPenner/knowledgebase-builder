@@ -227,6 +227,7 @@ def _download_clip(models_path: Path) -> None:
 
 def _extract_laion_weights(pth_path: Path, out_npz: Path) -> None:
     """Read PyTorch zip, extract weight [512] and bias [1] tensors, save as npz."""
+    import re
     import struct
     import zipfile
 
@@ -237,7 +238,8 @@ def _extract_laion_weights(pth_path: Path, out_npz: Path) -> None:
 
     with zipfile.ZipFile(pth_path) as zf:
         for name in zf.namelist():
-            if not name.endswith(".storage"):
+            # Support both old *.storage format and new archive/data/<int> format
+            if not (name.endswith(".storage") or re.match(r"archive/data/\d+$", name)):
                 continue
             data = zf.read(name)
             floats = struct.unpack(f"{len(data) // 4}f", data[: (len(data) // 4) * 4])
@@ -267,7 +269,8 @@ def _update_config(key: str, value: str) -> None:
 
     for line in lines:
         stripped = line.rstrip()
-        if stripped == "models:":
+        # Match "models:" with optional trailing comment/whitespace
+        if stripped == "models:" or stripped.startswith("models:") and (stripped[7:].lstrip().startswith("#") or stripped[7:].strip() == ""):
             in_models = True
             result.append(line)
             continue
@@ -280,11 +283,11 @@ def _update_config(key: str, value: str) -> None:
         result.append(line)
 
     if not updated:
-        # append under models: section or create it
         out = "".join(result)
-        if "models:" in out:
-            out = out.replace("models:\n", f"models:\n  {key}: {value}\n", 1)
-        else:
+        # Insert after the models: line (handles trailing comments)
+        import re as _re
+        out = _re.sub(r"(models:[^\n]*\n)", rf"\g<1>  {key}: {value}\n", out, count=1)
+        if f"  {key}:" not in out:
             out += f"\nmodels:\n  {key}: {value}\n"
         config_path.write_text(out, encoding="utf-8")
     else:

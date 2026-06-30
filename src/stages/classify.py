@@ -105,6 +105,8 @@ def run_classify(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
@@ -118,7 +120,7 @@ def run_classify(
     ).fetchall()
     kb_conn.close()
 
-    files = get_files_for_classify(corpus_conn)
+    files = get_files_for_classify(corpus_conn, scope=scope)
     total = len(files)
     start = time.monotonic()
     batch_size = 200

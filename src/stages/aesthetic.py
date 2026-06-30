@@ -135,7 +135,7 @@ def score_clip(img_path: Path, model_dir: str) -> float:
     return float(max(0.0, min(1.0, (raw_score - 1) / 8)))
 
 
-def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, source_id=None, file_type=None, set_id=None) -> dict:
+def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, scope=None) -> dict:
     """Score all pending image files with configured NIMA and/or CLIP models."""
     from src.db.corpus import (
         compute_combined_rank_scores,
@@ -163,7 +163,7 @@ def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, source_id=N
     error_count = 0
 
     if config.aesthetic_nima:
-        pending = get_pending_aesthetic_files(conn, "nima_mobilenet", source_id=source_id, file_type=file_type, set_id=set_id)
+        pending = get_pending_aesthetic_files(conn, "nima_mobilenet", scope=scope)
         total = len(pending)
         progress.update(0, total, "Scoring NIMA…")
         for i, row in enumerate(pending):
@@ -183,7 +183,7 @@ def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, source_id=N
             progress.update(i + 1, total)
 
     if config.aesthetic_clip:
-        pending = get_pending_aesthetic_files(conn, "clip_vit_b32", source_id=source_id, file_type=file_type, set_id=set_id)
+        pending = get_pending_aesthetic_files(conn, "clip_vit_b32", scope=scope)
         total = len(pending)
         progress.update(0, total, "Scoring CLIP…")
         for i, row in enumerate(pending):

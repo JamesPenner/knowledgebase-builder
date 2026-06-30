@@ -3,9 +3,7 @@ from pathlib import Path
 from src.config import Config
 from src.db.corpus import add_source, open_corpus
 from src.db.kb import (
-    add_capture_rule,
-    add_correction,
-    add_reject_token,
+    add_pattern_rule,
     add_to_stoplist,
     open_kb,
 )
@@ -46,10 +44,9 @@ def _run_norm(corpus_path: Path, kb_path: Path) -> None:
 def test_capture_rule_extracts_field():
     _, captured = normalize_filename(
         "20160929_clip001.jpg",
-        capture_rules=[{"pattern": r"^\d{8}$", "extract_as": "file_date", "format_str": None, "keep_token": False, "value_type": "date"}],
-        reject_rules=[],
+        pattern_rules=[{"pattern": r"^\d{8}$", "is_regex": True, "action": "capture",
+                        "extract_as": "file_date", "format_str": None, "keep_token": False, "value_type": "date"}],
         substitute_rules=[],
-        corrections={},
         stoplist=set(),
     )
     assert captured.get("file_date") == "20160929"
@@ -58,10 +55,10 @@ def test_capture_rule_extracts_field():
 def test_capture_rule_with_format_str():
     _, captured = normalize_filename(
         "20160929_clip001.jpg",
-        capture_rules=[{"pattern": r"^(\d{8})$", "extract_as": "file_date", "format_str": "{1:0:4}-{1:4:6}-{1:6:8}", "keep_token": False, "value_type": "date"}],
-        reject_rules=[],
+        pattern_rules=[{"pattern": r"^(\d{8})$", "is_regex": True, "action": "capture",
+                        "extract_as": "file_date", "format_str": "{1:0:4}-{1:4:6}-{1:6:8}",
+                        "keep_token": False, "value_type": "date"}],
         substitute_rules=[],
-        corrections={},
         stoplist=set(),
     )
     assert captured.get("file_date") == "2016-09-29"
@@ -70,10 +67,9 @@ def test_capture_rule_with_format_str():
 def test_capture_keep_token_false_removes_from_name():
     name, _ = normalize_filename(
         "20160929_footage.jpg",
-        capture_rules=[{"pattern": r"^\d{8}$", "extract_as": "file_date", "format_str": None, "keep_token": False, "value_type": "date"}],
-        reject_rules=[],
+        pattern_rules=[{"pattern": r"^\d{8}$", "is_regex": True, "action": "capture",
+                        "extract_as": "file_date", "format_str": None, "keep_token": False, "value_type": "date"}],
         substitute_rules=[],
-        corrections={},
         stoplist=set(),
     )
     assert "20160929" not in name
@@ -82,10 +78,9 @@ def test_capture_keep_token_false_removes_from_name():
 def test_capture_keep_token_true_keeps_in_name():
     name, _ = normalize_filename(
         "20160929_footage.jpg",
-        capture_rules=[{"pattern": r"^\d{8}$", "extract_as": "file_date", "format_str": None, "keep_token": True, "value_type": "date"}],
-        reject_rules=[],
+        pattern_rules=[{"pattern": r"^\d{8}$", "is_regex": True, "action": "capture",
+                        "extract_as": "file_date", "format_str": None, "keep_token": True, "value_type": "date"}],
         substitute_rules=[],
-        corrections={},
         stoplist=set(),
     )
     assert "20160929" in name
@@ -94,10 +89,8 @@ def test_capture_keep_token_true_keeps_in_name():
 def test_reject_token_strips_from_name():
     name, _ = normalize_filename(
         "img_dsc_001.jpg",
-        capture_rules=[],
-        reject_rules=[{"pattern": "dsc", "is_regex": False}],
+        pattern_rules=[{"pattern": "dsc", "is_regex": False, "action": "reject"}],
         substitute_rules=[],
-        corrections={},
         stoplist=set(),
     )
     assert "dsc" not in name
@@ -106,10 +99,8 @@ def test_reject_token_strips_from_name():
 def test_reject_regex_pattern():
     name, _ = normalize_filename(
         "img_dsc001_clip.jpg",
-        capture_rules=[],
-        reject_rules=[{"pattern": r"^dsc\d+$", "is_regex": True}],
+        pattern_rules=[{"pattern": r"^dsc\d+$", "is_regex": True, "action": "reject"}],
         substitute_rules=[],
-        corrections={},
         stoplist=set(),
     )
     assert "dsc001" not in name
@@ -119,10 +110,9 @@ def test_reject_regex_pattern():
 def test_correction_applied():
     name, _ = normalize_filename(
         "tuckinleted_photo.jpg",
-        capture_rules=[],
-        reject_rules=[],
+        pattern_rules=[{"pattern": "tuckinleted", "is_regex": False, "action": "replace",
+                        "replace_with": "Tuck Inlet"}],
         substitute_rules=[],
-        corrections={"tuckinleted": "Tuck Inlet"},
         stoplist=set(),
     )
     assert "Tuck Inlet" in name
@@ -132,10 +122,8 @@ def test_correction_applied():
 def test_stoplist_filters_term():
     name, _ = normalize_filename(
         "photo_image_001.jpg",
-        capture_rules=[],
-        reject_rules=[],
+        pattern_rules=[],
         substitute_rules=[],
-        corrections={},
         stoplist={"image"},
     )
     assert "image" not in name
@@ -145,10 +133,8 @@ def test_stoplist_filters_term():
 def test_substitute_rule_applied():
     name, _ = normalize_filename(
         "hwy97c_footage.jpg",
-        capture_rules=[],
-        reject_rules=[],
+        pattern_rules=[],
         substitute_rules=[{"pattern": r"\bhwy97c\b", "replacement": "Highway 97C", "applies_to": "filename"}],
-        corrections={},
         stoplist=set(),
     )
     assert "Highway 97C" in name
@@ -161,7 +147,8 @@ def test_substitute_rule_applied():
 def test_run_normalize_writes_captured_field(tmp_path):
     corpus_path, kb_path = _setup(tmp_path, ["20160929_clip001.jpg"])
     kb_conn = open_kb(kb_path)
-    add_capture_rule(kb_conn, pattern=r"^\d{8}$", label="date", extract_as="file_date", format_str="", value_type="date", keep_token=False)
+    add_pattern_rule(kb_conn, pattern=r"^\d{8}$", action="capture", label="date",
+                     extract_as="file_date", format_str="", value_type="date", keep_token=False)
     kb_conn.close()
 
     _run_norm(corpus_path, kb_path)
@@ -176,7 +163,8 @@ def test_run_normalize_writes_captured_field(tmp_path):
 def test_run_normalize_is_idempotent(tmp_path):
     corpus_path, kb_path = _setup(tmp_path, ["20160929_clip001.jpg", "20170415_clip002.jpg"])
     kb_conn = open_kb(kb_path)
-    add_capture_rule(kb_conn, pattern=r"^\d{8}$", label="date", extract_as="file_date", format_str="", value_type="date", keep_token=False)
+    add_pattern_rule(kb_conn, pattern=r"^\d{8}$", action="capture", label="date",
+                     extract_as="file_date", format_str="", value_type="date", keep_token=False)
     kb_conn.close()
 
     _run_norm(corpus_path, kb_path)
@@ -204,7 +192,8 @@ def test_run_normalize_new_rule_picked_up_on_rerun(tmp_path):
     conn.close()
 
     kb_conn = open_kb(kb_path)
-    add_capture_rule(kb_conn, pattern=r"^bc\d+$", label="route", extract_as="route_number", format_str="", value_type="code", keep_token=False)
+    add_pattern_rule(kb_conn, pattern=r"^bc\d+$", action="capture", label="route",
+                     extract_as="route_number", format_str="", value_type="code", keep_token=False)
     kb_conn.close()
 
     _run_norm(corpus_path, kb_path)
@@ -218,7 +207,7 @@ def test_run_normalize_new_rule_picked_up_on_rerun(tmp_path):
 def test_run_normalize_reject_strips_from_filename_normalized(tmp_path):
     corpus_path, kb_path = _setup(tmp_path, ["img_dsc_001.jpg"])
     kb_conn = open_kb(kb_path)
-    add_reject_token(kb_conn, pattern="dsc", is_regex=False, label="camera-prefix")
+    add_pattern_rule(kb_conn, pattern="dsc", action="reject", is_regex=False, label="camera-prefix")
     kb_conn.close()
 
     _run_norm(corpus_path, kb_path)
@@ -233,7 +222,8 @@ def test_run_normalize_reject_strips_from_filename_normalized(tmp_path):
 def test_run_normalize_correction_in_filename(tmp_path):
     corpus_path, kb_path = _setup(tmp_path, ["tuckinleted_photo.jpg"])
     kb_conn = open_kb(kb_path)
-    add_correction(kb_conn, raw_term="tuckinleted", canonical_term="Tuck Inlet", correction_kind="typo")
+    add_pattern_rule(kb_conn, pattern="tuckinleted", action="replace", is_regex=False,
+                     replace_with="Tuck Inlet", replace_type="correction")
     kb_conn.close()
 
     _run_norm(corpus_path, kb_path)
@@ -275,7 +265,8 @@ def test_run_normalize_updates_checkpoint(tmp_path):
 def test_run_normalize_normalizes_keywords(tmp_path):
     corpus_path, kb_path = _setup(tmp_path, ["photo_001.jpg"])
     kb_conn = open_kb(kb_path)
-    add_correction(kb_conn, raw_term="tuckinleted", canonical_term="Tuck Inlet", correction_kind="typo")
+    add_pattern_rule(kb_conn, pattern="tuckinleted", action="replace", is_regex=False,
+                     replace_with="Tuck Inlet", replace_type="correction")
     kb_conn.close()
 
     corpus_conn = open_corpus(corpus_path)
@@ -296,3 +287,45 @@ def test_run_normalize_normalizes_keywords(tmp_path):
     conn.close()
     assert row is not None
     assert row["normalized_keyword"] == "Tuck Inlet"
+
+
+def test_run_normalize_auto_resolves_tokens_matching_pattern_rule(tmp_path):
+    corpus_path, kb_path = _setup(tmp_path, ["img_1234567890.jpg"])
+
+    # Seed an analyse_token that matches the reject rule
+    corpus_conn = open_corpus(corpus_path)
+    corpus_conn.execute(
+        """
+        INSERT INTO analyse_tokens
+            (token, pattern_class, semantic_type, frequency, file_count,
+             proposed_action, proposed_extract_as, is_cross_source, depth_position)
+        VALUES ('1234567890', 'numeric', 'id', 1, 1, 'reject', NULL, 0, 0)
+        """,
+    )
+    # Seed a token that should NOT be resolved (no matching rule)
+    corpus_conn.execute(
+        """
+        INSERT INTO analyse_tokens
+            (token, pattern_class, semantic_type, frequency, file_count,
+             proposed_action, proposed_extract_as, is_cross_source, depth_position)
+        VALUES ('img', 'word', 'descriptor', 1, 1, 'keep', NULL, 0, 0)
+        """,
+    )
+    corpus_conn.commit()
+    corpus_conn.close()
+
+    kb_conn = open_kb(kb_path)
+    add_pattern_rule(kb_conn, pattern=r"\d{10}$", action="reject", is_regex=True, label="guid-reject")
+    kb_conn.close()
+
+    _run_norm(corpus_path, kb_path)
+
+    corpus_conn = open_corpus(corpus_path)
+    rows = corpus_conn.execute(
+        "SELECT token, status FROM analyse_tokens ORDER BY token"
+    ).fetchall()
+    corpus_conn.close()
+
+    statuses = {r["token"]: r["status"] for r in rows}
+    assert statuses["1234567890"] == "decided"
+    assert statuses["img"] == "pending"

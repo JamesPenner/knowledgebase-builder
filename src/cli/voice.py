@@ -146,7 +146,7 @@ def diarize_download(
 
     typer.echo(f"Downloading {model_id} from HuggingFace…")
     try:
-        Pipeline.from_pretrained(model_id, use_auth_token=token)
+        Pipeline.from_pretrained(model_id, token=token)
         typer.echo("Done. Model cached locally by HuggingFace Hub.")
     except Exception as exc:
         typer.echo(f"Download failed: {exc}", err=True)

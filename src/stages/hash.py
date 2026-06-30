@@ -26,10 +26,12 @@ def run_hash(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     conn = open_corpus(corpus_path)
-    files = get_files_without_hash(conn)
-    video_files = get_videos_without_frame_hash(conn)
+    files = get_files_without_hash(conn, scope=scope)
+    video_files = get_videos_without_frame_hash(conn, scope=scope)
     total = len(files) + len(video_files)
     start = time.monotonic()
 

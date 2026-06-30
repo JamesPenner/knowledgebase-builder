@@ -48,9 +48,7 @@ def post_normalise_decide(
 ) -> dict[str, str]:
     from src.db.corpus import open_corpus, set_token_decided
     from src.db.kb import (
-        add_capture_rule,
-        add_correction,
-        add_reject_token,
+        add_pattern_rule,
         add_to_stoplist,
         bump_kb_version,
         open_kb,
@@ -67,16 +65,18 @@ def post_normalise_decide(
         pass  # no KB rule — token is kept as-is by normalize
 
     elif action == "capture":
-        add_capture_rule(
+        add_pattern_rule(
             kb_conn,
             pattern=value.get("pattern", ""),
+            action="capture",
+            is_regex=True,
             label=value.get("label", ""),
             extract_as=value.get("extract_as", ""),
             format_str=value.get("format_str", ""),
             value_type=value.get("value_type", ""),
             keep_token=bool(value.get("keep_token", False)),
         )
-        bump_kb_version(kb_conn, "capture_rule_added")
+        bump_kb_version(kb_conn, "pattern_rule_added")
 
     elif action == "ignore":
         token_row = corpus_conn.execute(
@@ -91,21 +91,23 @@ def post_normalise_decide(
             "SELECT token FROM analyse_tokens WHERE id=?", (req.item_id,)
         ).fetchone()
         if token_row:
-            add_correction(
+            add_pattern_rule(
                 kb_conn,
-                raw_term=token_row["token"],
-                canonical_term=value.get("canonical_term", ""),
-                correction_kind=value.get("correction_kind", "typo"),
+                pattern=token_row["token"],
+                action="replace",
+                is_regex=False,
+                replace_with=value.get("canonical_term", ""),
+                replace_type="correction",
             )
-            bump_kb_version(kb_conn, "correction_added")
+            bump_kb_version(kb_conn, "pattern_rule_added")
 
     elif action == "reject":
         token_row = corpus_conn.execute(
             "SELECT token FROM analyse_tokens WHERE id=?", (req.item_id,)
         ).fetchone()
         if token_row:
-            add_reject_token(kb_conn, pattern=token_row["token"], is_regex=False, label=token_row["token"])
-            bump_kb_version(kb_conn, "reject_token_added")
+            from src.db.kb import add_token_rejection
+            add_token_rejection(kb_conn, token_row["token"])
 
     elif action != "accept":
         corpus_conn.close()
@@ -128,7 +130,7 @@ def post_normalise_bulk(
         open_corpus,
         set_all_pending_decided,
     )
-    from src.db.kb import add_reject_token, add_to_stoplist, bump_kb_version, open_kb
+    from src.db.kb import add_pattern_rule, add_to_stoplist, add_token_rejection, bump_kb_version, open_kb
 
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
@@ -148,9 +150,7 @@ def post_normalise_bulk(
     elif req.action == "reject_all":
         rows = get_all_pending_tokens(corpus_conn)
         for row in rows:
-            add_reject_token(kb_conn, pattern=row["token"], is_regex=False, label=row["token"])
-        if rows:
-            bump_kb_version(kb_conn, "reject_token_added")
+            add_token_rejection(kb_conn, row["token"])
         count = set_all_pending_decided(corpus_conn)
 
     else:
@@ -381,8 +381,7 @@ def post_new_terms_decide(
 ) -> dict:
     from src.db.corpus import merge_new_term_into_tags, open_corpus
     from src.db.kb import (
-        add_correction,
-        add_reject_token,
+        add_pattern_rule,
         add_to_stoplist,
         add_vocabulary_term,
         bump_kb_version,
@@ -408,13 +407,14 @@ def post_new_terms_decide(
         kb_conn.commit()
 
     elif action == "reject":
-        add_reject_token(kb_conn, pattern=term, is_regex=False, label=term)
+        add_pattern_rule(kb_conn, pattern=term, action="reject", is_regex=False, label=term)
         kb_conn.commit()
 
     elif action == "correct":
         correct_to = value.get("correct_to", "")
         if correct_to:
-            add_correction(kb_conn, raw_term=term, canonical_term=correct_to)
+            add_pattern_rule(kb_conn, pattern=term, action="replace", is_regex=False,
+                             replace_with=correct_to, replace_type="correction")
             add_vocabulary_term(kb_conn, correct_to)
             bump_kb_version(kb_conn, "vocabulary_term_added")
         kb_conn.commit()

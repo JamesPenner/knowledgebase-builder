@@ -12,9 +12,15 @@ from src.pipeline.progress import ProgressReporter
 from src.text.context import FileContext
 
 
-def _build_file_text(ctx: FileContext) -> str:
-    """Assemble per-file text for the Level A frequency analysis."""
-    parts = [ctx.enrichment_text, ctx.description or "", ctx.summary_text or "", " ".join(ctx.derived_tags)]
+def _build_metadata_text(ctx: FileContext) -> str:
+    """EXIF metadata and derived tags — noun/proper-noun tokens + noun chunks extracted here."""
+    parts = [ctx.enrichment_text, " ".join(ctx.derived_tags)]
+    return " ".join(p for p in parts if p)
+
+
+def _build_prose_text(ctx: FileContext) -> str:
+    """LLM descriptions, summaries, and transcripts — individual tokens only (no chunks)."""
+    parts = [ctx.description or "", ctx.summary_text or "", ctx.transcript or ""]
     return " ".join(p for p in parts if p)
 
 logger = logging.getLogger(__name__)
@@ -52,6 +58,35 @@ def _compute_npmi(term_counts: dict, pair_counts: dict, doc_count: int) -> dict:
     return npmi_scores
 
 
+def _build_pattern_filters(pattern_rules: list[dict]):
+    """Return compiled regexes for rules that should suppress tokens from suggestions."""
+    import re
+    suppress_actions = {"capture", "reject", "ignore"}
+    filters = []
+    for rule in pattern_rules:
+        if rule.get("action") not in suppress_actions:
+            continue
+        try:
+            if rule["is_regex"]:
+                filters.append(re.compile(rule["pattern"], re.IGNORECASE))
+            else:
+                pat = re.compile(r"^" + re.escape(rule["pattern"]) + r"$", re.IGNORECASE)
+                filters.append(pat)
+        except re.error:
+            pass
+    return filters
+
+
+def _matches_any_filter(text: str, filters: list) -> bool:
+    return any(f.search(text) for f in filters)
+
+
+def _clean_term(text: str) -> str:
+    """Strip leading/trailing non-word characters that come from EXIF metadata formatting."""
+    import re
+    return re.sub(r'^[^\w]+|[^\w]+$', '', text).strip()
+
+
 def _run_level_a(
     corpus_conn,
     kb_conn,
@@ -60,14 +95,19 @@ def _run_level_a(
     cancel_event: threading.Event,
 ) -> None:
     import spacy
-    from src.db.corpus import upsert_candidate
-    from src.db.kb import get_stoplist_terms, get_vocabulary_terms
+    from src.db.corpus import delete_pending_candidates, upsert_candidate
+    from src.db.kb import get_pattern_rules, get_stoplist_terms, get_vocabulary_terms
     from src.text.context import build_file_context
 
-    nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+    delete_pending_candidates(corpus_conn, "level_a")
+    corpus_conn.commit()
+
+    nlp = spacy.load("en_core_web_sm", disable=["ner"])
 
     exclusion: set[str] = {r["term"] for r in get_vocabulary_terms(kb_conn)}
     exclusion |= get_stoplist_terms(kb_conn)
+
+    pattern_filters = _build_pattern_filters(get_pattern_rules(kb_conn))
 
     file_rows = corpus_conn.execute("SELECT id FROM files ORDER BY id").fetchall()
     total = len(file_rows)
@@ -80,21 +120,26 @@ def _run_level_a(
 
         file_id = row["id"]
         ctx = build_file_context(corpus_conn, None, file_id)
-        text = _build_file_text(ctx)
-        if not text.strip():
-            continue
 
-        doc = nlp(text)
-        for token in doc:
-            if token.pos_ in ("NOUN", "PROPN") and not token.is_stop and len(token.lemma_) > 2:
-                lemma = token.lemma_.lower()
-                if lemma not in exclusion:
-                    term_file_ids[lemma].add(file_id)
+        def _extract_tokens(text, pos_tags, extract_chunks=False):
+            if not text.strip():
+                return
+            doc = nlp(text)
+            for token in doc:
+                if token.pos_ in pos_tags and not token.is_stop:
+                    lemma = _clean_term(token.lemma_.lower())
+                    if len(lemma) > 2 and lemma not in exclusion and not _matches_any_filter(lemma, pattern_filters):
+                        term_file_ids[lemma].add(file_id)
+            if extract_chunks:
+                for chunk in doc.noun_chunks:
+                    if len(chunk) < 2:
+                        continue
+                    phrase = _clean_term(chunk.text.lower())
+                    if len(phrase) > 4 and phrase not in exclusion and not _matches_any_filter(phrase, pattern_filters):
+                        term_file_ids[phrase].add(file_id)
 
-        for chunk in doc.noun_chunks:
-            phrase = chunk.lemma_.lower().strip()
-            if len(phrase) > 3 and phrase not in exclusion:
-                term_file_ids[phrase].add(file_id)
+        _extract_tokens(_build_metadata_text(ctx), {"NOUN", "PROPN"})
+        _extract_tokens(_build_prose_text(ctx), {"NOUN", "PROPN", "VERB"}, extract_chunks=True)
 
     min_files = config.suggest_min_files
     progress.update(total, total, "Level A: writing candidates")
@@ -119,7 +164,10 @@ def _run_level_b(
 ) -> None:
     import networkx as nx
     import community as community_louvain
-    from src.db.corpus import iter_file_term_sets, upsert_candidate
+    from src.db.corpus import delete_pending_candidates, iter_file_term_sets, upsert_candidate
+
+    delete_pending_candidates(corpus_conn, "level_b")
+    corpus_conn.commit()
 
     file_count_row = corpus_conn.execute(
         "SELECT COUNT(DISTINCT file_id) as n FROM candidates WHERE source='level_a' AND status='pending'"

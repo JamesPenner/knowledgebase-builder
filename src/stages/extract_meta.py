@@ -21,6 +21,8 @@ def run_extract_meta(
     config: Config,
     progress: ProgressReporter,
     cancel_event: threading.Event,
+    *,
+    scope=None,
 ) -> None:
     from src.exiftool import ExifTool
     from src.stages.field_registry import generate_field_map
@@ -28,7 +30,7 @@ def run_extract_meta(
     conn = open_corpus(corpus_path)
     kb_folder = kb_path.parent
 
-    files = get_files_without_exif(conn)
+    files = get_files_without_exif(conn, scope=scope)
     total = len(files)
 
     if not files:

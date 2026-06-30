@@ -5,18 +5,19 @@ from pathlib import Path
 
 from src.config import Config
 from src.db.corpus import (
+    get_all_pending_tokens,
     get_files_for_normalize,
+    mark_analyse_tokens_decided,
     open_corpus,
     update_filename_normalized,
     update_pipeline_checkpoint,
     upsert_captured_field,
 )
 from src.db.kb import (
-    get_capture_rules,
-    get_corrections_map,
-    get_reject_tokens,
+    get_pattern_rules,
     get_stoplist_terms,
     get_substitute_rules,
+    get_token_rejections,
     open_kb,
 )
 from src.pipeline.progress import ProgressReporter
@@ -50,28 +51,18 @@ def apply_format_str(format_str: str | None, match: re.Match) -> str:
     return _TOKEN_RE.sub(_replace, format_str)
 
 
-def _matches_reject(token: str, reject_rules: list[dict]) -> bool:
-    for rule in reject_rules:
-        if rule["is_regex"]:
-            if re.search(rule["pattern"], token):
-                return True
-        else:
-            if token == rule["pattern"]:
-                return True
-    return False
-
-
 def normalize_filename(
     filename: str,
-    capture_rules: list[dict],
-    reject_rules: list[dict],
+    pattern_rules: list[dict],
     substitute_rules: list[dict],
-    corrections: dict[str, str],
     stoplist: set[str],
+    rejected_tokens: set[str] = frozenset(),
 ) -> tuple[str, dict[str, str]]:
     """Return (normalized_name, captured_fields) for a single filename.
 
     captured_fields maps extract_as → formatted value for each matched capture rule.
+    First matching pattern_rule per token wins. Actions: reject, ignore, replace, capture.
+    rejected_tokens is the set of exact tokens from token_rejections (review decisions).
     """
     stem = Path(filename).stem
     tokens = tokenize_path(stem)
@@ -80,34 +71,55 @@ def normalize_filename(
 
     for token in tokens:
         lower = token.lower()
-
-        if _matches_reject(lower, reject_rules):
+        if lower in rejected_tokens:
             continue
-
+        token_rejected = False
         captured_this = False
         keep_after_capture = True
-        for rule in capture_rules:
+
+        for rule in pattern_rules:
             try:
-                m = re.match(rule["pattern"], lower)
+                if rule["is_regex"]:
+                    m = re.match(rule["pattern"], lower)
+                else:
+                    m = lower == rule["pattern"]
             except re.error:
                 continue
-            if m:
-                value = apply_format_str(rule.get("format_str"), m)
+            if not m:
+                continue
+
+            action = rule["action"]
+            if action == "reject":
+                token_rejected = True
+            elif action == "ignore":
+                captured_this = True
+                keep_after_capture = False
+            elif action == "replace":
+                if rule["is_regex"] and isinstance(m, re.Match):
+                    lower = apply_format_str(rule.get("replace_with"), m)
+                else:
+                    lower = rule.get("replace_with") or lower
+            elif action == "capture":
+                if rule["is_regex"] and isinstance(m, re.Match):
+                    value = apply_format_str(
+                        rule.get("format_str") or rule.get("replace_with"), m
+                    )
+                else:
+                    value = rule.get("replace_with") or lower
                 captured[rule["extract_as"]] = value
                 if rule.get("value_type") == "date" and rule.get("date_precision"):
                     captured[rule["extract_as"] + "_precision"] = rule["date_precision"]
                 captured_this = True
                 if not rule.get("keep_token", True):
                     keep_after_capture = False
-                break  # first matching rule wins per token
+            break  # first matching rule wins per token
 
-        canonical = corrections.get(lower, lower)
-
-        if canonical in stoplist:
+        if token_rejected:
             continue
-
+        if lower in stoplist:
+            continue
         if not captured_this or keep_after_capture:
-            kept_tokens.append(canonical)
+            kept_tokens.append(lower)
 
     name = " ".join(kept_tokens)
 
@@ -121,6 +133,42 @@ def normalize_filename(
     return name.strip(), captured
 
 
+def _auto_resolve_tokens(
+    corpus_conn: object,
+    pattern_rules: list[dict],
+    rejected_tokens: set[str] = frozenset(),
+) -> None:
+    """Mark any pending analyse_tokens as decided if they match a pattern rule or rejection.
+
+    A rule match means the user has an explicit opinion about that token class —
+    no manual review needed regardless of the action (reject/ignore/replace/capture).
+    """
+    pending = get_all_pending_tokens(corpus_conn)
+    if not pending:
+        return
+
+    resolved_ids = []
+    for row in pending:
+        token = row["token"].lower()
+        if token in rejected_tokens:
+            resolved_ids.append(row["id"])
+            continue
+        for rule in pattern_rules:
+            try:
+                matched = (
+                    re.match(rule["pattern"], token)
+                    if rule["is_regex"]
+                    else token == rule["pattern"]
+                )
+            except re.error:
+                continue
+            if matched:
+                resolved_ids.append(row["id"])
+                break
+
+    mark_analyse_tokens_decided(corpus_conn, resolved_ids)
+
+
 def run_normalize(
     corpus_path: Path,
     kb_path: Path,
@@ -131,11 +179,16 @@ def run_normalize(
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
 
-    capture_rules = get_capture_rules(kb_conn)
-    reject_rules = get_reject_tokens(kb_conn)
+    pattern_rules = get_pattern_rules(kb_conn)
     substitute_rules = get_substitute_rules(kb_conn)
-    corrections = get_corrections_map(kb_conn)
     stoplist = get_stoplist_terms(kb_conn, scope="global")
+    rejected_tokens = {r["token"].lower() for r in get_token_rejections(kb_conn)}
+    # Build a replace map from exact replace rules for keyword normalization
+    replace_map = {
+        r["pattern"]: r["replace_with"]
+        for r in pattern_rules
+        if r["action"] == "replace" and not r["is_regex"] and r.get("replace_with")
+    }
     kb_conn.close()
 
     files = get_files_for_normalize(corpus_conn)
@@ -155,11 +208,10 @@ def run_normalize(
 
         normalized, captured = normalize_filename(
             file_row["filename"],
-            capture_rules,
-            reject_rules,
+            pattern_rules,
             substitute_rules,
-            corrections,
             stoplist,
+            rejected_tokens,
         )
 
         update_filename_normalized(corpus_conn, file_row["id"], normalized)
@@ -181,7 +233,7 @@ def run_normalize(
         if lower in stoplist:
             normalized = None
         else:
-            normalized = corrections.get(lower, kw_row["keyword"])
+            normalized = replace_map.get(lower, kw_row["keyword"])
         corpus_conn.execute(
             """
             UPDATE file_metadata_keywords SET normalized_keyword = ?
@@ -191,6 +243,8 @@ def run_normalize(
         )
     if kw_rows:
         corpus_conn.commit()
+
+    _auto_resolve_tokens(corpus_conn, pattern_rules, rejected_tokens)
 
     duration = time.monotonic() - start
     update_pipeline_checkpoint(

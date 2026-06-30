@@ -2,6 +2,7 @@ import sqlite3
 from pathlib import Path
 
 from src.db.migrations import apply_migrations
+from src.pipeline.filter_spec import CorpusFilterSpec
 
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations" / "corpus"
 
@@ -34,12 +35,14 @@ def add_source(
     file_type: str = "all",
     recursive: bool = True,
     filters_json: dict | None = None,
+    incremental: bool = False,
 ) -> int:
     import json as _json
     filters_str = _json.dumps(filters_json or {})
     cur = conn.execute(
-        "INSERT OR IGNORE INTO sources (path, file_type, recursive, filters_json) VALUES (?, ?, ?, ?)",
-        (path, file_type, int(recursive), filters_str),
+        "INSERT OR IGNORE INTO sources (path, file_type, recursive, filters_json, incremental)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (path, file_type, int(recursive), filters_str, int(incremental)),
     )
     conn.commit()
     if cur.lastrowid:
@@ -78,7 +81,6 @@ def remove_source(conn: sqlite3.Connection, source_id: int, cascade: bool = Fals
     placeholders = ",".join("?" * len(file_ids))
 
     child_tables = [
-        "file_set_members",
         "face_cluster_members",
         "file_voice_segments",
         "file_voice_embeddings",
@@ -105,6 +107,7 @@ def remove_source(conn: sqlite3.Connection, source_id: int, cascade: bool = Fals
         "retag_output",
         "writeback_log",
         "file_summaries",
+        "file_location_labels",
     ]
 
     for tbl in child_tables:
@@ -135,14 +138,60 @@ def update_source(
     file_type: str,
     recursive: bool,
     filters_json: dict,
+    incremental: bool = False,
 ) -> bool:
     import json as _json
     cur = conn.execute(
-        "UPDATE sources SET file_type=?, recursive=?, filters_json=? WHERE id=? AND removed_at IS NULL",
-        (file_type, int(recursive), _json.dumps(filters_json), source_id),
+        "UPDATE sources SET file_type=?, recursive=?, filters_json=?, incremental=?"
+        " WHERE id=? AND removed_at IS NULL",
+        (file_type, int(recursive), _json.dumps(filters_json), int(incremental), source_id),
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+def reset_corpus_files(conn: sqlite3.Connection) -> int:
+    """Delete all corpus files and their derived data. Returns the file count cleared."""
+    count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    derived_tables = [
+        "file_set_members",
+        "face_cluster_members",
+        "file_voice_segments",
+        "file_voice_embeddings",
+        "file_face_regions",
+        "file_geolabels",
+        "file_gps_masks",
+        "file_gps_cluster_assignments",
+        "validation_results",
+        "file_temporal_fields",
+        "file_derived_tags",
+        "file_entity_matches",
+        "file_quality",
+        "file_aesthetic",
+        "file_hashes",
+        "file_captured_fields",
+        "file_exif",
+        "file_metadata_fields",
+        "file_metadata_keywords",
+        "descriptions",
+        "video_frames",
+        "candidates",
+        "transcriptions",
+        "transcript_segments",
+        "retag_output",
+        "writeback_log",
+        "file_summaries",
+        "file_location_labels",
+    ]
+    for tbl in derived_tables:
+        conn.execute(f"DELETE FROM {tbl}")
+    conn.execute("DELETE FROM files")
+    conn.execute(
+        "UPDATE sources SET last_ingested_at = NULL, file_count_ingested = 0"
+        " WHERE removed_at IS NULL"
+    )
+    conn.commit()
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -153,31 +202,68 @@ def create_file_set(
     conn: sqlite3.Connection,
     name: str,
     description: str,
-    file_ids: list[int],
+    spec: CorpusFilterSpec,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO file_sets (name, description) VALUES (?, ?)",
-        (name, description),
+        """INSERT INTO file_sets
+           (name, description, source_id, folder_prefix, file_type,
+            date_from, date_to, name_pattern, criteria_summary)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, description, spec.source_id, spec.folder_prefix, spec.file_type,
+         spec.date_from, spec.date_to, spec.name_pattern, spec.summary()),
     )
-    set_id = cur.lastrowid
-    for fid in file_ids:
-        conn.execute(
-            "INSERT OR IGNORE INTO file_set_members (set_id, file_id) VALUES (?, ?)",
-            (set_id, fid),
-        )
     conn.commit()
-    return set_id
+    return cur.lastrowid  # type: ignore[return-value]
 
 
-def get_file_sets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT fs.id, fs.name, fs.description, fs.created_at,
-               (SELECT COUNT(*) FROM file_set_members WHERE set_id = fs.id) AS file_count
-        FROM file_sets fs
-        ORDER BY fs.created_at DESC
-        """
+def _set_row_to_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    spec = CorpusFilterSpec(
+        source_id=row["source_id"],
+        folder_prefix=row["folder_prefix"],
+        file_type=row["file_type"],
+        date_from=row["date_from"],
+        date_to=row["date_to"],
+        name_pattern=row["name_pattern"],
+    )
+    frag, params = spec.to_sql_fragment()
+    count = conn.execute(
+        f"SELECT COUNT(*) FROM files f WHERE 1=1{frag}", params
+    ).fetchone()[0]
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"],
+        "created_at": row["created_at"],
+        "source_id": row["source_id"],
+        "folder_prefix": row["folder_prefix"],
+        "file_type": row["file_type"],
+        "date_from": row["date_from"],
+        "date_to": row["date_to"],
+        "name_pattern": row["name_pattern"],
+        "criteria_summary": row["criteria_summary"],
+        "file_count": count,
+    }
+
+
+def get_file_sets(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """SELECT id, name, description, created_at, source_id, folder_prefix,
+                  file_type, date_from, date_to, name_pattern, criteria_summary
+           FROM file_sets ORDER BY created_at DESC"""
     ).fetchall()
+    return [_set_row_to_dict(conn, r) for r in rows]
+
+
+def get_file_set(conn: sqlite3.Connection, set_id: int) -> dict | None:
+    row = conn.execute(
+        """SELECT id, name, description, created_at, source_id, folder_prefix,
+                  file_type, date_from, date_to, name_pattern, criteria_summary
+           FROM file_sets WHERE id = ?""",
+        (set_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _set_row_to_dict(conn, row)
 
 
 def delete_file_set(conn: sqlite3.Connection, set_id: int) -> None:
@@ -185,11 +271,44 @@ def delete_file_set(conn: sqlite3.Connection, set_id: int) -> None:
     conn.commit()
 
 
-def resolve_set_file_ids(conn: sqlite3.Connection, set_id: int) -> frozenset[int]:
-    rows = conn.execute(
-        "SELECT file_id FROM file_set_members WHERE set_id = ?", (set_id,)
-    ).fetchall()
-    return frozenset(r["file_id"] for r in rows)
+def resolve_set_as_filter(conn: sqlite3.Connection, set_id: int) -> CorpusFilterSpec:
+    row = conn.execute(
+        "SELECT source_id, folder_prefix, file_type, date_from, date_to, name_pattern "
+        "FROM file_sets WHERE id = ?",
+        (set_id,),
+    ).fetchone()
+    if row is None:
+        return CorpusFilterSpec()
+    return CorpusFilterSpec(
+        source_id=row["source_id"],
+        folder_prefix=row["folder_prefix"],
+        file_type=row["file_type"],
+        date_from=row["date_from"],
+        date_to=row["date_to"],
+        name_pattern=row["name_pattern"],
+    )
+
+
+def get_distinct_folders(
+    conn: sqlite3.Connection,
+    source_id: int | None = None,
+) -> list[str]:
+    """Return sorted distinct parent-directory paths for all ingested files."""
+    if source_id is not None:
+        rows = conn.execute(
+            "SELECT path FROM files WHERE source_id = ?", (source_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT path FROM files").fetchall()
+    folders = sorted({Path(r["path"]).parent.as_posix() for r in rows})
+    return folders
+
+
+def count_files_matching(conn: sqlite3.Connection, spec: CorpusFilterSpec) -> int:
+    frag, params = spec.to_sql_fragment()
+    return conn.execute(
+        f"SELECT COUNT(*) FROM files f WHERE 1=1{frag}", params
+    ).fetchone()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +346,17 @@ def get_all_file_paths(conn: sqlite3.Connection) -> list[str]:
     return [r["path"] for r in rows]
 
 
-def get_files_for_analyse(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute("SELECT id, path, filename, ext FROM files ORDER BY id").fetchall()
+def get_files_for_analyse(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
+    return conn.execute(
+        f"SELECT f.id, f.path, f.filename, f.ext FROM files f WHERE 1=1{frag} ORDER BY f.id",
+        params,
+    ).fetchall()
 
 
 def get_files_for_normalize(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -336,6 +464,17 @@ def get_all_pending_tokens(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def mark_analyse_tokens_decided(conn: sqlite3.Connection, ids: list[int]) -> None:
+    if not ids:
+        return
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE analyse_tokens SET status='decided' WHERE id IN ({placeholders})",
+        ids,
+    )
+    conn.commit()
+
+
 def set_all_pending_decided(conn: sqlite3.Connection) -> int:
     cur = conn.execute("UPDATE analyse_tokens SET status='decided' WHERE status='pending'")
     conn.commit()
@@ -391,6 +530,44 @@ def get_pipeline_checkpoints(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+_STAGE_COUNT_QUERIES: dict[str, str] = {
+    "extract_meta":      "SELECT COUNT(*) FROM file_exif",
+    "extract_fields":    "SELECT COUNT(DISTINCT file_id) FROM file_metadata_fields",
+    "hash":              "SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL",
+    "temporal":          "SELECT COUNT(DISTINCT file_id) FROM file_temporal_fields",
+    "entity_match":      "SELECT COUNT(DISTINCT file_id) FROM file_entity_matches",
+    "classify":          "SELECT COUNT(DISTINCT file_id) FROM file_derived_tags",
+    "quality":           "SELECT COUNT(*) FROM file_quality",
+    "aesthetic":         "SELECT COUNT(*) FROM file_aesthetic",
+    "geo_meta":          "SELECT COUNT(DISTINCT file_id) FROM file_location_labels",
+    "geolocate":         "SELECT COUNT(DISTINCT file_id) FROM file_geolabels",
+    "face":              "SELECT COUNT(DISTINCT file_id) FROM file_face_regions",
+    "face_meta":         "SELECT COUNT(DISTINCT file_id) FROM file_face_regions",
+    "voice":             "SELECT COUNT(DISTINCT file_id) FROM file_voice_embeddings",
+    "voice_diarize":     "SELECT COUNT(DISTINCT file_id) FROM file_voice_segments",
+    "attribute_speakers":"SELECT COUNT(DISTINCT file_id) FROM file_voice_segments WHERE speaker_label IS NOT NULL",
+    "retag":             "SELECT COUNT(*) FROM retag_output",
+    "writeback":         "SELECT COUNT(DISTINCT file_id) FROM writeback_log",
+}
+
+
+def get_pipeline_stage_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Return accurate cumulative file counts per stage by querying output tables.
+
+    Only covers stages where the checkpoint's files_processed can be stale after a
+    resume run. Stages not listed here (ingest, analyse, normalize, extract_fields,
+    describe, transcribe, etc.) are either always-cumulative or handled separately.
+    """
+    counts: dict[str, int] = {}
+    for stage, sql in _STAGE_COUNT_QUERIES.items():
+        try:
+            row = conn.execute(sql).fetchone()
+            counts[stage] = row[0] if row else 0
+        except Exception:
+            pass
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # File EXIF metadata
 # ---------------------------------------------------------------------------
@@ -402,22 +579,36 @@ def upsert_file_exif(conn: sqlite3.Connection, file_id: int, metadata_json: str)
     )
 
 
-def get_files_without_exif(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_files_without_exif(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path FROM files f
         LEFT JOIN file_exif e ON e.file_id = f.id
-        WHERE e.file_id IS NULL ORDER BY f.id
-        """
+        WHERE e.file_id IS NULL{frag} ORDER BY f.id
+        """,
+        params,
     ).fetchall()
 
 
-def get_files_with_exif(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_files_with_exif(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path, e.metadata_json FROM files f
-        JOIN file_exif e ON e.file_id = f.id ORDER BY f.id
-        """
+        JOIN file_exif e ON e.file_id = f.id WHERE 1=1{frag} ORDER BY f.id
+        """,
+        params,
     ).fetchall()
 
 
@@ -498,21 +689,35 @@ def reset_file_hashes(conn: sqlite3.Connection) -> int:
     return cur.rowcount
 
 
-def get_files_without_hash(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_files_without_hash(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        "SELECT id, path, file_type FROM files WHERE sha256 IS NULL ORDER BY id"
+        f"SELECT f.id, f.path, f.file_type FROM files f WHERE f.sha256 IS NULL{frag} ORDER BY f.id",
+        params,
     ).fetchall()
 
 
-def get_videos_without_frame_hash(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_videos_without_frame_hash(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path FROM files f
         LEFT JOIN file_hashes fh ON fh.file_id = f.id
         WHERE f.file_type = 'video'
-          AND (fh.video_collage_phash IS NULL)
+          AND (fh.video_collage_phash IS NULL){frag}
         ORDER BY f.id
-        """
+        """,
+        params,
     ).fetchall()
 
 
@@ -614,19 +819,24 @@ def get_files_with_gps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def get_files_for_text_match(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_files_for_text_match(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT DISTINCT f.id, f.path FROM files f
-        WHERE EXISTS (
-            SELECT 1 FROM file_metadata_fields WHERE file_id = f.id
-        ) OR EXISTS (
-            SELECT 1 FROM file_metadata_keywords WHERE file_id = f.id
-        ) OR EXISTS (
-            SELECT 1 FROM file_captured_fields WHERE file_id = f.id
-        )
+        WHERE (
+            EXISTS (SELECT 1 FROM file_metadata_fields WHERE file_id = f.id)
+            OR EXISTS (SELECT 1 FROM file_metadata_keywords WHERE file_id = f.id)
+            OR EXISTS (SELECT 1 FROM file_captured_fields WHERE file_id = f.id)
+        ){frag}
         ORDER BY f.id
-        """
+        """,
+        params,
     ).fetchall()
 
 
@@ -691,8 +901,17 @@ def get_entity_matches_for_file(
 # Classify output
 # ---------------------------------------------------------------------------
 
-def get_files_for_classify(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute("SELECT id, path FROM files ORDER BY id").fetchall()
+def get_files_for_classify(
+    conn: sqlite3.Connection,
+    *,
+    scope: "CorpusFilterSpec | None" = None,
+) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
+    return conn.execute(
+        f"SELECT f.id, f.path FROM files f WHERE 1=1{frag} ORDER BY f.id",
+        params,
+    ).fetchall()
 
 
 def get_fields_for_classify(conn: sqlite3.Connection, file_id: int) -> dict[str, str]:
@@ -833,20 +1052,26 @@ def get_pending_candidates(
     limit: int = 50,
     offset: int = 0,
     source_filter: str | None = None,
+    sort_by: str = "file_count",
+    sort_order: str = "desc",
 ) -> list[sqlite3.Row]:
     # Group by term so each unique term appears once regardless of how many files
     # generated it (level_a produces one row per file per term).
+    _SORT_COLS = {"term": "term", "file_count": "file_count"}
+    col = _SORT_COLS.get(sort_by, "file_count")
+    direction = "DESC" if sort_order.lower() == "desc" else "ASC"
     base_where = "WHERE status='pending' AND source=?" if source_filter else "WHERE status='pending'"
     params: tuple = (source_filter, limit, offset) if source_filter else (limit, offset)
     return conn.execute(
         f"""
         SELECT MIN(id) as id, term,
                MIN(source) as source, MIN(cluster_id) as cluster_id,
-               MIN(notes) as notes, 'pending' as status, MIN(corrected_to) as corrected_to
+               MIN(notes) as notes, 'pending' as status, MIN(corrected_to) as corrected_to,
+               COUNT(DISTINCT file_id) as file_count
         FROM candidates
         {base_where}
         GROUP BY term
-        ORDER BY term ASC
+        ORDER BY {col} {direction}
         LIMIT ? OFFSET ?
         """,
         params,
@@ -958,19 +1183,19 @@ def get_candidate_term_file_count(conn: sqlite3.Connection, term: str) -> int:
 def get_pending_retag_files(
     conn: sqlite3.Connection,
     *,
-    source_id: int | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path FROM files f
         LEFT JOIN retag_output r ON r.file_id = f.id
         WHERE (r.file_id IS NULL OR r.retag_status IN ('pending', 'failed', 'skipped'))
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (source_id, source_id, set_id, set_id),
+        params,
     ).fetchall()
 
 
@@ -1111,8 +1336,16 @@ def log_writeback(
     )
 
 
-def get_grouped_analyse_tokens(conn: sqlite3.Connection) -> list[dict]:
-    """Return pending tokens grouped by pattern_class → semantic_type for the review UI."""
+def get_grouped_analyse_tokens(
+    conn: sqlite3.Connection,
+    limit: int | None = None,
+) -> tuple[list[dict], int]:
+    """Return pending tokens grouped by pattern_class → semantic_type for the review UI.
+
+    Groups are sorted by total file coverage descending so the most-relevant
+    groups appear first.  Returns (groups, total_group_count) so callers can
+    determine whether more groups are available.
+    """
     from collections import defaultdict
 
     rows = conn.execute(
@@ -1123,7 +1356,7 @@ def get_grouped_analyse_tokens(conn: sqlite3.Connection) -> list[dict]:
     for row in rows:
         class_groups[row["pattern_class"]].append(row)
 
-    result = []
+    all_groups = []
     for pattern_class, class_rows in class_groups.items():
         type_groups: dict[str, list] = defaultdict(list)
         for row in class_rows:
@@ -1146,7 +1379,7 @@ def get_grouped_analyse_tokens(conn: sqlite3.Connection) -> list[dict]:
                 "tokens": [dict(r) for r in type_rows],
             })
 
-        result.append({
+        all_groups.append({
             "pattern_class": pattern_class,
             "label": _CLASS_LABEL.get(pattern_class, pattern_class),
             "total_tokens": len(class_rows),
@@ -1154,7 +1387,11 @@ def get_grouped_analyse_tokens(conn: sqlite3.Connection) -> list[dict]:
             "subgroups": subgroups,
         })
 
-    return result
+    all_groups.sort(key=lambda g: g["total_files"], reverse=True)
+    total = len(all_groups)
+    if limit is not None:
+        all_groups = all_groups[:limit]
+    return all_groups, total
 
 
 # ---------------------------------------------------------------------------
@@ -1164,23 +1401,21 @@ def get_grouped_analyse_tokens(conn: sqlite3.Connection) -> list[dict]:
 def get_pending_describe_files(
     conn: sqlite3.Connection,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path, f.file_type, f.ext
         FROM files f
         LEFT JOIN descriptions d ON d.file_id = f.id
         WHERE f.canonical_id IS NULL
           AND (d.file_id IS NULL OR d.pass1_status IN ('pending', 'failed', 'skipped'))
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.file_type = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type, set_id, set_id),
+        params,
     ).fetchall()
 
 
@@ -1259,24 +1494,22 @@ def get_describe_counts(conn: sqlite3.Connection) -> dict:
 def get_pending_transcribe_files(
     conn: sqlite3.Connection,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path, f.file_type
         FROM files f
         LEFT JOIN transcriptions t ON t.file_id = f.id
         WHERE f.canonical_id IS NULL
           AND f.file_type IN ('audio', 'video')
           AND (t.file_id IS NULL OR t.transcribe_status IN ('failed', 'pending'))
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.file_type = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type, set_id, set_id),
+        params,
     ).fetchall()
 
 
@@ -1373,24 +1606,22 @@ def get_pending_aesthetic_files(
     conn: sqlite3.Connection,
     model_name: str,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path, f.file_type
         FROM files f
         LEFT JOIN file_aesthetic fa ON fa.file_id = f.id AND fa.model_name = ?
         WHERE f.file_type = 'images'
           AND f.canonical_id IS NULL
           AND fa.id IS NULL
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.file_type = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (model_name, source_id, source_id, file_type, file_type, set_id, set_id),
+        [model_name] + params,
     ).fetchall()
 
 
@@ -1531,24 +1762,22 @@ def get_aesthetic_scores_for_export(
 def get_pending_quality_files(
     conn: sqlite3.Connection,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path, f.file_type
         FROM files f
         LEFT JOIN file_quality fq ON fq.file_id = f.id
         WHERE f.file_type IN ('images', 'video')
           AND f.canonical_id IS NULL
           AND fq.file_id IS NULL
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.file_type = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type, set_id, set_id),
+        params,
     ).fetchall()
 
 
@@ -1664,23 +1893,25 @@ def get_quality_scores_for_export(
 # Export readers
 # ---------------------------------------------------------------------------
 
-def get_export_descriptions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_export_descriptions(conn: sqlite3.Connection, scope_where: str = "") -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT f.path AS file_path,"
+        f"SELECT f.path AS file_path,"
         " COALESCE(d.description_normalized, d.description_raw) AS description,"
         " d.model, d.processed_at"
         " FROM descriptions d JOIN files f ON f.id = d.file_id"
+        f" WHERE 1=1 {scope_where}"
         " ORDER BY f.path"
     ).fetchall()
 
 
-def get_export_tags(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_export_tags(conn: sqlite3.Connection, scope_where: str = "") -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT f.path AS file_path,"
+        f"SELECT f.path AS file_path,"
         " r.tags_json AS tags,"
         " r.refined_description,"
         " r.new_terms_proposed_json AS new_terms_proposed"
         " FROM retag_output r JOIN files f ON f.id = r.file_id"
+        f" WHERE 1=1 {scope_where}"
         " ORDER BY f.path"
     ).fetchall()
 
@@ -1868,13 +2099,14 @@ def reset_temporal_fields(conn: sqlite3.Connection) -> int:
     return cur.rowcount
 
 
-def get_export_temporal_fields(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_export_temporal_fields(conn: sqlite3.Connection, scope_where: str = "") -> list[sqlite3.Row]:
     return conn.execute(
-        """
+        f"""
         SELECT f.path, ft.year, ft.decade, ft.month_name, ft.day_name,
                ft.season, ft.time_of_day, ft.holiday
         FROM file_temporal_fields ft
         JOIN files f ON f.id = ft.file_id
+        WHERE 1=1 {scope_where}
         ORDER BY f.path
         """
     ).fetchall()
@@ -2264,10 +2496,10 @@ def get_transcript_segments_for_export(conn: sqlite3.Connection) -> list[sqlite3
 # Coverage analytics (KB.P20)
 # ---------------------------------------------------------------------------
 
-def get_coverage_per_file(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_coverage_per_file(conn: sqlite3.Connection, scope_where: str = "") -> list[sqlite3.Row]:
     """Per-file enrichment coverage flags via a single LEFT JOIN query."""
     return conn.execute(
-        """
+        f"""
         SELECT
             f.path,
             CASE WHEN d.pass1_status = 'done'       THEN 1 ELSE 0 END AS has_description,
@@ -2307,6 +2539,7 @@ def get_coverage_per_file(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             ON tag_counts.file_id = f.id
         LEFT JOIN (SELECT file_id, COUNT(*) AS n FROM file_entity_matches WHERE stale = 0 GROUP BY file_id) ent_counts
             ON ent_counts.file_id = f.id
+        WHERE 1=1 {scope_where}
         ORDER BY f.path
         """
     ).fetchall()
@@ -2352,12 +2585,12 @@ def get_geolabels_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def get_gps_files_without_location_label(
     conn: sqlite3.Connection,
     *,
-    source_id: int | None = None,
-    file_type: str | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id, f.path,
                CAST(lat.value AS REAL) AS lat,
                CAST(lon.value AS REAL) AS lon
@@ -2367,12 +2600,10 @@ def get_gps_files_without_location_label(
         LEFT JOIN file_location_labels ll ON ll.file_id = f.id
         WHERE f.canonical_id IS NULL
           AND ll.file_id IS NULL
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.file_type = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (source_id, source_id, file_type, file_type, set_id, set_id),
+        params,
     ).fetchall()
 
 
@@ -2639,13 +2870,14 @@ def reset_summarize_to_pending(conn: sqlite3.Connection) -> None:
 def get_pending_summarize_files(
     conn: sqlite3.Connection,
     *,
-    source_id: int | None = None,
-    set_id: int | None = None,
+    scope: CorpusFilterSpec | None = None,
 ) -> list[sqlite3.Row]:
     """Files eligible for summarize: have a done description or transcription,
     no done summary, canonical files only."""
+    spec = scope or CorpusFilterSpec()
+    frag, params = spec.to_sql_fragment()
     return conn.execute(
-        """
+        f"""
         SELECT f.id
         FROM files f
         WHERE f.canonical_id IS NULL
@@ -2659,11 +2891,10 @@ def get_pending_summarize_files(
               SELECT 1 FROM file_summaries s
               WHERE s.file_id = f.id AND s.status = 'done'
           )
-          AND (? IS NULL OR f.source_id = ?)
-          AND (? IS NULL OR f.id IN (SELECT file_id FROM file_set_members WHERE set_id = ?))
+          {frag}
         ORDER BY f.id
         """,
-        (source_id, source_id, set_id, set_id),
+        params,
     ).fetchall()
 
 
@@ -2695,14 +2926,14 @@ def get_file_summary(
     ).fetchone()
 
 
-def get_export_summaries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_export_summaries(conn: sqlite3.Connection, scope_where: str = "") -> list[sqlite3.Row]:
     """Return done summaries joined to file path."""
     return conn.execute(
-        """
+        f"""
         SELECT f.path AS file_path, s.summary_text, s.model, s.processed_at
         FROM file_summaries s
         JOIN files f ON f.id = s.file_id
-        WHERE s.status = 'done'
+        WHERE s.status = 'done' {scope_where}
         ORDER BY f.path
         """
     ).fetchall()

@@ -104,7 +104,7 @@ def test_kb_create_template_general_media(tmp_path, monkeypatch):
     seed_dir = tmp_path / "seed" / "general-media"
     seed_dir.mkdir(parents=True)
     (seed_dir / "stopwords.txt").write_text("photo\nvideo\nclip\n", encoding="utf-8")
-    (seed_dir / "capture_rules.yaml").write_text("[]", encoding="utf-8")
+    (seed_dir / "pattern_rules.yaml").write_text('{"rules": []}', encoding="utf-8")
 
     result = runner.invoke(app, ["kb", "create", "gm-kb", "--template", "general-media"])
     assert result.exit_code == 0, result.output
@@ -139,21 +139,23 @@ def _make_export_bundle(bundle_dir: Path) -> None:
     # stopwords.txt
     (bundle_dir / "stopwords.txt").write_text("photo\nvideo\n", encoding="utf-8")
 
-    # corrections.yaml
-    with open(bundle_dir / "corrections.yaml", "w", encoding="utf-8") as fh:
-        yaml.dump({"Brdg": "Bridge"}, fh)
+    # corrections.csv — exact replace rules
+    with open(bundle_dir / "corrections.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["raw", "canonical", "type"])
+        writer.writeheader()
+        writer.writerow({"raw": "Brdg", "canonical": "Bridge", "type": "correction"})
 
-    # patterns.yaml
+    # patterns.yaml — flat list format
     patterns = {
-        "capture_rules": [
-            {"pattern": r"^(\d{8})$", "label": "date_8", "extract_as": "file_date",
+        "rules": [
+            {"pattern": r"^(\d{8})$", "is_regex": True, "action": "capture",
+             "label": "date_8", "extract_as": "file_date",
              "value_type": "date", "format_str": None, "keep_token": False}
         ],
         "substitute_rules": [
             {"pattern": r"Hwy\s*(\d+)", "replacement": r"Highway \1",
              "label": "highway_num", "applies_to": "both"}
         ],
-        "pattern_corrections": [],
     }
     with open(bundle_dir / "patterns.yaml", "w", encoding="utf-8") as fh:
         yaml.dump(patterns, fh)
@@ -220,11 +222,11 @@ def test_kb_create_import_kb_corrections(tmp_path, monkeypatch):
     kb_path = tmp_path / "knowledge-bases" / "corr-kb" / "knowledge.db"
     kb_conn = open_kb(kb_path)
     row = kb_conn.execute(
-        "SELECT canonical_term FROM corrections WHERE raw_term='Brdg' AND type='exact'"
+        "SELECT replace_with FROM pattern_rules WHERE pattern='Brdg' AND action='replace'"
     ).fetchone()
     kb_conn.close()
     assert row is not None
-    assert row["canonical_term"] == "Bridge"
+    assert row["replace_with"] == "Bridge"
 
 
 def test_kb_create_import_kb_patterns(tmp_path, monkeypatch):
@@ -236,7 +238,9 @@ def test_kb_create_import_kb_patterns(tmp_path, monkeypatch):
 
     kb_path = tmp_path / "knowledge-bases" / "pat-kb" / "knowledge.db"
     kb_conn = open_kb(kb_path)
-    capture_count = kb_conn.execute("SELECT COUNT(*) FROM capture_rules").fetchone()[0]
+    capture_count = kb_conn.execute(
+        "SELECT COUNT(*) FROM pattern_rules WHERE action='capture'"
+    ).fetchone()[0]
     substitute_count = kb_conn.execute("SELECT COUNT(*) FROM substitute_rules").fetchone()[0]
     kb_conn.close()
     assert capture_count >= 1
