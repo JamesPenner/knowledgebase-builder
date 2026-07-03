@@ -16,8 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1704 passing, 2 skipped
+- **Tests:** 1710 passing, 2 skipped
 - **Last completed sprint:** KB.AI1 (Navigation Restructure — four-section nav: Build/Review/Knowledge/Corpus; Normalise/Suggest/New Terms added to Review section with badge spans; `nav_badges.js` polls all three pending endpoints; `suggest_badge.js` deleted; +19 net tests)
+- **Last hotfix:** Face bbox coordinate fix — `detect_faces` was scaling `buffalo_l det_10g` normalized [0,1] output by `orig_w/640` instead of `orig_w`; also fixes inverted y1/y2 for edge faces; +8 unit tests (1710 total)
 - **Next planned sprint:** TBD
 
 ---
