@@ -544,3 +544,122 @@ class TestFaceCLI:
         from src.cli.face import app
         names = [cmd.name for cmd in app.registered_commands]
         assert "download" in names
+
+
+# ---------------------------------------------------------------------------
+# detect_faces — coordinate handling (no ONNX model needed; patches session)
+# ---------------------------------------------------------------------------
+
+class TestDetectFacesCoordinates:
+    """Tests for detect_faces coordinate-space detection and bbox normalisation.
+
+    The buffalo_l det_10g model outputs normalized coords [0,1]; other SCRFD
+    exports output pixel coords in the 640×640 input space.  The function must
+    detect which format is in use and scale to original image pixels correctly.
+    """
+
+    @staticmethod
+    def _make_img_bytes(w, h):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), color=(128, 128, 128)).save(buf, format="JPEG")
+        return buf.getvalue()
+
+    @staticmethod
+    def _mock_session(score_val, bbox_raw):
+        """Return a MagicMock InferenceSession for a single detection."""
+        import numpy as np
+        from unittest.mock import MagicMock
+        score_arr = np.array([[score_val]], dtype=np.float32)
+        bbox_arr = np.array([bbox_raw], dtype=np.float32)
+        sess = MagicMock()
+        sess.get_inputs.return_value = [MagicMock(name="input")]
+        sess.run.return_value = [score_arr, bbox_arr]
+        return sess
+
+    def _run(self, img_w, img_h, score_val, bbox_raw):
+        from unittest.mock import patch, MagicMock
+        img_bytes = self._make_img_bytes(img_w, img_h)
+        sess = self._mock_session(score_val, bbox_raw)
+        with patch("onnxruntime.InferenceSession", return_value=sess), \
+             patch("pathlib.Path.exists", return_value=True):
+            from src.stages.face import detect_faces
+            return detect_faces(img_bytes, "/fake/det_10g.onnx")
+
+    def test_normalized_coords_scale_to_original_pixels(self):
+        """Normalized output [0.2, 0.1, 0.5, 0.6] on 640×480 should give pixel coords."""
+        faces = self._run(640, 480, score_val=0.9, bbox_raw=[0.2, 0.1, 0.5, 0.6])
+        assert len(faces) == 1
+        x1, y1, x2, y2 = faces[0]["bbox"]
+        assert abs(x1 - 0.2 * 640) < 1.0
+        assert abs(y1 - 0.1 * 480) < 1.0
+        assert abs(x2 - 0.5 * 640) < 1.0
+        assert abs(y2 - 0.6 * 480) < 1.0
+
+    def test_pixel_coords_scale_by_ratio(self):
+        """Pixel-space output [128, 64, 320, 384] on 1280×960 should scale by 2×."""
+        import numpy as np
+        from unittest.mock import patch, MagicMock
+        img_bytes = self._make_img_bytes(1280, 960)
+        score_arr = np.array([[0.9]], dtype=np.float32)
+        bbox_arr = np.array([[128.0, 64.0, 320.0, 384.0]], dtype=np.float32)
+        sess = MagicMock()
+        sess.get_inputs.return_value = [MagicMock(name="input")]
+        sess.run.return_value = [score_arr, bbox_arr]
+        with patch("onnxruntime.InferenceSession", return_value=sess), \
+             patch("pathlib.Path.exists", return_value=True):
+            from src.stages.face import detect_faces
+            faces = detect_faces(img_bytes, "/fake/det_10g.onnx")
+        assert len(faces) == 1
+        x1, _y1, x2, _y2 = faces[0]["bbox"]
+        # scale_x = 1280/640 = 2.0 → 128*2=256, 320*2=640
+        assert abs(x1 - 256.0) < 1.0
+        assert abs(x2 - 640.0) < 1.0
+
+    def test_inverted_y_coords_are_swapped(self):
+        """Model output with y1 > y2 (e.g. near image edge) must be corrected."""
+        faces = self._run(4024, 3024, score_val=0.85,
+                          bbox_raw=[0.2, 0.32, 0.24, 0.28])  # y1=0.32 > y2=0.28
+        assert len(faces) == 1
+        _x1, y1, _x2, y2 = faces[0]["bbox"]
+        assert y1 < y2
+
+    def test_inverted_x_coords_are_swapped(self):
+        """Model output with x1 > x2 must be corrected."""
+        faces = self._run(4024, 3024, score_val=0.85,
+                          bbox_raw=[0.28, 0.1, 0.20, 0.6])   # x1=0.28 > x2=0.20
+        assert len(faces) == 1
+        x1, _y1, x2, _y2 = faces[0]["bbox"]
+        assert x1 < x2
+
+    def test_degenerate_bbox_too_small_skipped(self):
+        """A bbox < 4px wide after scaling must be skipped."""
+        # 0.0005 * 4024 ≈ 2px — below the 4px minimum
+        faces = self._run(4024, 3024, score_val=0.9,
+                          bbox_raw=[0.0, 0.0, 0.0005, 0.5])
+        assert len(faces) == 0
+
+    def test_low_score_face_excluded(self):
+        """Faces below the 0.5 score threshold must not be returned."""
+        faces = self._run(640, 480, score_val=0.3, bbox_raw=[0.1, 0.1, 0.5, 0.6])
+        assert len(faces) == 0
+
+    def test_score_included_in_output(self):
+        """Returned face dict must include the detection confidence score."""
+        faces = self._run(640, 480, score_val=0.92, bbox_raw=[0.1, 0.1, 0.5, 0.6])
+        assert len(faces) == 1
+        assert abs(faces[0]["score"] - 0.92) < 0.01
+
+    def test_empty_outputs_returns_no_faces(self):
+        """When the model returns no matching score/bbox tensors, return []."""
+        import numpy as np
+        from unittest.mock import patch, MagicMock
+        img_bytes = self._make_img_bytes(640, 480)
+        sess = MagicMock()
+        sess.get_inputs.return_value = [MagicMock(name="input")]
+        sess.run.return_value = [np.zeros((5, 3), dtype=np.float32)]
+        with patch("onnxruntime.InferenceSession", return_value=sess), \
+             patch("pathlib.Path.exists", return_value=True):
+            from src.stages.face import detect_faces
+            assert detect_faces(img_bytes, "/fake/det_10g.onnx") == []

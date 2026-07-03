@@ -73,13 +73,30 @@ def detect_faces(img_bytes: bytes, detection_model_path: str) -> list[dict]:
     scale_x = orig_w / input_size[0]
     scale_y = orig_h / input_size[1]
 
+    # buffalo_l det_10g outputs normalized coords [0,1] relative to input_size.
+    # Other SCRFD exports output absolute pixel coords in input_size space.
+    # Detect by checking whether all bbox values are in the normalized range.
+    coords_normalized = len(bboxes) > 0 and float(np.abs(bboxes).max()) < 2.0
+
     for score, bbox in zip(scores, bboxes):
         if float(score) < score_threshold:
             continue
-        x1 = float(bbox[0]) * scale_x
-        y1 = float(bbox[1]) * scale_y
-        x2 = float(bbox[2]) * scale_x
-        y2 = float(bbox[3]) * scale_y
+        if coords_normalized:
+            x1 = float(bbox[0]) * orig_w
+            y1 = float(bbox[1]) * orig_h
+            x2 = float(bbox[2]) * orig_w
+            y2 = float(bbox[3]) * orig_h
+        else:
+            x1 = float(bbox[0]) * scale_x
+            y1 = float(bbox[1]) * scale_y
+            x2 = float(bbox[2]) * scale_x
+            y2 = float(bbox[3]) * scale_y
+        # Normalize coordinate order — model occasionally returns inverted coords
+        # for faces near the image edge.
+        x1, x2 = min(x1, x2), max(x1, x2)
+        y1, y2 = min(y1, y2), max(y1, y2)
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            continue  # degenerate bbox — skip
         faces.append({"bbox": [x1, y1, x2, y2], "score": float(score)})
 
     return faces
