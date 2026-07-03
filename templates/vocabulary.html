@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Vocabulary — {{ kb }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Vocabulary</h1>
+<p class="page-subtitle">
+  Manage canonical terms and synonyms. Confirmed proposals write Replace rules and update synonym groups used during keyword suggestion.
+</p>
+
+<div style="display:flex;gap:1.5rem;align-items:flex-start">
+  <div id="vocabulary-list"
+       style="flex:1;min-width:0"
+       hx-get="/knowledge/vocabulary/partials/list?kb={{ kb }}"
+       hx-trigger="load, vocabChanged from:body"
+       hx-swap="innerHTML">
+    <p class="empty-state">Loading…</p>
+  </div>
+  <div id="vocabulary-form" style="width:440px;flex-shrink:0"
+       hx-get="/knowledge/vocabulary/partials/form?kb={{ kb }}"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+  </div>
+</div>
+
+<div id="vocabulary-proposals"
+     style="margin-top:2rem"
+     hx-get="/knowledge/vocabulary/partials/proposals?kb={{ kb }}"
+     hx-trigger="load, proposalsChanged from:body"
+     hx-swap="innerHTML">
+  <p class="empty-state">Loading proposals…</p>
+</div>
+
+<div id="vocabulary-taxonomy"
+     style="margin-top:2rem"
+     hx-get="/knowledge/vocabulary/partials/taxonomy?kb={{ kb }}"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <p class="empty-state">Loading taxonomy…</p>
+</div>
+{% endblock %}

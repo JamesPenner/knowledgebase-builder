@@ -16,6 +16,15 @@ _HX_TRIGGER_BOTH = '{"pendingChanged": null, "decisionsChanged": null}'
 _HX_TRIGGER_DECISIONS = '{"decisionsChanged": null}'
 
 
+def _err_html(msg: str) -> Response:
+    return Response(content=f"<p style='color:#f87171'>{msg}</p>", media_type="text/html")
+
+
+def _ok_html(msg: str, *, trigger: str | None = None) -> Response:
+    headers = {"HX-Trigger": trigger} if trigger else {}
+    return Response(content=f"<p style='color:#22c55e'>{msg}</p>", media_type="text/html", headers=headers)
+
+
 # ---------------------------------------------------------------------------
 # Page routes
 # ---------------------------------------------------------------------------
@@ -481,7 +490,7 @@ async def ui_normalise_decide(
     canonical_term: str = Form(""),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.corpus import open_corpus, set_token_decided
+    from src.db.corpus import get_analyse_token_by_id, open_corpus, set_token_decided
     from src.db.kb import (
         add_pattern_rule,
         add_to_stoplist,
@@ -492,60 +501,55 @@ async def ui_normalise_decide(
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
-
-    if action == "accept":
-        pass  # no KB rule — token is kept as-is by normalize
-    elif action == "capture":
-        add_pattern_rule(
-            kb_conn,
-            pattern=pattern,
-            action="capture",
-            is_regex=True,
-            label=label or extract_as,
-            extract_as=extract_as,
-            format_str=format_str,
-            value_type=value_type,
-            keep_token=keep_token.lower() == "true",
-        )
-        bump_kb_version(kb_conn, "pattern_rule_added")
-    elif action == "ignore":
-        token_row = corpus_conn.execute(
-            "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
-        ).fetchone()
-        if token_row:
-            add_to_stoplist(kb_conn, token_row["token"])
-            bump_kb_version(kb_conn, "stoplist_updated")
-    elif action == "correct":
-        token_row = corpus_conn.execute(
-            "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
-        ).fetchone()
-        if token_row:
+    try:
+        if action == "accept":
+            pass  # no KB rule — token is kept as-is by normalize
+        elif action == "capture":
             add_pattern_rule(
                 kb_conn,
-                pattern=token_row["token"],
-                action="replace",
-                is_regex=False,
-                replace_with=canonical_term,
-                replace_type="correction",
+                pattern=pattern,
+                action="capture",
+                is_regex=True,
+                label=label or extract_as,
+                extract_as=extract_as,
+                format_str=format_str,
+                value_type=value_type,
+                keep_token=keep_token.lower() == "true",
             )
             bump_kb_version(kb_conn, "pattern_rule_added")
-    elif action == "reject":
-        token_row = corpus_conn.execute(
-            "SELECT token FROM analyse_tokens WHERE id=?", (item_id,)
-        ).fetchone()
-        if token_row:
-            add_pattern_rule(
-                kb_conn,
-                pattern=token_row["token"],
-                action="reject",
-                is_regex=False,
-                label=token_row["token"],
-            )
-            bump_kb_version(kb_conn, "pattern_rule_added")
+        elif action == "ignore":
+            token_row = get_analyse_token_by_id(corpus_conn, item_id)
+            if token_row:
+                add_to_stoplist(kb_conn, token_row["token"])
+                bump_kb_version(kb_conn, "stoplist_updated")
+        elif action == "correct":
+            token_row = get_analyse_token_by_id(corpus_conn, item_id)
+            if token_row:
+                add_pattern_rule(
+                    kb_conn,
+                    pattern=token_row["token"],
+                    action="replace",
+                    is_regex=False,
+                    replace_with=canonical_term,
+                    replace_type="correction",
+                )
+                bump_kb_version(kb_conn, "pattern_rule_added")
+        elif action == "reject":
+            token_row = get_analyse_token_by_id(corpus_conn, item_id)
+            if token_row:
+                add_pattern_rule(
+                    kb_conn,
+                    pattern=token_row["token"],
+                    action="reject",
+                    is_regex=False,
+                    label=token_row["token"],
+                )
+                bump_kb_version(kb_conn, "pattern_rule_added")
 
-    set_token_decided(corpus_conn, item_id)
-    corpus_conn.close()
-    kb_conn.close()
+        set_token_decided(corpus_conn, item_id)
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
@@ -564,28 +568,28 @@ async def ui_normalise_bulk(
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    try:
+        if action == "accept_all":
+            set_all_pending_decided(corpus_conn)
 
-    if action == "accept_all":
-        set_all_pending_decided(corpus_conn)
+        elif action == "ignore_all":
+            rows = get_all_pending_tokens(corpus_conn)
+            for row in rows:
+                add_to_stoplist(kb_conn, row["token"])
+            if rows:
+                bump_kb_version(kb_conn, "stoplist_updated")
+            set_all_pending_decided(corpus_conn)
 
-    elif action == "ignore_all":
-        rows = get_all_pending_tokens(corpus_conn)
-        for row in rows:
-            add_to_stoplist(kb_conn, row["token"])
-        if rows:
-            bump_kb_version(kb_conn, "stoplist_updated")
-        set_all_pending_decided(corpus_conn)
-
-    elif action == "reject_all":
-        rows = get_all_pending_tokens(corpus_conn)
-        for row in rows:
-            add_pattern_rule(kb_conn, pattern=row["token"], action="reject", is_regex=False, label=row["token"])
-        if rows:
-            bump_kb_version(kb_conn, "pattern_rule_added")
-        set_all_pending_decided(corpus_conn)
-
-    corpus_conn.close()
-    kb_conn.close()
+        elif action == "reject_all":
+            rows = get_all_pending_tokens(corpus_conn)
+            for row in rows:
+                add_pattern_rule(kb_conn, pattern=row["token"], action="reject", is_regex=False, label=row["token"])
+            if rows:
+                bump_kb_version(kb_conn, "pattern_rule_added")
+            set_all_pending_decided(corpus_conn)
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
@@ -596,11 +600,13 @@ def _build_decisions_context(corpus_path: Path, kb_path: Path) -> dict:
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
-    vocab_terms = [dict(r) for r in get_vocabulary_terms(kb_conn)]
-    stoplist = get_stoplist_terms(kb_conn)
-    decided = get_decided_candidates(corpus_conn)
-    corpus_conn.close()
-    kb_conn.close()
+    try:
+        vocab_terms = [dict(r) for r in get_vocabulary_terms(kb_conn)]
+        stoplist = get_stoplist_terms(kb_conn)
+        decided = get_decided_candidates(corpus_conn)
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
 
     ignored: list[dict] = []
     rejected: list[dict] = []
@@ -691,49 +697,48 @@ async def ui_suggest_decide(
     corrected_to: str = Form(""),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.corpus import open_corpus
+    from src.db.corpus import get_candidate_by_id, open_corpus
     from src.db.kb import add_to_stoplist, add_vocabulary_term, bump_kb_version, open_kb
 
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    try:
+        row = get_candidate_by_id(corpus_conn, candidate_id)
 
-    row = corpus_conn.execute(
-        "SELECT term FROM candidates WHERE id=?", (candidate_id,)
-    ).fetchone()
+        if row:
+            term = row["term"]
+            if action == "accept":
+                add_vocabulary_term(kb_conn, term)
+                bump_kb_version(kb_conn, "vocabulary_term_added")
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE term=? AND status='pending'",
+                    (term,),
+                )
+            elif action == "ignore":
+                add_to_stoplist(kb_conn, term, source="domain")
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=? AND status='pending'",
+                    (term,),
+                )
+            elif action == "correct" and corrected_to:
+                add_vocabulary_term(kb_conn, corrected_to)
+                bump_kb_version(kb_conn, "vocabulary_term_added")
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='corrected', corrected_to=? WHERE term=? AND status='pending'",
+                    (corrected_to, term),
+                )
+            elif action == "reject":
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=? AND status='pending'",
+                    (term,),
+                )
 
-    if row:
-        term = row["term"]
-        if action == "accept":
-            add_vocabulary_term(kb_conn, term)
-            bump_kb_version(kb_conn, "vocabulary_term_added")
-            corpus_conn.execute(
-                "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE term=? AND status='pending'",
-                (term,),
-            )
-        elif action == "ignore":
-            add_to_stoplist(kb_conn, term, source="domain")
-            corpus_conn.execute(
-                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=? AND status='pending'",
-                (term,),
-            )
-        elif action == "correct" and corrected_to:
-            add_vocabulary_term(kb_conn, corrected_to)
-            bump_kb_version(kb_conn, "vocabulary_term_added")
-            corpus_conn.execute(
-                "UPDATE candidates SET status='corrected', corrected_to=? WHERE term=? AND status='pending'",
-                (corrected_to, term),
-            )
-        elif action == "reject":
-            corpus_conn.execute(
-                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=? AND status='pending'",
-                (term,),
-            )
-
-    corpus_conn.commit()
-    kb_conn.commit()
-    corpus_conn.close()
-    kb_conn.close()
+        corpus_conn.commit()
+        kb_conn.commit()
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
@@ -751,38 +756,39 @@ async def ui_suggest_decide_all(
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    try:
+        rows = corpus_conn.execute(
+            "SELECT id, term FROM candidates WHERE status='pending'"
+        ).fetchall()
 
-    rows = corpus_conn.execute(
-        "SELECT id, term FROM candidates WHERE status='pending'"
-    ).fetchall()
+        for row in rows:
+            term = row["term"]
+            if action == "accept":
+                add_vocabulary_term(kb_conn, term)
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE id=?",
+                    (row["id"],),
+                )
+            elif action == "ignore":
+                add_to_stoplist(kb_conn, term, source="domain")
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE id=?",
+                    (row["id"],),
+                )
+            elif action == "reject":
+                corpus_conn.execute(
+                    "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE id=?",
+                    (row["id"],),
+                )
 
-    for row in rows:
-        term = row["term"]
-        if action == "accept":
-            add_vocabulary_term(kb_conn, term)
-            corpus_conn.execute(
-                "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE id=?",
-                (row["id"],),
-            )
-        elif action == "ignore":
-            add_to_stoplist(kb_conn, term, source="domain")
-            corpus_conn.execute(
-                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE id=?",
-                (row["id"],),
-            )
-        elif action == "reject":
-            corpus_conn.execute(
-                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE id=?",
-                (row["id"],),
-            )
+        if rows and action == "accept":
+            bump_kb_version(kb_conn, "vocabulary_term_added")
 
-    if rows and action == "accept":
-        bump_kb_version(kb_conn, "vocabulary_term_added")
-
-    corpus_conn.commit()
-    kb_conn.commit()
-    corpus_conn.close()
-    kb_conn.close()
+        corpus_conn.commit()
+        kb_conn.commit()
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
@@ -808,34 +814,35 @@ async def ui_suggest_reclassify(
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    try:
+        # Undo any prior state unconditionally — safe because both are idempotent
+        delete_vocabulary_term(kb_conn, term)
+        remove_from_stoplist(kb_conn, term)
 
-    # Undo any prior state unconditionally — safe because both are idempotent
-    delete_vocabulary_term(kb_conn, term)
-    remove_from_stoplist(kb_conn, term)
+        if action == "accept":
+            add_vocabulary_term(kb_conn, term)
+            bump_kb_version(kb_conn, "vocabulary_term_added")
+            corpus_conn.execute(
+                "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE term=?",
+                (term,),
+            )
+        elif action == "ignore":
+            add_to_stoplist(kb_conn, term, source="domain")
+            corpus_conn.execute(
+                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=?",
+                (term,),
+            )
+        elif action == "reject":
+            corpus_conn.execute(
+                "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=?",
+                (term,),
+            )
 
-    if action == "accept":
-        add_vocabulary_term(kb_conn, term)
-        bump_kb_version(kb_conn, "vocabulary_term_added")
-        corpus_conn.execute(
-            "UPDATE candidates SET status='accepted', corrected_to=NULL WHERE term=?",
-            (term,),
-        )
-    elif action == "ignore":
-        add_to_stoplist(kb_conn, term, source="domain")
-        corpus_conn.execute(
-            "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=?",
-            (term,),
-        )
-    elif action == "reject":
-        corpus_conn.execute(
-            "UPDATE candidates SET status='rejected', corrected_to=NULL WHERE term=?",
-            (term,),
-        )
-
-    corpus_conn.commit()
-    kb_conn.commit()
-    corpus_conn.close()
-    kb_conn.close()
+        corpus_conn.commit()
+        kb_conn.commit()
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_DECISIONS})
 
 
@@ -936,28 +943,29 @@ async def ui_new_terms_decide(
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    try:
+        if action == "accept":
+            add_vocabulary_term(kb_conn, term, source="new_terms")
+            bump_kb_version(kb_conn, "vocabulary_term_added")
+            kb_conn.commit()
+            merge_new_term_into_tags(corpus_conn, term)
+        elif action == "ignore":
+            add_to_stoplist(kb_conn, term, source="domain")
+            kb_conn.commit()
+        elif action == "reject":
+            add_pattern_rule(kb_conn, pattern=term, action="reject", is_regex=False, label=term)
+            kb_conn.commit()
+        elif action == "correct" and corrected_to:
+            add_pattern_rule(kb_conn, pattern=term, action="replace", is_regex=False,
+                             replace_with=corrected_to, replace_type="correction")
+            add_vocabulary_term(kb_conn, corrected_to)
+            bump_kb_version(kb_conn, "vocabulary_term_added")
+            kb_conn.commit()
 
-    if action == "accept":
-        add_vocabulary_term(kb_conn, term, source="new_terms")
-        bump_kb_version(kb_conn, "vocabulary_term_added")
-        kb_conn.commit()
-        merge_new_term_into_tags(corpus_conn, term)
-    elif action == "ignore":
-        add_to_stoplist(kb_conn, term, source="domain")
-        kb_conn.commit()
-    elif action == "reject":
-        add_pattern_rule(kb_conn, pattern=term, action="reject", is_regex=False, label=term)
-        kb_conn.commit()
-    elif action == "correct" and corrected_to:
-        add_pattern_rule(kb_conn, pattern=term, action="replace", is_regex=False,
-                         replace_with=corrected_to, replace_type="correction")
-        add_vocabulary_term(kb_conn, corrected_to)
-        bump_kb_version(kb_conn, "vocabulary_term_added")
-        kb_conn.commit()
-
-    corpus_conn.commit()
-    corpus_conn.close()
-    kb_conn.close()
+        corpus_conn.commit()
+    finally:
+        corpus_conn.close()
+        kb_conn.close()
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
@@ -996,21 +1004,23 @@ def ui_delete_decision(
     try:
         delete_decision(kb_conn, table, row_id)
     except ValueError:
-        kb_conn.close()
         return Response(content="", status_code=400)
-    kb_conn.close()
+    finally:
+        kb_conn.close()
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn2 = open_kb(kb_path)
-    remaining = {d["token"] for d in get_decisions(kb_conn2)}
-    kb_conn2.close()
-
-    for row in corpus_conn.execute(
-        "SELECT id, token FROM analyse_tokens WHERE status='decided'"
-    ).fetchall():
-        if row["token"] not in remaining:
-            set_token_pending(corpus_conn, row["id"])
-    corpus_conn.close()
+    try:
+        remaining = {d["token"] for d in get_decisions(kb_conn2)}
+        for row in corpus_conn.execute(
+            "SELECT id, token FROM analyse_tokens WHERE status='decided'"
+        ).fetchall():
+            if row["token"] not in remaining:
+                set_token_pending(corpus_conn, row["id"])
+        corpus_conn.commit()
+    finally:
+        corpus_conn.close()
+        kb_conn2.close()
 
     return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
@@ -1124,6 +1134,7 @@ def _speaker_review_301(request: Request):
 
 
 @router.get("/review/speakers/partials/queue", include_in_schema=False)
+@router.get("/knowledge/people/speakers/partials/queue", include_in_schema=False)
 def speaker_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
@@ -1144,6 +1155,7 @@ def speaker_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(r
 
 
 @router.get("/review/speakers/partials/decisions", include_in_schema=False)
+@router.get("/knowledge/people/speakers/partials/decisions", include_in_schema=False)
 def speaker_decisions_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
@@ -1164,6 +1176,7 @@ def speaker_decisions_partial(request: Request, paths: tuple[Path, Path] = Depen
 
 
 @router.post("/review/speakers/decide", include_in_schema=False)
+@router.post("/knowledge/people/speakers/decide", include_in_schema=False)
 async def ui_speaker_decide(
     cluster_id: int = Form(...),
     action: str = Form(...),
@@ -1214,6 +1227,7 @@ async def ui_speaker_decide(
 
 
 @router.delete("/review/speakers/decisions/{cluster_id}", include_in_schema=False)
+@router.delete("/knowledge/people/speakers/decisions/{cluster_id}", include_in_schema=False)
 def ui_speaker_unassign(
     cluster_id: int,
     paths: tuple[Path, Path] = Depends(resolve_kb),
@@ -1253,20 +1267,15 @@ async def ui_registry_update(
     if threshold_m:
         fields["threshold_m"] = threshold_m
     if not fields:
-        return Response(content="<p style='color:#f87171'>No fields provided.</p>",
-                        media_type="text/html")
+        return _err_html("No fields provided.")
     kb_conn = open_kb(kb_path)
     try:
         update_entity_table_entry(kb_conn, table, entry_id, fields)
     except ValueError as exc:
         kb_conn.close()
-        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+        return _err_html(str(exc))
     kb_conn.close()
-    return Response(
-        content="<p style='color:#4ade80'>Saved.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_REGISTRY},
-    )
+    return _ok_html("Saved.", trigger=_HX_TRIGGER_REGISTRY)
 
 
 @router.post("/knowledge/locations/registry/delete", include_in_schema=False)
@@ -1282,13 +1291,9 @@ async def ui_registry_delete(
         delete_entity_table_entry(kb_conn, table, entry_id)
     except ValueError as exc:
         kb_conn.close()
-        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+        return _err_html(str(exc))
     kb_conn.close()
-    return Response(
-        content="<p class='empty-state'>Entry deleted.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_REGISTRY},
-    )
+    return _ok_html("Entry deleted.", trigger=_HX_TRIGGER_REGISTRY)
 
 
 @router.post("/knowledge/locations/registry/merge", include_in_schema=False)
@@ -1301,20 +1306,15 @@ async def ui_registry_merge(
     from src.db.kb import merge_entity_table_entries, open_kb
     _, kb_path = paths
     if keep_id == drop_id:
-        return Response(content="<p style='color:#f87171'>keep_id and drop_id must differ.</p>",
-                        media_type="text/html")
+        return _err_html("keep_id and drop_id must differ.")
     kb_conn = open_kb(kb_path)
     try:
         merge_entity_table_entries(kb_conn, table, keep_id, drop_id)
     except ValueError as exc:
         kb_conn.close()
-        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+        return _err_html(str(exc))
     kb_conn.close()
-    return Response(
-        content="<p style='color:#4ade80'>Merged.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_REGISTRY},
-    )
+    return _ok_html("Merged.", trigger=_HX_TRIGGER_REGISTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -1511,21 +1511,17 @@ async def ui_person_add(
     from src.db.kb import open_kb
     name = preferred_name.strip()
     if not name:
-        return Response(content="<p style='color:#f87171'>Name is required.</p>", media_type="text/html")
+        return _err_html("Name is required.")
     _, kb_path = paths
     kb_conn = open_kb(kb_path)
     existing = kb_conn.execute("SELECT id FROM people WHERE preferred_name = ?", (name,)).fetchone()
     if existing:
         kb_conn.close()
-        return Response(content="<p style='color:#f87171'>Name already exists.</p>", media_type="text/html")
+        return _err_html("Name already exists.")
     kb_conn.execute("INSERT INTO people (preferred_name) VALUES (?)", (name,))
     kb_conn.commit()
     kb_conn.close()
-    return Response(
-        content="<p style='color:#4ade80'>Added.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
-    )
+    return _ok_html("Added.", trigger=_HX_TRIGGER_PEOPLE)
 
 
 @router.post("/knowledge/people/{person_id}/edit", include_in_schema=False)
@@ -1537,21 +1533,17 @@ async def ui_person_edit(
     from src.db.kb import open_kb
     name = preferred_name.strip()
     if not name:
-        return Response(content="<p style='color:#f87171'>Name is required.</p>", media_type="text/html")
+        return _err_html("Name is required.")
     _, kb_path = paths
     kb_conn = open_kb(kb_path)
     row = kb_conn.execute("SELECT id FROM people WHERE id = ?", (person_id,)).fetchone()
     if row is None:
         kb_conn.close()
-        return Response(content="<p style='color:#f87171'>Person not found.</p>", media_type="text/html")
+        return _err_html("Person not found.")
     kb_conn.execute("UPDATE people SET preferred_name = ? WHERE id = ?", (name, person_id))
     kb_conn.commit()
     kb_conn.close()
-    return Response(
-        content="<p style='color:#4ade80'>Saved.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
-    )
+    return _ok_html("Saved.", trigger=_HX_TRIGGER_PEOPLE)
 
 
 @router.post("/knowledge/people/{person_id}/delete", include_in_schema=False)
@@ -1569,18 +1561,14 @@ async def ui_person_delete(
     except KeyError:
         kb_conn.close()
         corpus_conn.close()
-        return Response(content="<p style='color:#f87171'>Person not found.</p>", media_type="text/html")
+        return _err_html("Person not found.")
     except ValueError as exc:
         kb_conn.close()
         corpus_conn.close()
-        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+        return _err_html(str(exc))
     kb_conn.close()
     corpus_conn.close()
-    return Response(
-        content="<p class='empty-state'>Deleted.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
-    )
+    return _ok_html("Deleted.", trigger=_HX_TRIGGER_PEOPLE)
 
 
 @router.post("/knowledge/people/{person_id}/merge", include_in_schema=False)
@@ -1596,29 +1584,17 @@ async def ui_person_merge(
     corpus_conn = open_corpus(corpus_path)
     try:
         merge_people(kb_conn, corpus_conn, person_id, merge_from_id)
-    except ValueError as exc:
+    except (ValueError, KeyError) as exc:
         kb_conn.close()
         corpus_conn.close()
-        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
-    except KeyError as exc:
-        kb_conn.close()
-        corpus_conn.close()
-        return Response(content=f"<p style='color:#f87171'>{exc}</p>", media_type="text/html")
+        return _err_html(str(exc))
     kb_conn.close()
     corpus_conn.close()
-    return Response(
-        content="<p style='color:#4ade80'>Merged.</p>",
-        media_type="text/html",
-        headers={"HX-Trigger": _HX_TRIGGER_PEOPLE},
-    )
+    return _ok_html("Merged.", trigger=_HX_TRIGGER_PEOPLE)
 
-
-# ---------------------------------------------------------------------------
-# Speaker review at new Knowledge section URL (KB.Q4)
-# ---------------------------------------------------------------------------
 
 @router.get("/knowledge/people/speakers", include_in_schema=False)
-def speaker_review_page_new(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+def speaker_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
     from src.db.corpus import (
@@ -1645,110 +1621,6 @@ def speaker_review_page_new(request: Request, paths: tuple[Path, Path] = Depends
         "counts": {"pending": len(pending), "assigned": len(assigned)},
     })
 
-
-@router.get("/knowledge/people/speakers/partials/queue", include_in_schema=False)
-def speaker_queue_partial_new(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
-    corpus_path, kb_path = paths
-    kb_name = request.query_params.get("kb", "")
-    from src.db.corpus import get_pending_speaker_clusters, open_corpus
-    from src.db.kb import get_all_people, open_kb
-
-    corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
-    pending = get_pending_speaker_clusters(corpus_conn)
-    people = get_all_people(kb_conn)
-    corpus_conn.close()
-    kb_conn.close()
-    return templates.TemplateResponse(request, "partials/speaker_clusters_queue.html", {
-        "kb": kb_name,
-        "pending": [dict(r) for r in pending],
-        "people": [dict(r) for r in people],
-    })
-
-
-@router.get("/knowledge/people/speakers/partials/decisions", include_in_schema=False)
-def speaker_decisions_partial_new(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
-    corpus_path, kb_path = paths
-    kb_name = request.query_params.get("kb", "")
-    from src.db.corpus import get_assigned_speaker_clusters, open_corpus
-    from src.db.kb import get_all_people, open_kb
-
-    corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
-    assigned = get_assigned_speaker_clusters(corpus_conn)
-    people_map = {r["id"]: r["preferred_name"] for r in get_all_people(kb_conn)}
-    corpus_conn.close()
-    kb_conn.close()
-    return templates.TemplateResponse(request, "partials/speaker_clusters_decisions.html", {
-        "kb": kb_name,
-        "assigned": [dict(r) for r in assigned],
-        "people_map": people_map,
-    })
-
-
-@router.post("/knowledge/people/speakers/decide", include_in_schema=False)
-async def ui_speaker_decide_new(
-    cluster_id: int = Form(...),
-    action: str = Form(...),
-    person_id: str = Form(""),
-    new_name: str = Form(""),
-    paths: tuple[Path, Path] = Depends(resolve_kb),
-) -> Response:
-    from src.db.corpus import (
-        assign_speaker_cluster,
-        get_voice_speaker_clusters,
-        open_corpus,
-    )
-    from src.db.kb import merge_voice_centroid, open_kb, upsert_person
-
-    corpus_path, kb_path = paths
-    corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
-
-    pid: int | None = int(person_id) if person_id.strip() else None
-    label: str = ""
-
-    if action == "assign":
-        if pid is not None:
-            row = kb_conn.execute(
-                "SELECT preferred_name FROM people WHERE id = ?", (pid,)
-            ).fetchone()
-            label = row["preferred_name"] if row else ""
-        elif new_name.strip():
-            pid = upsert_person(kb_conn, new_name.strip())
-            label = new_name.strip()
-        else:
-            corpus_conn.close()
-            kb_conn.close()
-            return Response(content="person_id or new_name required", status_code=400)
-
-        clusters = {r["id"]: r for r in get_voice_speaker_clusters(corpus_conn)}
-        cluster = clusters.get(cluster_id)
-        if cluster is not None and cluster["centroid"] is not None:
-            merge_voice_centroid(kb_conn, pid, bytes(cluster["centroid"]), cluster["member_count"])
-        kb_conn.commit()
-
-        assign_speaker_cluster(corpus_conn, cluster_id, pid, label)
-        corpus_conn.commit()
-
-    corpus_conn.close()
-    kb_conn.close()
-    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
-
-
-@router.delete("/knowledge/people/speakers/decisions/{cluster_id}", include_in_schema=False)
-def ui_speaker_unassign_new(
-    cluster_id: int,
-    paths: tuple[Path, Path] = Depends(resolve_kb),
-) -> Response:
-    from src.db.corpus import open_corpus, unassign_speaker_cluster
-
-    corpus_path, _ = paths
-    corpus_conn = open_corpus(corpus_path)
-    unassign_speaker_cluster(corpus_conn, cluster_id)
-    corpus_conn.commit()
-    corpus_conn.close()
-    return Response(content="", headers={"HX-Trigger": _HX_TRIGGER_BOTH})
 
 
 # ---------------------------------------------------------------------------
@@ -1973,3 +1845,528 @@ async def ui_pattern_rule_delete(
         media_type="text/html",
         headers={"HX-Trigger": _HX_TRIGGER_RULES},
     )
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary manager
+# ---------------------------------------------------------------------------
+
+_HX_TRIGGER_VOCAB = '{"vocabChanged": null}'
+_HX_TRIGGER_PROPOSALS = '{"proposalsChanged": null}'
+
+
+def _vocab_terms_for_template(kb_conn) -> list[dict]:
+    import json as _json
+    rows = kb_conn.execute("SELECT * FROM vocabulary ORDER BY term").fetchall()
+    result = []
+    for row in rows:
+        try:
+            syns = _json.loads(row["synonyms_json"] or "[]")
+        except (ValueError, TypeError):
+            syns = []
+        result.append({
+            "term": row["term"],
+            "source": row["source"],
+            "write_synonyms": row["write_synonyms"],
+            "synonyms": syns,
+        })
+    return result
+
+
+def _proposals_for_template(kb_conn) -> list[dict]:
+    import json as _json
+    from src.stages.vocab import _suggest_canonical
+    rows = kb_conn.execute(
+        "SELECT * FROM vocab_proposals WHERE status='pending' ORDER BY source, added_at"
+    ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            terms = _json.loads(row["terms_json"])
+        except (ValueError, TypeError):
+            terms = []
+        result.append({
+            "id": row["id"],
+            "terms": terms,
+            "source": row["source"],
+            "source_detail": row["source_detail"],
+            "suggested": _suggest_canonical(terms, row["source"] or "", row["source_detail"]),
+        })
+    return result
+
+
+@router.get("/knowledge/vocabulary", include_in_schema=False)
+def vocabulary_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    kb_name = request.query_params.get("kb", "")
+    return templates.TemplateResponse(request, "vocabulary.html", {"kb": kb_name})
+
+
+@router.get("/knowledge/vocabulary/partials/list", include_in_schema=False)
+def vocabulary_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    from src.db.kb import open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    kb_conn = open_kb(kb_path)
+    try:
+        terms = _vocab_terms_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_list.html", {
+        "kb": kb_name,
+        "terms": terms,
+    })
+
+
+@router.get("/knowledge/vocabulary/partials/form", include_in_schema=False)
+def vocabulary_form_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    import json as _json
+    from src.db.kb import open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    term_name = request.query_params.get("term", "")
+    term = None
+    all_term_names: list[str] = []
+    kb_conn = open_kb(kb_path)
+    try:
+        rows = kb_conn.execute("SELECT term FROM vocabulary ORDER BY term").fetchall()
+        all_term_names = [r["term"] for r in rows]
+        if term_name:
+            row = kb_conn.execute(
+                "SELECT * FROM vocabulary WHERE term=?", (term_name,)
+            ).fetchone()
+            if row:
+                try:
+                    syns = _json.loads(row["synonyms_json"] or "[]")
+                except (ValueError, TypeError):
+                    syns = []
+                term = {
+                    "term": row["term"],
+                    "source": row["source"],
+                    "write_synonyms": row["write_synonyms"],
+                    "synonyms": syns,
+                }
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_form.html", {
+        "kb": kb_name,
+        "term": term,
+        "all_terms": all_term_names,
+    })
+
+
+@router.get("/knowledge/vocabulary/partials/proposals", include_in_schema=False)
+def vocabulary_proposals_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    from src.db.kb import open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    kb_conn = open_kb(kb_path)
+    try:
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+@router.post("/knowledge/vocabulary/add", include_in_schema=False)
+async def vocabulary_add(
+    request: Request,
+    term: str = Form(...),
+    synonyms: str = Form(""),
+    write_synonyms: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    import json as _json
+    from src.db.kb import open_kb
+    _, kb_path = paths
+    term = term.strip()
+    if not term:
+        return Response(
+            content="<p style='color:#dc2626'>Term cannot be empty.</p>",
+            media_type="text/html",
+        )
+    syn_list = [s.strip() for s in synonyms.split(",") if s.strip()] if synonyms.strip() else []
+    ws = 1 if write_synonyms == "1" else 0
+    kb_conn = open_kb(kb_path)
+    try:
+        existing = kb_conn.execute(
+            "SELECT id FROM vocabulary WHERE term=?", (term,)
+        ).fetchone()
+        if existing:
+            return Response(
+                content="<p style='color:#dc2626'>Term already exists.</p>",
+                media_type="text/html",
+            )
+        kb_conn.execute(
+            "INSERT INTO vocabulary (term, synonyms_json, source, write_synonyms) VALUES (?, ?, 'user', ?)",
+            (term, _json.dumps(syn_list, ensure_ascii=False), ws if write_synonyms else None),
+        )
+        kb_conn.commit()
+    finally:
+        kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Term added.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_VOCAB},
+    )
+
+
+@router.post("/knowledge/vocabulary/{term}/edit", include_in_schema=False)
+async def vocabulary_edit(
+    term: str,
+    synonyms: str = Form(""),
+    write_synonyms: str = Form(""),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    import json as _json
+    from src.db.kb import open_kb, update_vocabulary_term
+    _, kb_path = paths
+    syn_list = [s.strip() for s in synonyms.split(",") if s.strip()] if synonyms.strip() else []
+    ws = 1 if write_synonyms == "1" else 0
+    kb_conn = open_kb(kb_path)
+    try:
+        existing = kb_conn.execute(
+            "SELECT id FROM vocabulary WHERE term=?", (term,)
+        ).fetchone()
+        if not existing:
+            return Response(
+                content="<p style='color:#dc2626'>Term not found.</p>",
+                media_type="text/html",
+                status_code=404,
+            )
+        update_vocabulary_term(
+            kb_conn,
+            term,
+            _json.dumps(syn_list, ensure_ascii=False),
+            ws if write_synonyms else None,
+        )
+    finally:
+        kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Term updated.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_VOCAB},
+    )
+
+
+@router.post("/knowledge/vocabulary/{term}/delete", include_in_schema=False)
+async def vocabulary_delete(
+    term: str,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import delete_vocabulary_term, open_kb
+    _, kb_path = paths
+    kb_conn = open_kb(kb_path)
+    try:
+        delete_vocabulary_term(kb_conn, term)
+    finally:
+        kb_conn.close()
+    return Response(
+        content="<p style='color:#4ade80'>Term deleted.</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_VOCAB},
+    )
+
+
+@router.post("/knowledge/vocabulary/merge", include_in_schema=False)
+async def vocabulary_merge(
+    keep: str = Form(...),
+    merge: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import merge_vocabulary_terms, open_kb
+    _, kb_path = paths
+    keep = keep.strip()
+    merge = merge.strip()
+    if not keep or not merge:
+        return Response(
+            content="<p style='color:#dc2626'>Both terms are required.</p>",
+            media_type="text/html",
+        )
+    if keep == merge:
+        return Response(
+            content="<p style='color:#dc2626'>Cannot merge a term with itself.</p>",
+            media_type="text/html",
+        )
+    kb_conn = open_kb(kb_path)
+    try:
+        keep_row = kb_conn.execute(
+            "SELECT id FROM vocabulary WHERE term=?", (keep,)
+        ).fetchone()
+        if not keep_row:
+            return Response(
+                content="<p style='color:#dc2626'>Canonical term not found in vocabulary.</p>",
+                media_type="text/html",
+            )
+        merge_row = kb_conn.execute(
+            "SELECT id FROM vocabulary WHERE term=?", (merge,)
+        ).fetchone()
+        if not merge_row:
+            return Response(
+                content="<p style='color:#dc2626'>Term to merge not found in vocabulary.</p>",
+                media_type="text/html",
+            )
+        merge_vocabulary_terms(kb_conn, keep, merge)
+    finally:
+        kb_conn.close()
+    return Response(
+        content=f"<p style='color:#4ade80'>Merged \"{merge}\" into \"{keep}\".</p>",
+        media_type="text/html",
+        headers={"HX-Trigger": _HX_TRIGGER_VOCAB},
+    )
+
+
+@router.post("/knowledge/vocabulary/proposals/generate", include_in_schema=False)
+async def vocabulary_proposals_generate(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import open_kb
+    from src.stages.vocab import generate_proposals
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    kb_conn = open_kb(kb_path)
+    try:
+        generate_proposals(kb_conn)
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/{proposal_id}/confirm", include_in_schema=False)
+async def vocabulary_proposal_confirm(
+    request: Request,
+    proposal_id: int,
+    canonical: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import confirm_vocab_proposal, open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    kb_conn = open_kb(kb_path)
+    try:
+        confirm_vocab_proposal(kb_conn, proposal_id, canonical.strip())
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/{proposal_id}/dismiss", include_in_schema=False)
+async def vocabulary_proposal_dismiss(
+    request: Request,
+    proposal_id: int,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import dismiss_vocab_proposal, open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    kb_conn = open_kb(kb_path)
+    try:
+        dismiss_vocab_proposal(kb_conn, proposal_id)
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/suggest-synonyms", include_in_schema=False)
+async def vocabulary_suggest_synonyms(
+    request: Request,
+    term: str = Form(...),
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from pathlib import Path as _Path
+    from src.config import load_config
+    from src.db.kb import open_kb
+    from src.stages.vocab_llm import suggest_synonyms
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    config = load_config(_Path("config.yaml"), corpus_path.parent / "config.yaml")
+    kb_conn = open_kb(kb_path)
+    try:
+        suggest_synonyms(kb_conn, config, term.strip())
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/suggest-semantic", include_in_schema=False)
+async def vocabulary_suggest_semantic(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from pathlib import Path as _Path
+    from src.config import load_config
+    from src.db.kb import open_kb
+    from src.stages.vocab_llm import suggest_semantic_groupings
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    config = load_config(_Path("config.yaml"), corpus_path.parent / "config.yaml")
+    kb_conn = open_kb(kb_path)
+    try:
+        suggest_semantic_groupings(kb_conn, config)
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/suggest-thematic", include_in_schema=False)
+async def vocabulary_suggest_thematic(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from pathlib import Path as _Path
+    from src.config import load_config
+    from src.db.kb import open_kb
+    from src.stages.vocab_llm import suggest_thematic_groupings
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    config = load_config(_Path("config.yaml"), corpus_path.parent / "config.yaml")
+    kb_conn = open_kb(kb_path)
+    try:
+        suggest_thematic_groupings(kb_conn, config)
+        proposals = _proposals_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_proposals.html", {
+        "kb": kb_name,
+        "proposals": proposals,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy panel
+# ---------------------------------------------------------------------------
+
+def _taxonomy_for_template(kb_conn) -> dict:
+    import json as _json
+    from src.db.kb import get_pending_taxonomy_proposal
+    row = get_pending_taxonomy_proposal(kb_conn)
+    if row is None:
+        return {"proposal": None, "nodes": []}
+    try:
+        nodes = _json.loads(row["tree_json"])
+        if not isinstance(nodes, list):
+            nodes = []
+    except (ValueError, TypeError):
+        nodes = []
+    return {"proposal": row, "nodes": nodes}
+
+
+@router.get("/knowledge/vocabulary/partials/taxonomy", include_in_schema=False)
+def vocabulary_taxonomy_partial(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    kb_conn = open_kb(kb_path)
+    try:
+        ctx = _taxonomy_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_taxonomy.html", {
+        "kb": kb_name,
+        **ctx,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/suggest-taxonomy", include_in_schema=False)
+async def vocabulary_suggest_taxonomy(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from pathlib import Path as _Path
+    from src.config import load_config
+    from src.db.kb import open_kb
+    from src.stages.vocab_llm import suggest_taxonomy
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    config = load_config(_Path("config.yaml"), corpus_path.parent / "config.yaml")
+    kb_conn = open_kb(kb_path)
+    try:
+        suggest_taxonomy(kb_conn, config)
+        ctx = _taxonomy_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_taxonomy.html", {
+        "kb": kb_name,
+        **ctx,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/apply-taxonomy", include_in_schema=False)
+async def vocabulary_apply_taxonomy(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import apply_taxonomy_proposal, open_kb
+    from src.stages.vocab_llm import _paths_to_tree
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    form = await request.form()
+    try:
+        proposal_id = int(form.get("proposal_id", 0))
+    except (TypeError, ValueError):
+        proposal_id = 0
+    node_paths: list[str] = form.getlist("node")
+    accepted_tree = _paths_to_tree(node_paths)
+    kb_conn = open_kb(kb_path)
+    try:
+        if proposal_id and accepted_tree:
+            apply_taxonomy_proposal(kb_conn, proposal_id, accepted_tree, corpus_path.parent)
+        ctx = _taxonomy_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_taxonomy.html", {
+        "kb": kb_name,
+        **ctx,
+    })
+
+
+@router.post("/knowledge/vocabulary/proposals/dismiss-taxonomy", include_in_schema=False)
+async def vocabulary_dismiss_taxonomy(
+    request: Request,
+    paths: tuple[Path, Path] = Depends(resolve_kb),
+) -> Response:
+    from src.db.kb import dismiss_taxonomy_proposal, open_kb
+    _, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    form = await request.form()
+    try:
+        proposal_id = int(form.get("proposal_id", 0))
+    except (TypeError, ValueError):
+        proposal_id = 0
+    kb_conn = open_kb(kb_path)
+    try:
+        if proposal_id:
+            dismiss_taxonomy_proposal(kb_conn, proposal_id)
+        ctx = _taxonomy_for_template(kb_conn)
+    finally:
+        kb_conn.close()
+    return templates.TemplateResponse(request, "partials/vocabulary_taxonomy.html", {
+        "kb": kb_name,
+        **ctx,
+    })

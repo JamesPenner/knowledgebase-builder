@@ -15,7 +15,7 @@
       <input type="text" name="preferred_name" value="{{ person.preferred_name }}" required
              style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
     </label>
-    <button type="submit" class="btn-primary">Save</button>
+    <button type="submit" class="btn btn--capture">Save</button>
   </form>
 
   <form hx-post="/knowledge/people/{{ person.id }}/delete?kb={{ kb }}"

@@ -1,0 +1,72 @@
+<div id="vocabulary-form-inner">
+<h3 style="margin:0 0 .75rem;font-size:1rem">{% if term %}Edit: {{ term.term }}{% else %}Add Term{% endif %}</h3>
+<div id="vocabulary-form-status" style="min-height:1.5rem"></div>
+
+<form hx-post="{% if term %}/knowledge/vocabulary/{{ term.term | urlencode }}/edit{% else %}/knowledge/vocabulary/add{% endif %}?kb={{ kb }}"
+      hx-target="#vocabulary-form-status"
+      hx-swap="innerHTML">
+  {% if not term %}
+  <div class="form-row">
+    <label class="form-label">Term</label>
+    <input type="text" name="term" class="input-text" required placeholder="canonical term">
+  </div>
+  {% endif %}
+  <div class="form-row">
+    <label class="form-label">Synonyms <span style="color:#94a3b8;font-weight:400">(comma-separated)</span></label>
+    <input type="text" name="synonyms"
+           class="input-text"
+           value="{{ term.synonyms | join(', ') if term else '' }}"
+           placeholder="e.g. photo, photograph, photography">
+    {% if term %}
+    <form style="margin-top:.35rem"
+          hx-post="/knowledge/vocabulary/proposals/suggest-synonyms?kb={{ kb }}"
+          hx-target="#vocabulary-proposals"
+          hx-swap="innerHTML"
+          hx-indicator="#synonym-generate-indicator">
+      <input type="hidden" name="term" value="{{ term.term }}">
+      <button type="submit" class="btn btn--xs" style="font-size:.8rem">Suggest Synonyms via LLM</button>
+      <span id="synonym-generate-indicator" class="htmx-indicator" style="color:#64748b;font-size:.8rem;margin-left:.4rem">Generating…</span>
+    </form>
+    {% endif %}
+  </div>
+  <div class="form-row" style="display:flex;align-items:center;gap:.5rem">
+    <input type="checkbox" name="write_synonyms" id="vf-write-synonyms"
+           value="1" {% if term and term.write_synonyms %}checked{% endif %}>
+    <label for="vf-write-synonyms" style="font-size:.9rem;cursor:pointer">Write synonyms to file metadata on export</label>
+  </div>
+  <div class="form-actions" style="display:flex;gap:.5rem;margin-top:.75rem">
+    <button type="submit" class="btn btn--capture">{% if term %}Save{% else %}Add{% endif %}</button>
+  </div>
+</form>
+
+{% if term %}
+<form style="margin-top:.5rem"
+      hx-post="/knowledge/vocabulary/{{ term.term | urlencode }}/delete?kb={{ kb }}"
+      hx-swap="none"
+      hx-confirm="Delete term '{{ term.term }}'? This cannot be undone.">
+  <button type="submit" class="btn btn--reject btn--xs">Delete term</button>
+</form>
+
+<hr style="margin:1.25rem 0;border-color:#e2e8f0">
+<h3 style="margin:0 0 .5rem;font-size:.95rem">Merge into another term</h3>
+<p style="color:#64748b;font-size:.85rem;margin-bottom:.75rem">
+  "{{ term.term }}" becomes a synonym of the chosen canonical term and is removed from vocabulary. A Replace rule is created automatically.
+</p>
+<form hx-post="/knowledge/vocabulary/merge?kb={{ kb }}"
+      hx-target="#vocabulary-form-status"
+      hx-swap="innerHTML">
+  <input type="hidden" name="merge" value="{{ term.term }}">
+  <div style="display:flex;gap:.5rem">
+    <select name="keep" class="input-text" style="flex:1;font-size:.9rem">
+      <option value="">— select canonical term —</option>
+      {% for t in all_terms %}
+      {% if t != term.term %}
+      <option value="{{ t }}">{{ t }}</option>
+      {% endif %}
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn">Merge</button>
+  </div>
+</form>
+{% endif %}
+</div>

@@ -280,7 +280,7 @@ def test_pipeline_page_run_buttons_reference_stages(kb_dbs):
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
     # ingest is surfaced via the Sources header Sync button, not a pipeline table row
-    assert f"runStage('ingest'" not in resp.text
+    assert "runStage('ingest'" not in resp.text
     for stage in ("hash", "describe", "retag", "export"):
         assert f"runStage('{stage}'" in resp.text
 
@@ -304,17 +304,18 @@ def test_pipeline_has_suggest_gate_banner(kb_dbs):
     assert "Suggest Review" in resp.text
 
 
-def test_suggest_nav_link_removed(kb_dbs):
-    """Suggest is now inline in the pipeline gate banner, not a standalone nav link."""
+def test_suggest_nav_link_present(kb_dbs):
+    """Suggest is now a nav link in the Review section of every KB page."""
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
-    assert 'href="/review/suggest?kb=test">Suggest' not in resp.text
+    assert 'href="/review/suggest?kb=test"' in resp.text
 
 
-def test_suggest_badge_js_removed(kb_dbs):
-    """Suggest pending count is now server-rendered in the gate banner, not a client-side fetch."""
+def test_nav_badges_js_present(kb_dbs):
+    """nav_badges.js replaces suggest_badge.js for client-side badge polling."""
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
+    assert "nav_badges.js" in resp.text
     assert "suggest_badge.js" not in resp.text
 
 
@@ -340,7 +341,7 @@ def test_suggest_review_shows_run_level_c_when_clusters_exist(kb_dbs):
     resp = client.get("/review/suggest", params={"kb": "test"})
     assert resp.status_code == 200
     assert "Run Level C" in resp.text
-    assert "btn-run-level-c" in resp.text
+    assert "btn-run-suggest" in resp.text
 
 
 def test_suggest_review_shows_disabled_when_no_clusters(kb_dbs):
@@ -348,7 +349,7 @@ def test_suggest_review_shows_disabled_when_no_clusters(kb_dbs):
     resp = client.get("/review/suggest", params={"kb": "test"})
     assert resp.status_code == 200
     assert "run Level B first" in resp.text
-    assert 'id="btn-run-level-c"' not in resp.text
+    assert 'id="btn-run-suggest"' not in resp.text
 
 
 def test_pipeline_page_includes_quality_stage(kb_dbs):

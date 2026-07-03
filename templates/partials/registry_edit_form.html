@@ -13,27 +13,27 @@
     <input type="hidden" name="entry_id" value="{{ entry.id }}">
     <label style="font-size:.85rem;color:#94a3b8">Location name
       <input type="text" name="location" value="{{ entry.location or '' }}"
-             style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+             class="form-field-input">
     </label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem">
       <label style="font-size:.85rem;color:#94a3b8">Latitude
         <input type="number" name="latitude" step="any"
                value="{{ entry.latitude if entry.latitude is not none else '' }}"
-               style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+               class="form-field-input">
       </label>
       <label style="font-size:.85rem;color:#94a3b8">Longitude
         <input type="number" name="longitude" step="any"
                value="{{ entry.longitude if entry.longitude is not none else '' }}"
-               style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+               class="form-field-input">
       </label>
     </div>
     <label style="font-size:.85rem;color:#94a3b8">Threshold (m)
       <input type="number" name="threshold_m" step="any"
              value="{{ entry.threshold_m if entry.threshold_m is not none else '' }}"
-             style="display:block;width:100%;margin-top:.2rem;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+             class="form-field-input">
     </label>
     <div style="display:flex;gap:.5rem;margin-top:.25rem">
-      <button type="submit" class="btn-primary" style="flex:1">Save</button>
+      <button type="submit" class="btn btn--capture" style="flex:1">Save</button>
     </div>
   </form>
 

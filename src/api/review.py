@@ -46,7 +46,7 @@ def post_normalise_decide(
     req: DecideRequest,
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> dict[str, str]:
-    from src.db.corpus import open_corpus, set_token_decided
+    from src.db.corpus import get_analyse_token_by_id, open_corpus, set_token_decided
     from src.db.kb import (
         add_pattern_rule,
         add_to_stoplist,
@@ -79,17 +79,13 @@ def post_normalise_decide(
         bump_kb_version(kb_conn, "pattern_rule_added")
 
     elif action == "ignore":
-        token_row = corpus_conn.execute(
-            "SELECT token FROM analyse_tokens WHERE id=?", (req.item_id,)
-        ).fetchone()
+        token_row = get_analyse_token_by_id(corpus_conn, req.item_id)
         if token_row:
             add_to_stoplist(kb_conn, token_row["token"])
             bump_kb_version(kb_conn, "stoplist_updated")
 
     elif action == "correct":
-        token_row = corpus_conn.execute(
-            "SELECT token FROM analyse_tokens WHERE id=?", (req.item_id,)
-        ).fetchone()
+        token_row = get_analyse_token_by_id(corpus_conn, req.item_id)
         if token_row:
             add_pattern_rule(
                 kb_conn,
@@ -102,9 +98,7 @@ def post_normalise_decide(
             bump_kb_version(kb_conn, "pattern_rule_added")
 
     elif action == "reject":
-        token_row = corpus_conn.execute(
-            "SELECT token FROM analyse_tokens WHERE id=?", (req.item_id,)
-        ).fetchone()
+        token_row = get_analyse_token_by_id(corpus_conn, req.item_id)
         if token_row:
             from src.db.kb import add_token_rejection
             add_token_rejection(kb_conn, token_row["token"])
@@ -130,7 +124,7 @@ def post_normalise_bulk(
         open_corpus,
         set_all_pending_decided,
     )
-    from src.db.kb import add_pattern_rule, add_to_stoplist, add_token_rejection, bump_kb_version, open_kb
+    from src.db.kb import add_to_stoplist, add_token_rejection, bump_kb_version, open_kb
 
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
@@ -259,16 +253,14 @@ def post_suggest_decide(
     req: SuggestDecideRequest,
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> dict:
-    from src.db.corpus import open_corpus, set_candidate_status
+    from src.db.corpus import get_candidate_by_id, open_corpus, set_term_candidates_status
     from src.db.kb import add_to_stoplist, add_vocabulary_term, bump_kb_version, open_kb
 
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
 
-    row = corpus_conn.execute(
-        "SELECT term FROM candidates WHERE id=?", (req.candidate_id,)
-    ).fetchone()
+    row = get_candidate_by_id(corpus_conn, req.candidate_id)
     if not row:
         corpus_conn.close()
         kb_conn.close()
@@ -281,21 +273,21 @@ def post_suggest_decide(
     if action == "accept":
         add_vocabulary_term(kb_conn, term)
         bump_kb_version(kb_conn, "vocabulary_term_added")
-        set_candidate_status(corpus_conn, req.candidate_id, "accepted")
+        set_term_candidates_status(corpus_conn, term, "accepted")
 
     elif action == "ignore":
         add_to_stoplist(kb_conn, term, source="domain")
-        set_candidate_status(corpus_conn, req.candidate_id, "rejected")
+        set_term_candidates_status(corpus_conn, term, "rejected")
 
     elif action == "correct":
         corrected_to = value.get("corrected_to", "")
         if corrected_to:
             add_vocabulary_term(kb_conn, corrected_to)
             bump_kb_version(kb_conn, "vocabulary_term_added")
-        set_candidate_status(corpus_conn, req.candidate_id, "corrected", corrected_to=corrected_to)
+        set_term_candidates_status(corpus_conn, term, "corrected", corrected_to=corrected_to)
 
     elif action == "reject":
-        set_candidate_status(corpus_conn, req.candidate_id, "rejected")
+        set_term_candidates_status(corpus_conn, term, "rejected")
 
     else:
         corpus_conn.close()
@@ -327,7 +319,7 @@ def delete_suggest_decision(
     term: str,
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> dict:
-    from src.db.corpus import open_corpus, set_candidate_status
+    from src.db.corpus import open_corpus
     from src.db.kb import delete_vocabulary_term, open_kb
 
     corpus_path, kb_path = paths
@@ -337,11 +329,10 @@ def delete_suggest_decision(
     kb_conn.close()
 
     corpus_conn = open_corpus(corpus_path)
-    accepted_rows = corpus_conn.execute(
-        "SELECT id FROM candidates WHERE term=? AND status='accepted'", (term,)
-    ).fetchall()
-    for row in accepted_rows:
-        set_candidate_status(corpus_conn, row["id"], "pending")
+    corpus_conn.execute(
+        "UPDATE candidates SET status='pending', corrected_to=NULL WHERE term=? AND status='accepted'",
+        (term,),
+    )
     corpus_conn.commit()
     corpus_conn.close()
     return {}
@@ -480,11 +471,11 @@ def get_speaker_clip(
 ) -> StreamingResponse:
     """Slice and stream an audio clip via ffmpeg."""
     from src.config import load_config
-    from src.db.corpus import open_corpus
+    from src.db.corpus import get_file_path_by_id, open_corpus
 
     corpus_path, _ = paths
     corpus_conn = open_corpus(corpus_path)
-    row = corpus_conn.execute("SELECT path FROM files WHERE id = ?", (file_id,)).fetchone()
+    row = get_file_path_by_id(corpus_conn, file_id)
     corpus_conn.close()
     if row is None:
         raise HTTPException(404, "file not found")

@@ -4,7 +4,38 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.db.corpus import parse_gps_value
 from src.stages.classify_rules import _haversine_m
+
+
+# ---------------------------------------------------------------------------
+# parse_gps_value
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,expected", [
+    ("48.385327", pytest.approx(48.385327)),
+    ("-123.514908", pytest.approx(-123.514908)),
+    ("0.0", pytest.approx(0.0)),
+    # DMS with direction
+    ("48 deg 23' 7.18\" N", pytest.approx(48.385327, abs=1e-4)),
+    ("123 deg 30' 53.67\" W", pytest.approx(-123.514908, abs=1e-4)),
+    ("22 deg 4' 48.00\" N", pytest.approx(22.08, abs=1e-4)),
+    ("33 deg 52' 12.00\" S", pytest.approx(-33.87, abs=1e-4)),
+    # DMS without direction (raw EXIF, no ref suffix)
+    ("48 deg 23' 7.18\"", pytest.approx(48.385327, abs=1e-4)),
+    # float already
+    (48.5, pytest.approx(48.5)),
+])
+def test_parse_gps_value(raw, expected):
+    assert parse_gps_value(raw) == expected
+
+
+def test_parse_gps_value_none():
+    assert parse_gps_value(None) is None
+
+
+def test_parse_gps_value_unparseable():
+    assert parse_gps_value("not a coordinate") is None
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +88,15 @@ def _entity_row(location="Home", lat=51.5, lon=-0.1, threshold_m=None, city=None
 
 def _file_row(file_id=1, path="/img.jpg", lat=51.5, lon=-0.1):
     return {"id": file_id, "path": path, "lat": lat, "lon": lon}
+
+
+def _file_row_dms(file_id=1, path="/img.jpg"):
+    """File row with ExifTool DMS-format lat/lon strings (e.g. '51 deg 30' 0.00\" N')."""
+    return {
+        "id": file_id, "path": path,
+        "lat": "51 deg 30' 0.18\" N",    # ≈ 51.5000°
+        "lon": "0 deg 6' 0.00\" W",       # ≈ -0.1000°
+    }
 
 
 def _make_tbl(table_name="locations"):
@@ -233,6 +273,82 @@ def test_empty_entity_table_no_match(tmp_path):
 
     assert result["files_matched"] == 0
     mock_upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Config threshold acts as minimum floor over per-entry threshold
+# ---------------------------------------------------------------------------
+
+def test_config_threshold_is_minimum_floor(tmp_path):
+    """When geo_meta_default_threshold_m > entry threshold_m, config wins."""
+    from src.stages.geo_meta import run_geo_meta
+
+    with (
+        patch(_PATCHES["open_corpus"], return_value=MagicMock()),
+        patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
+        # Entry threshold 50m, file is 200m away → previously no match, now matches at 500m floor
+        patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=50.0)]),
+        patch(_PATCHES["get_gps_files"], return_value=[_file_row(lat=51.5018, lon=-0.1)]),  # ~200m
+        patch(_PATCHES["update_checkpoint"]),
+        patch(_PATCHES["upsert_label"]) as mock_upsert,
+    ):
+        result = run_geo_meta(
+            tmp_path / "corpus.db", tmp_path / "knowledge.db",
+            _make_config(threshold_m=500.0), _make_progress(), _make_cancel(),
+        )
+
+    assert result["files_matched"] == 1, "config floor of 500m should override entry's 50m"
+    mock_upsert.assert_called_once()
+
+
+def test_per_entry_threshold_above_config_wins(tmp_path):
+    """Per-entry threshold larger than config is respected."""
+    from src.stages.geo_meta import run_geo_meta
+
+    with (
+        patch(_PATCHES["open_corpus"], return_value=MagicMock()),
+        patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
+        # Entry 2000m, config 500m → effective 2000m; file 800m away → match
+        patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=2000.0)]),
+        patch(_PATCHES["get_gps_files"], return_value=[_file_row(lat=51.5072, lon=-0.1)]),  # ~800m
+        patch(_PATCHES["update_checkpoint"]),
+        patch(_PATCHES["upsert_label"]) as mock_upsert,
+    ):
+        result = run_geo_meta(
+            tmp_path / "corpus.db", tmp_path / "knowledge.db",
+            _make_config(threshold_m=500.0), _make_progress(), _make_cancel(),
+        )
+
+    assert result["files_matched"] == 1
+    mock_upsert.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# DMS-format GPS values are parsed and matched correctly
+# ---------------------------------------------------------------------------
+
+def test_dms_format_file_matches_entity(tmp_path):
+    from src.stages.geo_meta import run_geo_meta
+
+    with (
+        patch(_PATCHES["open_corpus"], return_value=MagicMock()),
+        patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
+        patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=500.0)]),
+        # DMS strings — without the parser, CAST gives 51.0 and 0.0 (wrong)
+        patch(_PATCHES["get_gps_files"], return_value=[_file_row_dms()]),
+        patch(_PATCHES["update_checkpoint"]),
+        patch(_PATCHES["upsert_label"]) as mock_upsert,
+    ):
+        result = run_geo_meta(
+            tmp_path / "corpus.db", tmp_path / "knowledge.db",
+            _make_config(threshold_m=500.0), _make_progress(), _make_cancel(),
+        )
+
+    assert result["files_matched"] == 1
+    mock_upsert.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

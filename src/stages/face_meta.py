@@ -1,8 +1,12 @@
 import json
 import logging
 import subprocess
+import threading
 from pathlib import Path
 from typing import TypedDict
+
+from src.config import Config
+from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +155,15 @@ def _read_xmp_exif(img_path: Path, exiftool: str) -> dict:
         return {}
 
 
-def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None) -> dict:
+def run_face_meta(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+    *,
+    scope=None,
+) -> dict:
     """Read XMP face region metadata, embed regions, seed person centroids."""
     import time as _time
     from src.db.corpus import (
@@ -166,16 +178,14 @@ def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None)
         get_face_embeddings_for_person,
         get_people_with_centroids,
         open_kb,
-        update_face_centroid,
-        update_face_centroid_with_spread,
+        update_person_centroid,
     )
+    from src.pipeline.embeddings import cosine_similarity, update_centroid
     from src.stages.face import (
         ModelLoadError,
         compute_trimmed_centroid,
-        cosine_similarity,
         detect_faces,
         embed_face,
-        update_centroid,
     )
 
     corpus_conn = open_corpus(corpus_path)
@@ -195,7 +205,7 @@ def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None)
 
         # Pre-load existing centroid data
         centroid_cache: dict[int, dict] = {}
-        for row in get_people_with_centroids(kb_conn):
+        for row in get_people_with_centroids(kb_conn, "face"):
             centroid_cache[row["id"]] = {
                 "blob": bytes(row["face_centroid"]),
                 "count": row["face_samples"],
@@ -209,7 +219,7 @@ def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None)
         progress.update(0, total, "Reading face metadata…")
 
         for i, row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
 
             img_path = Path(row["path"])
@@ -331,7 +341,7 @@ def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None)
                     if sim >= config.face_meta_min_centroid_similarity:
                         new_blob, new_count = update_centroid(old["blob"], old["count"], embedding)
                         centroid_cache[pid] = {"blob": new_blob, "count": new_count}
-                        update_face_centroid(kb_conn, pid, new_blob, new_count)
+                        update_person_centroid(kb_conn, pid, new_blob, new_count, kind="face")
                         persons_updated.add(pid)
                     else:
                         logger.debug(
@@ -341,7 +351,7 @@ def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None)
                     # First embedding for this person
                     new_blob, new_count = update_centroid(None, 0, embedding)
                     centroid_cache[pid] = {"blob": new_blob, "count": new_count}
-                    update_face_centroid(kb_conn, pid, new_blob, new_count)
+                    update_person_centroid(kb_conn, pid, new_blob, new_count, kind="face")
                     persons_updated.add(pid)
 
                 upsert_face_region(
@@ -371,7 +381,7 @@ def run_face_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None)
                     result = compute_trimmed_centroid(embeddings)
                     if result is not None:
                         centroid_blob, retained, spread = result
-                        update_face_centroid_with_spread(kb_conn, pid, centroid_blob, retained, spread)
+                        update_person_centroid(kb_conn, pid, centroid_blob, retained, kind="face", spread=spread)
                         kb_conn.commit()
                         logger.debug(
                             "face_meta: recalibrated person %d — %d/%d retained, spread=%.4f",

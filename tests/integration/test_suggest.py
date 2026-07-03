@@ -40,10 +40,11 @@ def _make_fake_spacy(terms_per_doc: list[list[str]], chunks_per_doc: list[list[s
     chunks_per_doc = chunks_per_doc or [[] for _ in terms_per_doc]
 
     class FakeToken:
-        def __init__(self, lemma, pos):
+        def __init__(self, lemma, pos, idx=0):
             self.lemma_ = lemma
             self.pos_ = pos
             self.is_stop = False
+            self.i = idx
 
     class FakeChunk:
         def __init__(self, text):
@@ -55,7 +56,7 @@ def _make_fake_spacy(terms_per_doc: list[list[str]], chunks_per_doc: list[list[s
 
     class FakeDoc:
         def __init__(self, terms, chunks):
-            self.tokens = [FakeToken(t, "NOUN") for t in terms]
+            self.tokens = [FakeToken(t, "NOUN", idx) for idx, t in enumerate(terms)]
             self.noun_chunks = [FakeChunk(c) for c in chunks]
 
         def __iter__(self):

@@ -1,5 +1,10 @@
 """Stage: attribute speaker labels to transcript segments via time-overlap matching."""
 import logging
+import threading
+from pathlib import Path
+
+from src.config import Config
+from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,13 @@ def _best_overlap(ts_start, ts_end, voice_segments) -> object | None:
     return best_row
 
 
-def run_attribute_speakers(corpus_path, kb_path, config, progress, cancel) -> dict:
+def run_attribute_speakers(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+) -> dict:
     """Attribute speaker labels to transcript segments via time-overlap matching."""
     import time as _time
     from src.db.corpus import (
@@ -70,7 +81,7 @@ def run_attribute_speakers(corpus_path, kb_path, config, progress, cancel) -> di
         progress.update(0, total, "Attributing speakers…")
 
         for i, file_row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
 
             file_id = file_row["id"]

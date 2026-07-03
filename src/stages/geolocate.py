@@ -20,6 +20,7 @@ def run_geolocate(
         get_files_with_gps,
         get_geolocated_file_ids,
         open_corpus,
+        parse_gps_value,
         update_pipeline_checkpoint,
         upsert_geolabel,
     )
@@ -34,6 +35,7 @@ def run_geolocate(
             "run 'enrich geolocate download' to fetch Natural Earth data",
             kb_folder,
         )
+        progress.done()
         return
 
     corpus_conn = open_corpus(corpus_path)
@@ -48,9 +50,9 @@ def run_geolocate(
         for i, row in enumerate(pending):
             if cancel_event.is_set():
                 break
-            progress.update(i, total, f"Geolocate: {Path(row['path']).name}")
+            progress.update(i + 1, total, f"Geolocate: {Path(row['path']).name}")
 
-            label = resolve_point(row["lat"], row["lon"], regions)
+            label = resolve_point(parse_gps_value(row["lat"]), parse_gps_value(row["lon"]), regions)
             if label is not None:
                 upsert_geolabel(corpus_conn, row["id"], label)
                 processed += 1
@@ -59,12 +61,9 @@ def run_geolocate(
                 corpus_conn.commit()
 
         corpus_conn.commit()
-
-        if not cancel_event.is_set():
-            update_pipeline_checkpoint(corpus_conn, "geolocate", processed, total, 0)
-            corpus_conn.commit()
-            progress.done()
-
+        update_pipeline_checkpoint(corpus_conn, "geolocate", processed, 0, 0)
+        corpus_conn.commit()
+        progress.done()
         logger.info("geolocate: resolved %d / %d GPS files", processed, total)
     finally:
         corpus_conn.close()

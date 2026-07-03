@@ -27,11 +27,13 @@ def run_extract_fields(
     *,
     scope=None,
 ) -> None:
+    from src.pipeline.stage_runner import run_stage_loop
+
     kb_folder = kb_path.parent
     csv_path = kb_folder / "reference" / "field_map.csv"
 
     if not csv_path.exists():
-        progress.done()
+        run_stage_loop([], lambda row: None, progress, cancel_event, label="extract_fields")
         return
 
     with open(csv_path, newline="", encoding="utf-8") as fh:
@@ -48,58 +50,50 @@ def run_extract_fields(
         group.sort(key=lambda r: r["Priority"])
 
     conn = open_corpus(corpus_path)
-    files = get_files_with_exif(conn, scope=scope)
-    total = len(files)
-    start = time.monotonic()
+    try:
+        files = get_files_with_exif(conn, scope=scope)
+        start = time.monotonic()
+        batch_count = [0]
 
-    for i, file_row in enumerate(files):
-        if cancel_event.is_set():
-            break
-
-        try:
+        def _process(file_row):
             meta = json.loads(file_row["metadata_json"])
-        except (json.JSONDecodeError, TypeError):
-            progress.update(i + 1, total)
-            continue
+            for canonical_name, group_rows in canonical_groups.items():
+                data_type = group_rows[0].get("DataType", "str")
+                if data_type == "keyword_list":
+                    field_tag = group_rows[0]["ExifTool_Tag"]
+                    raw_value = meta.get(field_tag)
+                    if raw_value is None:
+                        continue
+                    items = raw_value if isinstance(raw_value, list) else [raw_value]
+                    for kw in items:
+                        kw_str = str(kw).strip()
+                        if kw_str:
+                            upsert_metadata_keyword(conn, file_row["id"], canonical_name, kw_str)
+                else:
+                    for field_row in group_rows:
+                        raw_value = meta.get(field_row["ExifTool_Tag"])
+                        if raw_value is not None:
+                            upsert_metadata_field(
+                                conn,
+                                file_row["id"],
+                                canonical_name,
+                                field_row["ExifTool_Tag"],
+                                str(raw_value),
+                                data_type,
+                            )
+                            break
+            batch_count[0] += 1
+            if batch_count[0] % _BATCH_SIZE == 0:
+                conn.commit()
 
-        for canonical_name, group_rows in canonical_groups.items():
-            data_type = group_rows[0].get("DataType", "str")
-            if data_type == "keyword_list":
-                field_tag = group_rows[0]["ExifTool_Tag"]
-                raw_value = meta.get(field_tag)
-                if raw_value is None:
-                    continue
-                items = raw_value if isinstance(raw_value, list) else [raw_value]
-                for kw in items:
-                    kw_str = str(kw).strip()
-                    if kw_str:
-                        upsert_metadata_keyword(conn, file_row["id"], canonical_name, kw_str)
-            else:
-                for field_row in group_rows:
-                    raw_value = meta.get(field_row["ExifTool_Tag"])
-                    if raw_value is not None:
-                        upsert_metadata_field(
-                            conn,
-                            file_row["id"],
-                            canonical_name,
-                            field_row["ExifTool_Tag"],
-                            str(raw_value),
-                            data_type,
-                        )
-                        break
-
-        if (i + 1) % _BATCH_SIZE == 0:
-            conn.commit()
-
-        progress.update(i + 1, total)
-
-    conn.commit()
-    duration = time.monotonic() - start
-    update_pipeline_checkpoint(
-        conn,
-        "extract_fields",
-        files_processed=total,
-        duration_seconds=duration,
-    )
-    conn.close()
-    progress.done()
+        processed, errors = run_stage_loop(files, _process, progress, cancel_event, label="extract_fields")
+        conn.commit()
+        duration = time.monotonic() - start
+        update_pipeline_checkpoint(
+            conn,
+            "extract_fields",
+            files_processed=processed,
+            duration_seconds=duration,
+        )
+    finally:
+        conn.close()

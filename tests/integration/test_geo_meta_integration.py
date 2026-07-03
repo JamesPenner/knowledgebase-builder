@@ -102,6 +102,50 @@ def _run(corpus_path, kb_path, config=None):
 
 
 # ---------------------------------------------------------------------------
+# DMS format: ExifTool stores '51 deg 30' 0.00" N' instead of '51.5'
+# ---------------------------------------------------------------------------
+
+def test_dms_gps_format_matches_entity(tmp_path):
+    kb_folder, corpus_conn, kb_conn = _make_kb(tmp_path)
+    corpus_path = kb_folder / "corpus.db"
+    kb_path = kb_folder / "knowledge.db"
+
+    src_id = _add_source(corpus_conn)
+    # Insert DMS-format GPS values directly (as ExifTool would store them)
+    corpus_conn.execute(
+        "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime)"
+        " VALUES (?, '/photos/kauai.jpg', 'kauai.jpg', '.jpg', 'image', 1, 0.0)",
+        (src_id,),
+    )
+    file_id = corpus_conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    corpus_conn.execute(
+        "INSERT INTO file_metadata_fields (file_id, canonical_name, value)"
+        " VALUES (?, 'exif_gps_lat', ?)",
+        (file_id, "22 deg 4' 48.00\" N"),   # 22.08°
+    )
+    corpus_conn.execute(
+        "INSERT INTO file_metadata_fields (file_id, canonical_name, value)"
+        " VALUES (?, 'exif_gps_lon', ?)",
+        (file_id, "159 deg 46' 12.00\" W"),  # -159.77°
+    )
+    corpus_conn.commit()
+
+    _add_location_entity(kb_conn, "Polihale Beach", lat=22.08, lon=-159.77, threshold_m=500.0)
+
+    corpus_conn.close()
+    kb_conn.close()
+
+    result = _run(corpus_path, kb_path)
+
+    assert result["files_matched"] == 1, f"Expected 1 match but got: {result}"
+    conn = open_corpus(corpus_path)
+    rows = conn.execute("SELECT * FROM file_location_labels").fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0]["location"] == "Polihale Beach"
+
+
+# ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
 

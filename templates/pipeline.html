@@ -211,7 +211,7 @@
           <td class="stage-name">{{ stage.name }}</td>
           <td>
             <span id="badge-{{ stage.name }}" class="badge
-              {%- if stage.state == 'done' %} badge-done
+              {%- if stage.state == 'done' %} badge--accept
               {%- elif stage.state == 'ready' %} badge-ready
               {%- else %} badge-blocked{%- endif %}">
               {{ stage.state }}

@@ -60,91 +60,91 @@ def _make_kb_db() -> sqlite3.Connection:
 
 
 # ---------------------------------------------------------------------------
-# cosine_similarity_voice
+# cosine_similarity (shared embedding utility)
 # ---------------------------------------------------------------------------
 
 class TestCosineSimilarityVoice:
     def test_identical_vectors_return_one(self):
-        from src.stages.voice import cosine_similarity_voice
+        from src.pipeline.embeddings import cosine_similarity
         b = _blob(256, 7)
-        assert cosine_similarity_voice(b, b) == pytest.approx(1.0, abs=1e-5)
+        assert cosine_similarity(b, b) == pytest.approx(1.0, abs=1e-5)
 
     def test_orthogonal_vectors_return_zero(self):
-        from src.stages.voice import cosine_similarity_voice
+        from src.pipeline.embeddings import cosine_similarity
         v1 = np.zeros(256, dtype=np.float32)
         v1[0] = 1.0
         v2 = np.zeros(256, dtype=np.float32)
         v2[1] = 1.0
-        assert cosine_similarity_voice(v1.tobytes(), v2.tobytes()) == pytest.approx(0.0, abs=1e-5)
+        assert cosine_similarity(v1.tobytes(), v2.tobytes()) == pytest.approx(0.0, abs=1e-5)
 
     def test_zero_vector_a_returns_zero(self):
-        from src.stages.voice import cosine_similarity_voice
+        from src.pipeline.embeddings import cosine_similarity
         zero = np.zeros(256, dtype=np.float32).tobytes()
-        result = cosine_similarity_voice(zero, _blob(256, 1))
+        result = cosine_similarity(zero, _blob(256, 1))
         assert result == 0.0
 
     def test_zero_vector_b_returns_zero(self):
-        from src.stages.voice import cosine_similarity_voice
+        from src.pipeline.embeddings import cosine_similarity
         zero = np.zeros(256, dtype=np.float32).tobytes()
-        result = cosine_similarity_voice(_blob(256, 1), zero)
+        result = cosine_similarity(_blob(256, 1), zero)
         assert result == 0.0
 
     def test_different_vectors_in_range(self):
-        from src.stages.voice import cosine_similarity_voice
-        sim = cosine_similarity_voice(_blob(256, 0), _blob(256, 99))
+        from src.pipeline.embeddings import cosine_similarity
+        sim = cosine_similarity(_blob(256, 0), _blob(256, 99))
         assert -1.0 <= sim <= 1.0
 
     def test_symmetric(self):
-        from src.stages.voice import cosine_similarity_voice
+        from src.pipeline.embeddings import cosine_similarity
         a = _blob(256, 3)
         b = _blob(256, 4)
-        assert cosine_similarity_voice(a, b) == pytest.approx(cosine_similarity_voice(b, a), abs=1e-6)
+        assert cosine_similarity(a, b) == pytest.approx(cosine_similarity(b, a), abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# update_voice_centroid
+# update_centroid (shared embedding utility)
 # ---------------------------------------------------------------------------
 
 class TestUpdateVoiceCentroid:
     def test_first_sample_returns_normalised_embedding(self):
-        from src.stages.voice import update_voice_centroid
+        from src.pipeline.embeddings import update_centroid
         emb = _blob(256, 1)
-        result_blob, count = update_voice_centroid(None, 0, emb)
+        result_blob, count = update_centroid(None, 0, emb)
         assert count == 1
         result = np.frombuffer(result_blob, dtype=np.float32)
         assert float(np.linalg.norm(result)) == pytest.approx(1.0, abs=1e-5)
 
     def test_running_mean_count_increments(self):
-        from src.stages.voice import update_voice_centroid
-        blob1, count1 = update_voice_centroid(None, 0, _blob(256, 0))
-        blob2, count2 = update_voice_centroid(blob1, count1, _blob(256, 1))
+        from src.pipeline.embeddings import update_centroid
+        blob1, count1 = update_centroid(None, 0, _blob(256, 0))
+        blob2, count2 = update_centroid(blob1, count1, _blob(256, 1))
         assert count2 == 2
 
     def test_running_mean_is_normalised(self):
-        from src.stages.voice import update_voice_centroid
-        blob, count = update_voice_centroid(None, 0, _blob(256, 0))
+        from src.pipeline.embeddings import update_centroid
+        blob, count = update_centroid(None, 0, _blob(256, 0))
         for seed in range(1, 5):
-            blob, count = update_voice_centroid(blob, count, _blob(256, seed))
+            blob, count = update_centroid(blob, count, _blob(256, seed))
         result = np.frombuffer(blob, dtype=np.float32)
         assert float(np.linalg.norm(result)) == pytest.approx(1.0, abs=1e-5)
 
     def test_zero_old_count_treated_as_first(self):
-        from src.stages.voice import update_voice_centroid
+        from src.pipeline.embeddings import update_centroid
         existing_blob = _blob(256, 99)
         new_blob = _blob(256, 1)
-        result_blob, count = update_voice_centroid(existing_blob, 0, new_blob)
+        result_blob, count = update_centroid(existing_blob, 0, new_blob)
         assert count == 1
         result = np.frombuffer(result_blob, dtype=np.float32)
         assert float(np.linalg.norm(result)) == pytest.approx(1.0, abs=1e-5)
 
     def test_centroid_lies_between_two_embeddings(self):
-        from src.stages.voice import update_voice_centroid
+        from src.pipeline.embeddings import update_centroid
         v1 = np.zeros(256, dtype=np.float32)
         v1[0] = 1.0
         v2 = np.zeros(256, dtype=np.float32)
         v2[1] = 1.0
-        blob1, count1 = update_voice_centroid(None, 0, v1.tobytes())
-        blob2, _ = update_voice_centroid(blob1, count1, v2.tobytes())
+        blob1, count1 = update_centroid(None, 0, v1.tobytes())
+        blob2, _ = update_centroid(blob1, count1, v2.tobytes())
         result = np.frombuffer(blob2, dtype=np.float32)
         # centroid direction should be equal weight between dim 0 and dim 1
         assert result[0] == pytest.approx(result[1], abs=1e-5)
@@ -246,31 +246,31 @@ class TestGetVoiceEmbeddingsForExport:
 
 class TestGetPeopleWithVoiceCentroids:
     def test_returns_only_people_with_centroid(self):
-        from src.db.kb import get_people_with_voice_centroids
+        from src.db.kb import get_people_with_centroids
         conn = _make_kb_db()
         conn.execute(
             "INSERT INTO people(id, preferred_name, voice_centroid, voice_samples) VALUES (1, 'Alice', ?, 2)",
             (_blob(256, 0),),
         )
         conn.execute("INSERT INTO people(id, preferred_name) VALUES (2, 'Bob')")
-        rows = get_people_with_voice_centroids(conn)
+        rows = get_people_with_centroids(conn, "voice")
         assert len(rows) == 1
         assert rows[0]["id"] == 1
 
     def test_returns_empty_when_none_have_centroid(self):
-        from src.db.kb import get_people_with_voice_centroids
+        from src.db.kb import get_people_with_centroids
         conn = _make_kb_db()
         conn.execute("INSERT INTO people(id, preferred_name) VALUES (1, 'Alice')")
-        assert get_people_with_voice_centroids(conn) == []
+        assert get_people_with_centroids(conn, "voice") == []
 
 
 class TestUpdateVoiceCentroidDb:
     def test_updates_centroid_and_samples(self):
-        from src.db.kb import update_voice_centroid
+        from src.db.kb import update_person_centroid
         conn = _make_kb_db()
         conn.execute("INSERT INTO people(id, preferred_name) VALUES (1, 'Alice')")
         blob = _blob(256, 5)
-        update_voice_centroid(conn, 1, blob, 3)
+        update_person_centroid(conn, 1, blob, 3, kind="voice")
         row = conn.execute("SELECT voice_centroid, voice_samples FROM people WHERE id = 1").fetchone()
         assert row["voice_samples"] == 3
         assert bytes(row["voice_centroid"]) == blob

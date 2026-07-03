@@ -108,90 +108,83 @@ def run_classify(
     *,
     scope=None,
 ) -> None:
+    from src.pipeline.stage_runner import run_stage_loop
+
     corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
+    try:
+        kb_conn = open_kb(kb_path)
+        rules = [dict(r) for r in get_classify_rules(kb_conn, enabled_only=True)]
+        all_life_events = kb_conn.execute(
+            "SELECT le.*, p.preferred_name FROM life_events le"
+            " JOIN people p ON p.id = le.person_id"
+        ).fetchall()
+        kb_conn.close()
 
-    rules = [dict(r) for r in get_classify_rules(kb_conn, enabled_only=True)]
+        files = get_files_for_classify(corpus_conn, scope=scope)
+        start = time.monotonic()
+        batch_size = 200
+        batch_count = [0]
 
-    # Pre-load all people data for life-event rules
-    all_life_events = kb_conn.execute(
-        "SELECT le.*, p.preferred_name FROM life_events le"
-        " JOIN people p ON p.id = le.person_id"
-    ).fetchall()
-    kb_conn.close()
+        def _process(file_row):
+            fields = get_fields_for_classify(corpus_conn, file_row["id"])
 
-    files = get_files_for_classify(corpus_conn, scope=scope)
-    total = len(files)
-    start = time.monotonic()
-    batch_size = 200
+            if "file_date" not in fields and "exif_date_taken" in fields:
+                fields["file_date"] = fields["exif_date_taken"]
 
-    for i, file_row in enumerate(files):
-        if cancel_event.is_set():
-            break
-
-        fields = get_fields_for_classify(corpus_conn, file_row["id"])
-
-        # Ensure calendar rules always have a best-available date under 'file_date'
-        if "file_date" not in fields and "exif_date_taken" in fields:
-            fields["file_date"] = fields["exif_date_taken"]
-
-        # Apply all classify rules
-        for rule in rules:
-            tag = evaluate_rule(rule, fields)
-            if tag:
-                upsert_derived_tag(
-                    corpus_conn,
-                    file_row["id"],
-                    tag,
-                    rule["category"],
-                    "classify_rule",
-                    rule["id"],
-                )
-
-        # Life-event rules: check entity matches for known people
-        if all_life_events:
-            entity_matches = get_entity_matches_for_file(corpus_conn, file_row["id"])
-            people_matches = [m for m in entity_matches if m["table_name"] == "people"]
-            if people_matches:
-                file_date = fields.get("file_date", "")
-                seen_pids: set[int] = set()
-                for match in people_matches:
-                    try:
-                        payload = json.loads(match["payload_json"] or "{}")
-                        person_id = int(payload.get("person_id", 0))
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        continue
-                    if not person_id or person_id in seen_pids:
-                        continue
-                    seen_pids.add(person_id)
-
-                    preferred = next(
-                        (ev["preferred_name"] for ev in all_life_events
-                         if ev["person_id"] == person_id),
-                        None,
+            for rule in rules:
+                tag = evaluate_rule(rule, fields)
+                if tag:
+                    upsert_derived_tag(
+                        corpus_conn,
+                        file_row["id"],
+                        tag,
+                        rule["category"],
+                        "classify_rule",
+                        rule["id"],
                     )
-                    if preferred is None:
-                        continue
 
-                    for tag, category in _life_event_tags(
-                        file_date, person_id, preferred, all_life_events
-                    ):
-                        upsert_derived_tag(
-                            corpus_conn, file_row["id"], tag, category, "classify_rule"
+            if all_life_events:
+                entity_matches = get_entity_matches_for_file(corpus_conn, file_row["id"])
+                people_matches = [m for m in entity_matches if m["table_name"] == "people"]
+                if people_matches:
+                    file_date = fields.get("file_date", "")
+                    seen_pids: set[int] = set()
+                    for match in people_matches:
+                        try:
+                            payload = json.loads(match["payload_json"] or "{}")
+                            person_id = int(payload.get("person_id", 0))
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            continue
+                        if not person_id or person_id in seen_pids:
+                            continue
+                        seen_pids.add(person_id)
+                        preferred = next(
+                            (ev["preferred_name"] for ev in all_life_events
+                             if ev["person_id"] == person_id),
+                            None,
                         )
+                        if preferred is None:
+                            continue
+                        for tag, category in _life_event_tags(
+                            file_date, person_id, preferred, all_life_events
+                        ):
+                            upsert_derived_tag(
+                                corpus_conn, file_row["id"], tag, category, "classify_rule"
+                            )
 
-        if (i + 1) % batch_size == 0:
-            corpus_conn.commit()
-        progress.update(i + 1, total)
+            batch_count[0] += 1
+            if batch_count[0] % batch_size == 0:
+                corpus_conn.commit()
 
-    corpus_conn.commit()
+        processed, errors = run_stage_loop(files, _process, progress, cancel_event, label="classify")
+        corpus_conn.commit()
 
-    duration = time.monotonic() - start
-    update_pipeline_checkpoint(
-        corpus_conn,
-        stage="classify",
-        files_processed=total,
-        duration_seconds=duration,
-    )
-    corpus_conn.close()
-    progress.done()
+        duration = time.monotonic() - start
+        update_pipeline_checkpoint(
+            corpus_conn,
+            stage="classify",
+            files_processed=processed,
+            duration_seconds=duration,
+        )
+    finally:
+        corpus_conn.close()

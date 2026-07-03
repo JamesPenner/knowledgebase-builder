@@ -136,7 +136,7 @@ def recalibrate(
         get_face_embeddings_for_person,
         get_people_with_centroids,
         open_kb,
-        update_face_centroid_with_spread,
+        update_person_centroid,
     )
     from src.stages.face import compute_trimmed_centroid
 
@@ -156,7 +156,7 @@ def recalibrate(
         return "Fair"
 
     try:
-        people = get_people_with_centroids(kb_conn)
+        people = get_people_with_centroids(kb_conn, "face")
         updated = 0
         for row in people:
             person_id = row["id"]
@@ -171,7 +171,7 @@ def recalibrate(
                 typer.echo(f"  {name}: recalibration returned None, skipped")
                 continue
             centroid_blob, retained, spread = result
-            update_face_centroid_with_spread(kb_conn, person_id, centroid_blob, retained, spread)
+            update_person_centroid(kb_conn, person_id, centroid_blob, retained, kind="face", spread=spread)
             kb_conn.commit()
             level = _confidence(retained, spread)
             typer.echo(

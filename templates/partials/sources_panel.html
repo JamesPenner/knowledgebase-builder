@@ -37,7 +37,7 @@
                     hx-delete="/api/kb/{{ kb }}/sources/{{ src.id }}?cascade=true"
                     hx-target="#sources-panel"
                     hx-swap="outerHTML"
-                    hx-confirm="">Confirm</button>
+                    hx-confirm="Remove this source?">Confirm</button>
                   <button class="btn btn--sm" onclick="document.getElementById('src-confirm-{{ src.id }}').style.display='none'; document.getElementById('src-remove-{{ src.id }}').style.display=''">Cancel</button>
                 </span>
                 <button id="src-remove-{{ src.id }}" class="btn btn--sm btn--danger-outline"

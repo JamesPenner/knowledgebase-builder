@@ -153,6 +153,7 @@ def run_temporal(
 ) -> None:
     from src.db.corpus import open_corpus, update_pipeline_checkpoint, upsert_temporal_fields
     from src.pipeline.filter_spec import CorpusFilterSpec
+    from src.pipeline.stage_runner import run_stage_loop
 
     conn = open_corpus(corpus_path)
     spec = scope or CorpusFilterSpec()
@@ -175,24 +176,19 @@ def run_temporal(
             scope_params,
         ).fetchall()
 
-        total = len(rows)
-        progress.update(0, total, "Deriving temporal fields")
+        batch_count = [0]
 
-        for i, row in enumerate(rows):
-            if cancel_event.is_set():
-                break
-
+        def _process(row):
             fields = derive_temporal_fields(row["exif_date_taken"], row["file_date"])
             upsert_temporal_fields(conn, row["id"], fields)
-
-            if (i + 1) % _BATCH == 0:
+            batch_count[0] += 1
+            if batch_count[0] % _BATCH == 0:
                 conn.commit()
-                progress.update(i + 1, total, "Deriving temporal fields")
 
+        processed, errors = run_stage_loop(rows, _process, progress, cancel_event, label="temporal")
         conn.commit()
-        update_pipeline_checkpoint(conn, "temporal", total, 0, 0)
+        update_pipeline_checkpoint(conn, "temporal", processed, 0, errors)
         conn.commit()
-        progress.done()
-        logger.info("Temporal: derived fields for %d files", total)
+        logger.info("Temporal: derived fields for %d files (%d errors)", processed, errors)
     finally:
         conn.close()

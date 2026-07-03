@@ -44,7 +44,7 @@
   {% for t in ignored %}
   <tr class="decision-row">
     <td class="decision-token">{{ t.term }}</td>
-    <td><span class="badge badge--ignored">stoplist</span></td>
+    <td><span class="badge badge--ignore">stoplist</span></td>
     <td class="decision-actions">
       {{ reclassify_btn(t.term, "accept", "Accept", "btn--capture", "Add to vocabulary — removes from stoplist") }}
       {{ reclassify_btn(t.term, "reject", "Reject", "btn--reject", "Remove from stoplist without adding to vocabulary") }}

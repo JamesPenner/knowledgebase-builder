@@ -18,7 +18,7 @@
       <td>{{ d.member_count }}</td>
       <td>
         <form hx-delete="/review/speakers/decisions/{{ d.id }}?kb={{ kb }}" hx-swap="none">
-          <button type="submit">Unassign</button>
+          <button type="submit" class="btn btn--danger">Unassign</button>
         </form>
       </td>
     </tr>

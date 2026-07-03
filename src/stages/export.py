@@ -365,47 +365,6 @@ def _write_near_duplicates(export_dir: Path, corpus_conn, hamming_threshold: int
         writer.writerows(groups)
 
 
-def _write_gps_clusters(export_dir: Path, corpus_conn) -> None:
-    from src.db.corpus import get_gps_cluster_assignments_for_export
-
-    rows = get_gps_cluster_assignments_for_export(corpus_conn)
-    if not rows:
-        return
-    with open(export_dir / "gps_clusters.csv", "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=["path", "cluster_id", "cluster_label", "centroid_lat", "centroid_lon", "distance_m"],
-        )
-        writer.writeheader()
-        for r in rows:
-            writer.writerow({
-                "path": r["path"],
-                "cluster_id": r["cluster_id"],
-                "cluster_label": r["cluster_label"] or "",
-                "centroid_lat": r["centroid_lat"],
-                "centroid_lon": r["centroid_lon"],
-                "distance_m": r["distance_m"],
-            })
-
-
-def _write_validation_report(export_dir: Path, corpus_conn) -> None:
-    from src.db.corpus import get_validation_results_for_export
-
-    rows = get_validation_results_for_export(corpus_conn)
-    if not rows:
-        return
-    with open(export_dir / "validation_report.csv", "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["path", "status", "detail", "checked_at"])
-        writer.writeheader()
-        for r in rows:
-            writer.writerow({
-                "path": r["path"],
-                "status": r["status"],
-                "detail": r["detail"] or "",
-                "checked_at": r["checked_at"],
-            })
-
-
 def _write_geolabels(export_dir: Path, corpus_conn) -> None:
     from src.db.corpus import get_geolabels_for_export
 
@@ -643,6 +602,8 @@ def run_export(
             _write_near_duplicates(export_dir, corpus_conn, config.near_duplicate_hamming_threshold, scope_where)
             _write_geolabels(export_dir, corpus_conn)
             _write_location_labels(export_dir, corpus_conn)
+            from src.stages.gps_cluster import _write_gps_clusters
+            from src.stages.validate import _write_validation_report
             _write_gps_clusters(export_dir, corpus_conn)
             _write_validation_report(export_dir, corpus_conn)
             _write_people(export_dir, kb_conn, corpus_conn, config.export_biometric)

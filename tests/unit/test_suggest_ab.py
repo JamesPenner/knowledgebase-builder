@@ -405,3 +405,114 @@ def test_prose_text_empty_when_no_prose():
     from src.stages.suggest import _build_prose_text
     ctx = _make_ctx(enrichment_text="canyon river", derived_tags=["sunny"])
     assert _build_prose_text(ctx).strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# set_term_candidates_status — all rows for a term updated at once
+# ---------------------------------------------------------------------------
+
+def _make_corpus_with_candidates(tmp_path):
+    from src.db.corpus import open_corpus, upsert_candidate
+    db = tmp_path / "corpus.db"
+    conn = open_corpus(db)
+    conn.execute("INSERT INTO sources (path, file_type, recursive) VALUES ('/', 'images', 1)")
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime)"
+            f" VALUES (1, '/f{i}.jpg', 'f{i}.jpg', '.jpg', 'image', 1, 0.0)"
+        )
+    conn.commit()
+    # Term "holiday" appears in 3 files → 3 pending rows
+    upsert_candidate(conn, 1, "holiday", "level_a")
+    upsert_candidate(conn, 2, "holiday", "level_a")
+    upsert_candidate(conn, 3, "holiday", "level_a")
+    # Unrelated term to confirm it is untouched
+    upsert_candidate(conn, 1, "mountain", "level_a")
+    conn.commit()
+    return conn
+
+
+def test_set_term_candidates_status_updates_all_rows(tmp_path):
+    from src.db.corpus import set_term_candidates_status
+    conn = _make_corpus_with_candidates(tmp_path)
+
+    set_term_candidates_status(conn, "holiday", "rejected")
+    conn.commit()
+
+    rows = conn.execute(
+        "SELECT status FROM candidates WHERE term='holiday'"
+    ).fetchall()
+    assert all(r["status"] == "rejected" for r in rows), "all 3 rows should be rejected"
+
+    mountain = conn.execute(
+        "SELECT status FROM candidates WHERE term='mountain'"
+    ).fetchone()
+    assert mountain["status"] == "pending", "unrelated term must be unaffected"
+    conn.close()
+
+
+def test_set_term_candidates_status_skips_already_decided(tmp_path):
+    from src.db.corpus import set_term_candidates_status
+    conn = _make_corpus_with_candidates(tmp_path)
+
+    # Pre-mark one row accepted
+    conn.execute(
+        "UPDATE candidates SET status='accepted' WHERE term='holiday' AND file_id=1"
+    )
+    conn.commit()
+
+    set_term_candidates_status(conn, "holiday", "rejected")
+    conn.commit()
+
+    rows = conn.execute(
+        "SELECT file_id, status FROM candidates WHERE term='holiday' ORDER BY file_id"
+    ).fetchall()
+    statuses = {r["file_id"]: r["status"] for r in rows}
+    assert statuses[1] == "accepted", "already-decided row must be preserved"
+    assert statuses[2] == "rejected"
+    assert statuses[3] == "rejected"
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Rejected candidates excluded from subsequent level_a runs
+# ---------------------------------------------------------------------------
+
+def test_rejected_candidates_excluded_from_next_suggest(tmp_path):
+    """Terms previously rejected in Suggest Review must not reappear as pending
+    when _run_level_a processes the same corpus again."""
+    from src.db.corpus import delete_pending_candidates, open_corpus, upsert_candidate
+
+    db = tmp_path / "corpus.db"
+    conn = open_corpus(db)
+    conn.execute("INSERT INTO sources (path, file_type, recursive) VALUES ('/', 'images', 1)")
+    conn.execute(
+        "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime)"
+        " VALUES (1, '/a.jpg', 'a.jpg', '.jpg', 'image', 1, 0.0)"
+    )
+    conn.commit()
+
+    # Simulate a previous suggest run: "holiday" was inserted and then rejected
+    upsert_candidate(conn, 1, "holiday", "level_a")
+    conn.execute("UPDATE candidates SET status='rejected' WHERE term='holiday'")
+    conn.commit()
+
+    # Simulate the start of a new suggest run: delete pending, then check exclusion
+    delete_pending_candidates(conn, "level_a")
+    conn.commit()
+
+    # Rejected rows must survive the delete
+    rejected = conn.execute(
+        "SELECT term FROM candidates WHERE source='level_a' AND status='rejected'"
+    ).fetchall()
+    assert any(r["term"] == "holiday" for r in rejected)
+
+    # The exclusion set that _run_level_a builds should include the rejected term
+    rejected_terms = {
+        r["term"] for r in conn.execute(
+            "SELECT DISTINCT term FROM candidates WHERE source='level_a' AND status='rejected'"
+        ).fetchall()
+    }
+    assert "holiday" in rejected_terms
+
+    conn.close()

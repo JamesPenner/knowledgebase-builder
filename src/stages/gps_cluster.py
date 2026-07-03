@@ -53,6 +53,7 @@ def run_gps_cluster(
         clear_gps_clusters,
         get_files_with_gps,
         open_corpus,
+        parse_gps_value,
     )
 
     corpus_conn = open_corpus(corpus_path)
@@ -63,7 +64,15 @@ def run_gps_cluster(
             progress.done()
             return {"clusters": 0, "assigned": 0, "noise": 0}
 
-        coords = np.array([(float(f["lat"]), float(f["lon"])) for f in files])
+        coords_list = [(parse_gps_value(f["lat"]), parse_gps_value(f["lon"])) for f in files]
+        # Filter out files where GPS could not be parsed
+        valid = [(f, lat, lon) for f, (lat, lon) in zip(files, coords_list)
+                 if lat is not None and lon is not None]
+        if not valid:
+            progress.done()
+            return {"clusters": 0, "assigned": 0, "noise": 0}
+        files = [v[0] for v in valid]
+        coords = np.array([(v[1], v[2]) for v in valid])
         coords_rad = np.radians(coords)
         eps_rad = config.gps_cluster_eps_km / 6371.0
 
@@ -129,7 +138,7 @@ def run_gps_cluster(
             else:
                 db_id = cluster_db_ids[lbl]
                 c_lat, c_lon = centroids[lbl]
-                dist = _haversine_m(float(file_row["lat"]), float(file_row["lon"]), c_lat, c_lon)
+                dist = _haversine_m(parse_gps_value(file_row["lat"]), parse_gps_value(file_row["lon"]), c_lat, c_lon)
                 corpus_conn.execute(
                     "INSERT OR REPLACE INTO file_gps_cluster_assignments"
                     " (file_id, cluster_id, distance_m) VALUES (?, ?, ?)",
@@ -159,6 +168,8 @@ def _write_gps_clusters(export_dir: Path, corpus_conn) -> None:
     from src.db.corpus import get_gps_cluster_assignments_for_export
 
     rows = get_gps_cluster_assignments_for_export(corpus_conn)
+    if not rows:
+        return
     with open(export_dir / "gps_clusters.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh,

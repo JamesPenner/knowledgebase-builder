@@ -11,7 +11,7 @@
   {% for item in items %}
   <tr class="token-row">
     <td class="token-name">{{ item.term }}</td>
-    <td class="token-count">{{ item.file_count }}</td>
+    <td class="token-freq">{{ item.file_count }}</td>
     <td class="token-actions">
       <form class="action-form"
             hx-post="/review/new-terms/decide?kb={{ kb }}"

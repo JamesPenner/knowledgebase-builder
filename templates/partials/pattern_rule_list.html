@@ -1,6 +1,6 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
   <span style="font-size:.85rem;color:#64748b">{{ rules | length }} rule{{ '' if rules | length == 1 else 's' }}</span>
-  <button class="btn btn--small"
+  <button class="btn btn--xs"
           hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}"
           hx-target="#pattern-rule-form"
           hx-swap="innerHTML">+ Add rule</button>
@@ -43,11 +43,11 @@
       </td>
       <td style="font-size:.85rem;color:#94a3b8">{{ rule.label or '—' }}</td>
       <td style="white-space:nowrap">
-        <button class="btn btn--small"
+        <button class="btn btn--xs"
                 hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}&rule_id={{ rule.id }}"
                 hx-target="#pattern-rule-form"
                 hx-swap="innerHTML">Edit</button>
-        <button class="btn btn--small btn--remove"
+        <button class="btn btn--xs btn--remove"
                 hx-post="/knowledge/pattern-rules/{{ rule.id }}/delete?kb={{ kb }}"
                 hx-target="#pattern-rule-form"
                 hx-swap="innerHTML"

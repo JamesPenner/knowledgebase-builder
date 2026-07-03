@@ -1,14 +1,28 @@
 import logging
+import threading
+from pathlib import Path
+
+from src.config import Config
+from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
 
-def run_geo_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None) -> dict:
+def run_geo_meta(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+    *,
+    scope=None,
+) -> dict:
     """Match file GPS coordinates against registered location entities and write labels."""
     import time as _time
     from src.db.corpus import (
         get_gps_files_without_location_label,
         open_corpus,
+        parse_gps_value,
         update_pipeline_checkpoint,
         upsert_location_label,
     )
@@ -45,15 +59,16 @@ def run_geo_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None) 
 
         pending = get_gps_files_without_location_label(corpus_conn, scope=scope)
         total = len(pending)
+        logger.info("geo_meta: %d entity rows loaded, %d files pending", len(entity_rows), total)
         progress.update(0, total, "Matching GPS to location register…")
 
         for i, file_row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
 
             file_id = file_row["id"]
-            file_lat = file_row["lat"]
-            file_lon = file_row["lon"]
+            file_lat = parse_gps_value(file_row["lat"])
+            file_lon = parse_gps_value(file_row["lon"])
 
             if file_lat is None or file_lon is None:
                 files_unmatched += 1
@@ -74,8 +89,11 @@ def run_geo_meta(corpus_path, kb_path, config, progress, cancel, *, scope=None) 
                 threshold = config.geo_meta_default_threshold_m
                 try:
                     t = erow.get("threshold_m")
-                    if t is not None:
-                        threshold = float(t)
+                    if t is not None and str(t).strip() not in ("", "-", "0"):
+                        entry_thr = float(t)
+                        # Per-entry threshold wins only when explicitly larger than the config
+                        # default; the config default acts as a minimum floor.
+                        threshold = max(threshold, entry_thr)
                 except (TypeError, ValueError):
                     pass
 

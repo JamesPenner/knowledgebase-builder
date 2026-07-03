@@ -1,7 +1,9 @@
 import sqlite3
 from pathlib import Path
+from typing import Literal
 
 from src.db.migrations import apply_migrations
+from src.db.utils import configure_connection as _configure
 
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations" / "knowledge"
 
@@ -28,16 +30,6 @@ _BUILTIN_STOPWORDS = [
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your",
     "yours", "yourself", "yourselves",
 ]
-
-
-def _configure(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA foreign_keys = ON;
-        PRAGMA cache_size = -32000;
-        PRAGMA temp_store = MEMORY;
-    """)
 
 
 def _seed_builtin_stopwords(conn: sqlite3.Connection) -> None:
@@ -696,6 +688,7 @@ def add_vocabulary_term(
         "INSERT OR IGNORE INTO vocabulary (term, synonyms_json, source) VALUES (?, ?, ?)",
         (term, synonyms_json, source),
     )
+    conn.commit()
     row = conn.execute("SELECT id FROM vocabulary WHERE term=?", (term,)).fetchone()
     return row["id"] if row else 0
 
@@ -714,6 +707,236 @@ def get_pattern_rule_type(conn: sqlite3.Connection, field_name: str) -> str:
 
 def delete_vocabulary_term(conn: sqlite3.Connection, term: str) -> None:
     conn.execute("DELETE FROM vocabulary WHERE term=?", (term,))
+    conn.commit()
+
+
+def update_vocabulary_term(
+    conn: sqlite3.Connection,
+    term: str,
+    synonyms_json: str,
+    write_synonyms: int | None = None,
+) -> None:
+    if write_synonyms is not None:
+        conn.execute(
+            "UPDATE vocabulary SET synonyms_json=?, write_synonyms=? WHERE term=?",
+            (synonyms_json, write_synonyms, term),
+        )
+    else:
+        conn.execute(
+            "UPDATE vocabulary SET synonyms_json=? WHERE term=?",
+            (synonyms_json, term),
+        )
+    conn.commit()
+
+
+def get_synonym_list(conn: sqlite3.Connection, term: str) -> list[str]:
+    import json as _json
+    row = conn.execute(
+        "SELECT synonyms_json FROM vocabulary WHERE term=?", (term,)
+    ).fetchone()
+    if not row:
+        return []
+    try:
+        return _json.loads(row["synonyms_json"] or "[]")
+    except (ValueError, TypeError):
+        return []
+
+
+def get_synonym_map(conn: sqlite3.Connection) -> dict[str, str]:
+    import json as _json
+    rows = conn.execute("SELECT term, synonyms_json FROM vocabulary").fetchall()
+    result: dict[str, str] = {}
+    for row in rows:
+        try:
+            synonyms = _json.loads(row["synonyms_json"] or "[]")
+        except (ValueError, TypeError):
+            synonyms = []
+        for syn in synonyms:
+            if syn:
+                result[str(syn)] = row["term"]
+    return result
+
+
+def merge_vocabulary_terms(
+    conn: sqlite3.Connection,
+    keep_term: str,
+    merge_term: str,
+) -> None:
+    _add_synonym_to_vocabulary(conn, keep_term, merge_term)
+    existing = conn.execute(
+        "SELECT id FROM pattern_rules WHERE pattern=? AND action='replace' AND replace_with=?",
+        (merge_term, keep_term),
+    ).fetchone()
+    if not existing:
+        conn.execute(
+            "INSERT INTO pattern_rules"
+            " (pattern, is_regex, action, replace_with, replace_type, scope)"
+            " VALUES (?, 0, 'replace', ?, 'synonym', 'both')",
+            (merge_term, keep_term),
+        )
+    conn.execute("DELETE FROM vocabulary WHERE term=?", (merge_term,))
+    conn.commit()
+
+
+def add_vocab_proposal(
+    conn: sqlite3.Connection,
+    terms: list[str],
+    source: str,
+    source_detail: str | None = None,
+) -> int:
+    import json as _json
+    terms_set = frozenset(t.lower() for t in terms)
+    existing_rows = conn.execute(
+        "SELECT terms_json FROM vocab_proposals WHERE status IN ('pending', 'confirmed')"
+    ).fetchall()
+    for row in existing_rows:
+        try:
+            existing_set = frozenset(t.lower() for t in _json.loads(row["terms_json"]))
+        except (ValueError, TypeError):
+            continue
+        if existing_set == terms_set:
+            return 0
+    dismissed_rows = conn.execute(
+        "SELECT terms_json FROM vocab_proposals WHERE status='dismissed'"
+    ).fetchall()
+    for row in dismissed_rows:
+        try:
+            dismissed_set = frozenset(t.lower() for t in _json.loads(row["terms_json"]))
+        except (ValueError, TypeError):
+            continue
+        if dismissed_set == terms_set:
+            return 0
+    terms_json = _json.dumps(sorted(terms), ensure_ascii=False)
+    cur = conn.execute(
+        "INSERT INTO vocab_proposals (terms_json, source, source_detail) VALUES (?, ?, ?)",
+        (terms_json, source, source_detail),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_vocab_proposals(
+    conn: sqlite3.Connection,
+    status: str = "pending",
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM vocab_proposals WHERE status=? ORDER BY source, added_at",
+        (status,),
+    ).fetchall()
+
+
+def confirm_vocab_proposal(
+    conn: sqlite3.Connection,
+    proposal_id: int,
+    canonical: str,
+) -> None:
+    import json as _json
+    row = conn.execute(
+        "SELECT terms_json, source FROM vocab_proposals WHERE id=?", (proposal_id,)
+    ).fetchone()
+    if not row:
+        return
+    try:
+        terms = _json.loads(row["terms_json"])
+    except (ValueError, TypeError):
+        terms = []
+    source = row["source"] or ""
+    add_vocabulary_term(conn, canonical, source="user")
+    for term in terms:
+        if term == canonical:
+            continue
+        existing_rule = conn.execute(
+            "SELECT id FROM pattern_rules WHERE pattern=? AND action='replace' AND replace_with=?",
+            (term, canonical),
+        ).fetchone()
+        if source == "llm_thematic":
+            # Thematic: Replace rule only — term stays in vocabulary, is not a synonym
+            if not existing_rule:
+                conn.execute(
+                    "INSERT INTO pattern_rules"
+                    " (pattern, is_regex, action, replace_with, replace_type, scope)"
+                    " VALUES (?, 0, 'replace', ?, 'thematic', 'both')",
+                    (term, canonical),
+                )
+        else:
+            _add_synonym_to_vocabulary(conn, canonical, term)
+            if not existing_rule:
+                conn.execute(
+                    "INSERT INTO pattern_rules"
+                    " (pattern, is_regex, action, replace_with, replace_type, scope)"
+                    " VALUES (?, 0, 'replace', ?, 'synonym', 'both')",
+                    (term, canonical),
+                )
+    conn.execute(
+        "UPDATE vocab_proposals SET status='confirmed', canonical=? WHERE id=?",
+        (canonical, proposal_id),
+    )
+    conn.commit()
+
+
+def dismiss_vocab_proposal(conn: sqlite3.Connection, proposal_id: int) -> None:
+    conn.execute(
+        "UPDATE vocab_proposals SET status='dismissed' WHERE id=?",
+        (proposal_id,),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy proposal helpers
+# ---------------------------------------------------------------------------
+
+def save_taxonomy_proposal(conn: sqlite3.Connection, tree_json: str) -> int:
+    """Dismiss any existing pending proposal and insert a new one. Returns new row id."""
+    conn.execute(
+        "UPDATE taxonomy_proposals SET status='dismissed' WHERE status='pending'"
+    )
+    cur = conn.execute(
+        "INSERT INTO taxonomy_proposals (tree_json) VALUES (?)",
+        (tree_json,),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_pending_taxonomy_proposal(conn: sqlite3.Connection) -> "sqlite3.Row | None":
+    return conn.execute(
+        "SELECT * FROM taxonomy_proposals WHERE status='pending' ORDER BY generated_at DESC LIMIT 1"
+    ).fetchone()
+
+
+def dismiss_taxonomy_proposal(conn: sqlite3.Connection, proposal_id: int) -> None:
+    conn.execute(
+        "UPDATE taxonomy_proposals SET status='dismissed' WHERE id=?",
+        (proposal_id,),
+    )
+    conn.commit()
+
+
+def apply_taxonomy_proposal(
+    conn: sqlite3.Connection,
+    proposal_id: int,
+    accepted_tree: dict,
+    kb_folder: "Path",
+) -> None:
+    import yaml as _yaml
+    taxonomy_path = kb_folder / "reference" / "taxonomy.yaml"
+    existing: dict = {}
+    if taxonomy_path.exists():
+        try:
+            loaded = _yaml.safe_load(taxonomy_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            pass
+    merged = merge_taxonomy(existing, {"Topics": accepted_tree})
+    with open(taxonomy_path, "w", encoding="utf-8") as fh:
+        _yaml.dump(merged, fh, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    conn.execute(
+        "UPDATE taxonomy_proposals SET status='applied', applied_at=datetime('now') WHERE id=?",
+        (proposal_id,),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -1048,40 +1271,46 @@ def merge_taxonomy(existing: dict, generated: dict) -> dict:
 # Face centroid helpers
 # ---------------------------------------------------------------------------
 
-def get_people_with_centroids(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_people_with_centroids(
+    conn: sqlite3.Connection,
+    kind: Literal["face", "voice"],
+) -> list[sqlite3.Row]:
+    if kind == "face":
+        return conn.execute(
+            "SELECT id, preferred_name, face_centroid, face_samples"
+            " FROM people WHERE face_centroid IS NOT NULL ORDER BY id"
+        ).fetchall()
     return conn.execute(
-        """
-        SELECT id, preferred_name, face_centroid, face_samples
-        FROM people
-        WHERE face_centroid IS NOT NULL
-        ORDER BY id
-        """
+        "SELECT id, preferred_name, voice_centroid, voice_samples"
+        " FROM people WHERE voice_centroid IS NOT NULL ORDER BY id"
     ).fetchall()
 
 
-def update_face_centroid(
+def update_person_centroid(
     conn: sqlite3.Connection,
     person_id: int,
     new_centroid_blob: bytes,
     new_sample_count: int,
+    *,
+    kind: Literal["face", "voice"],
+    spread: float | None = None,
 ) -> None:
-    conn.execute(
-        "UPDATE people SET face_centroid = ?, face_samples = ? WHERE id = ?",
-        (new_centroid_blob, new_sample_count, person_id),
-    )
-
-
-def update_face_centroid_with_spread(
-    conn: sqlite3.Connection,
-    person_id: int,
-    new_centroid_blob: bytes,
-    new_sample_count: int,
-    spread: float,
-) -> None:
-    conn.execute(
-        "UPDATE people SET face_centroid = ?, face_samples = ?, face_centroid_spread = ? WHERE id = ?",
-        (new_centroid_blob, new_sample_count, spread, person_id),
-    )
+    if kind == "face":
+        if spread is not None:
+            conn.execute(
+                "UPDATE people SET face_centroid = ?, face_samples = ?, face_centroid_spread = ? WHERE id = ?",
+                (new_centroid_blob, new_sample_count, spread, person_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE people SET face_centroid = ?, face_samples = ? WHERE id = ?",
+                (new_centroid_blob, new_sample_count, person_id),
+            )
+    else:
+        conn.execute(
+            "UPDATE people SET voice_centroid = ?, voice_samples = ? WHERE id = ?",
+            (new_centroid_blob, new_sample_count, person_id),
+        )
 
 
 def get_all_people_names(conn: sqlite3.Connection) -> dict[str, int]:
@@ -1170,29 +1399,6 @@ def get_people_face_centroids_for_export(conn: sqlite3.Connection) -> list[sqlit
 # ---------------------------------------------------------------------------
 # Voice centroid helpers
 # ---------------------------------------------------------------------------
-
-def get_people_with_voice_centroids(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT id, preferred_name, voice_centroid, voice_samples
-        FROM people
-        WHERE voice_centroid IS NOT NULL
-        ORDER BY id
-        """
-    ).fetchall()
-
-
-def update_voice_centroid(
-    conn: sqlite3.Connection,
-    person_id: int,
-    new_centroid_blob: bytes,
-    new_sample_count: int,
-) -> None:
-    conn.execute(
-        "UPDATE people SET voice_centroid = ?, voice_samples = ? WHERE id = ?",
-        (new_centroid_blob, new_sample_count, person_id),
-    )
-
 
 def get_all_people(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
@@ -1390,6 +1596,64 @@ _BUILTIN_STAGE_PROMPTS = [
         "no explanation outside the summary itself. "
         "Preserve all proper nouns (personal names, place names, event names) exactly as "
         "they appear in the source material — do not paraphrase, normalise, or correct them.",
+    ),
+    (
+        "vocab_suggest", "synonyms", "Default",
+        "You are a vocabulary management assistant. Your task is to suggest synonyms for a given term.\n\n"
+        "Return ONLY valid JSON with no explanation, no markdown, no code fences. "
+        "Use this exact schema:\n"
+        '{"synonyms": ["term1", "term2"]}\n\n'
+        "Rules:\n"
+        "- List only genuine synonyms (interchangeable alternatives for the same concept)\n"
+        "- Exclude any terms already present in the provided vocabulary list\n"
+        "- Prefer common, lowercase forms\n"
+        "- If no good synonyms exist, return {\"synonyms\": []}",
+    ),
+    (
+        "vocab_suggest", "semantic", "Default",
+        "You are a vocabulary management assistant. Analyse a list of vocabulary terms and identify "
+        "groups where all members mean the same concept.\n\n"
+        "Return ONLY valid JSON with no explanation, no markdown, no code fences. "
+        "Use this exact schema:\n"
+        '{"groups": [{"canonical": "preferred_term", "terms": ["variant1", "variant2"]}]}\n\n'
+        "Rules:\n"
+        "- canonical must be the most standard, widely-recognised form of the concept\n"
+        "- terms lists the variant forms; do not include canonical in terms\n"
+        "- Only group terms that are genuinely interchangeable (synonyms, abbreviations, spelling variants)\n"
+        "- Do not group related-but-distinct concepts (e.g. cat ≠ animal)\n"
+        "- Leave unique or unambiguous terms ungrouped\n"
+        "- If no groupings exist, return {\"groups\": []}",
+    ),
+    (
+        "vocab_suggest", "thematic", "Default",
+        "You are a vocabulary management assistant. Analyse a list of vocabulary terms and identify "
+        "thematic groupings — sets of specific terms that belong under a broader umbrella category.\n\n"
+        "Return ONLY valid JSON with no explanation, no markdown, no code fences. "
+        "Use this exact schema:\n"
+        '{"groups": [{"canonical": "UmbrellaCategory", "terms": ["specific1", "specific2"]}]}\n\n'
+        "Rules:\n"
+        "- canonical is the broader umbrella category term (e.g. Wildlife, Landscape, Architecture)\n"
+        "- terms lists the specific terms that roll up to that category\n"
+        "- The canonical umbrella may or may not already exist in the vocabulary list\n"
+        "- Only propose groupings that are unambiguous and useful for search and tagging\n"
+        "- Do not create overly broad groupings (e.g. do not put all nouns under 'Things')\n"
+        "- If no thematic groupings exist, return {\"groups\": []}",
+    ),
+    (
+        "vocab_suggest", "taxonomy", "Default",
+        "You are a vocabulary management assistant. Analyse a list of vocabulary terms and propose "
+        "a 2–3 level topic hierarchy that organises them into meaningful categories.\n\n"
+        "Return ONLY valid JSON with no explanation, no markdown, no code fences. "
+        "Use this exact schema:\n"
+        '[{"name": "TopLevel", "children": [{"name": "MidLevel", "children": [{"name": "LeafTerm"}]}]}]\n\n'
+        "Rules:\n"
+        "- Maximum 3 levels of nesting\n"
+        "- Only group vocabulary terms provided — you may invent umbrella category names but "
+        "every leaf node must come from the provided vocabulary list\n"
+        "- Do not force terms into a category if they do not fit naturally; leave them out\n"
+        "- Do not create overly broad top-level categories (e.g. 'Things', 'Other')\n"
+        "- Prefer 5–15 terms per branch; avoid single-item branches\n"
+        "- Return an empty array [] if the vocabulary is too small or too diverse to group meaningfully",
     ),
 ]
 

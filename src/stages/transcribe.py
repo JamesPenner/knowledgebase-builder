@@ -16,8 +16,7 @@ _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"}
 _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".webm", ".m4v", ".mts", ".m2ts"}
 
 
-class ModelLoadError(Exception):
-    pass
+from src.llm.session import ModelLoadError  # noqa: F401 — re-exported for callers
 
 
 def _transcribe_with_cli(

@@ -182,3 +182,59 @@ def test_analyse_updates_pipeline_checkpoint(tmp_path):
 
     assert row is not None
     assert row["files_processed"] > 0
+
+
+def test_analyse_generates_bigrams_for_adjacent_word_tokens(tmp_path):
+    """Adjacent word tokens in filenames produce a bigram entry with pattern_class='ngram'."""
+    src_dir = tmp_path / "sources"
+    _make_images(src_dir, ["colquitz_creek_001.jpg", "colquitz_creek_002.jpg"])
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    _ingest_and_analyse(corpus_path, kb_path, src_dir)
+
+    conn = open_corpus(corpus_path)
+    row = conn.execute(
+        "SELECT pattern_class, semantic_type FROM analyse_tokens WHERE token='colquitz creek'"
+    ).fetchone()
+    conn.close()
+
+    assert row is not None, "Bigram 'colquitz creek' should appear in analyse_tokens"
+    assert row["pattern_class"] == "ngram"
+    assert row["semantic_type"] == "compound"
+
+
+def test_analyse_bigrams_require_min_two_files(tmp_path):
+    """Bigrams that appear in only one file are not stored."""
+    src_dir = tmp_path / "sources"
+    _make_images(src_dir, ["colquitz_creek.jpg", "something_else.jpg"])
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    _ingest_and_analyse(corpus_path, kb_path, src_dir)
+
+    conn = open_corpus(corpus_path)
+    row = conn.execute(
+        "SELECT id FROM analyse_tokens WHERE token='colquitz creek'"
+    ).fetchone()
+    conn.close()
+
+    assert row is None, "Single-file bigrams should not be stored"
+
+
+def test_analyse_bigrams_exclude_numeric_tokens(tmp_path):
+    """Numeric/sequential tokens do not participate in bigrams."""
+    src_dir = tmp_path / "sources"
+    _make_images(src_dir, ["project_20230101_001.jpg", "project_20230101_002.jpg"])
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    _ingest_and_analyse(corpus_path, kb_path, src_dir)
+
+    conn = open_corpus(corpus_path)
+    row = conn.execute(
+        "SELECT id FROM analyse_tokens WHERE token='project 20230101' OR token='20230101 001'"
+    ).fetchone()
+    conn.close()
+
+    assert row is None, "Numeric tokens should not appear in bigrams"

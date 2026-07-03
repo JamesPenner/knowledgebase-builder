@@ -37,13 +37,16 @@
           {% endif %}
         </td>
         <td style="text-align:right;padding:.35rem .5rem;color:#94a3b8">
-          {{ "%.5f"|format(entry.latitude) if entry.latitude is not none else "" }}
+          {% set _lat = entry.latitude %}
+          {{ "%.5f"|format(_lat | float) if _lat and _lat not in ('-', '') else "" }}
         </td>
         <td style="text-align:right;padding:.35rem .5rem;color:#94a3b8">
-          {{ "%.5f"|format(entry.longitude) if entry.longitude is not none else "" }}
+          {% set _lon = entry.longitude %}
+          {{ "%.5f"|format(_lon | float) if _lon and _lon not in ('-', '') else "" }}
         </td>
         <td style="text-align:right;padding:.35rem .5rem;color:#94a3b8">
-          {{ entry.threshold_m | int if entry.threshold_m is not none else "" }}
+          {% set _thr = entry.threshold_m %}
+          {{ (_thr | float) | int if _thr and _thr not in ('-', '') else "" }}
         </td>
         <td style="padding:.35rem .5rem;white-space:nowrap">
           <button class="btn btn--capture"

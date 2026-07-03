@@ -1,0 +1,42 @@
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+  <span style="color:#64748b;font-size:.9rem">
+    {% if terms %}{{ terms|length }} term{{ '' if terms|length == 1 else 's' }}{% else %}No terms yet{% endif %}
+  </span>
+  <button class="btn btn--xs"
+          hx-get="/knowledge/vocabulary/partials/form?kb={{ kb }}"
+          hx-target="#vocabulary-form"
+          hx-swap="innerHTML">+ Add Term</button>
+</div>
+{% if terms %}
+<table class="decisions-table">
+  <thead>
+    <tr>
+      <th>Term</th>
+      <th>Synonyms</th>
+      <th>Source</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in terms %}
+  <tr class="decision-row">
+    <td class="decision-token">{{ t.term }}</td>
+    <td>
+      {% for s in t.synonyms[:3] %}<span class="badge" style="margin:.1rem .2rem .1rem 0">{{ s }}</span>{% endfor %}
+      {% if t.synonyms|length > 3 %}<span style="color:#64748b;font-size:.82rem">+{{ t.synonyms|length - 3 }} more</span>{% endif %}
+      {% if not t.synonyms %}<span style="color:#94a3b8;font-size:.85rem">—</span>{% endif %}
+    </td>
+    <td><span class="badge badge--{{ t.source }}">{{ t.source }}</span></td>
+    <td class="decision-actions">
+      <button class="btn btn--xs"
+              hx-get="/knowledge/vocabulary/partials/form?kb={{ kb }}&term={{ t.term | urlencode }}"
+              hx-target="#vocabulary-form"
+              hx-swap="innerHTML">Edit</button>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No vocabulary terms yet. Accept terms in Suggest Review or add them manually.</p>
+{% endif %}

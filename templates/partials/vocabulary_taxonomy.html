@@ -1,0 +1,80 @@
+{% macro render_node(node, current_path) %}
+  {% if node.children %}
+    <details open style="margin:.1rem 0">
+      <summary class="tax-branch">
+        <label style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:.35rem">
+          <input type="checkbox" class="tax-node-cb" data-path="{{ current_path }}" checked>
+          <strong>{{ node.name }}</strong>
+        </label>
+      </summary>
+      <div class="tax-tree">
+        {% for child in node.children %}
+          {{ render_node(child, current_path + "::" + child.name) }}
+        {% endfor %}
+      </div>
+    </details>
+  {% else %}
+    <label style="display:flex;align-items:center;gap:.35rem;cursor:pointer;user-select:none;padding:.1rem 0">
+      <input type="checkbox" name="node" value="{{ current_path }}"
+             class="tax-node-cb" data-path="{{ current_path }}" checked>
+      {{ node.name }}
+    </label>
+  {% endif %}
+{% endmacro %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;flex-wrap:wrap;gap:.4rem">
+  <h2 style="margin:0;font-size:1.1rem">Proposed Taxonomy</h2>
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">
+    <form hx-post="/knowledge/vocabulary/proposals/suggest-taxonomy?kb={{ kb }}"
+          hx-target="#vocabulary-taxonomy"
+          hx-swap="innerHTML"
+          hx-indicator="#tax-indicator">
+      <button type="submit" class="btn btn--xs"
+              style="background:#ede9fe;color:#5b21b6;border:1px solid #c4b5fd">
+        {% if proposal %}Re-generate Taxonomy{% else %}Suggest Taxonomy{% endif %}
+      </button>
+    </form>
+  </div>
+</div>
+<span id="tax-indicator" class="htmx-indicator" style="color:#64748b;font-size:.85rem">Analysing vocabulary…</span>
+
+{% if proposal %}
+<form hx-post="/knowledge/vocabulary/proposals/apply-taxonomy?kb={{ kb }}"
+      hx-target="#vocabulary-taxonomy"
+      hx-swap="innerHTML">
+  <input type="hidden" name="proposal_id" value="{{ proposal.id }}">
+  <div style="border:1px solid #e2e8f0;border-radius:6px;padding:.75rem 1rem;margin-top:.5rem">
+    {% for node in nodes %}
+      {{ render_node(node, node.name) }}
+    {% endfor %}
+    {% if not nodes %}
+      <p class="empty-state">No hierarchy proposed — vocabulary may be too small or too varied.</p>
+    {% endif %}
+  </div>
+  <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem">
+    <button type="button" class="btn btn--xs btn--reject"
+            hx-post="/knowledge/vocabulary/proposals/dismiss-taxonomy?kb={{ kb }}"
+            hx-target="#vocabulary-taxonomy"
+            hx-swap="innerHTML"
+            hx-vals='{"proposal_id": "{{ proposal.id }}"}'>Dismiss</button>
+    <button type="submit" class="btn btn--xs btn--capture">Apply Selected</button>
+  </div>
+</form>
+{% else %}
+<p class="empty-state" style="margin-top:.5rem">No taxonomy proposal pending. Click "Suggest Taxonomy" to generate one.</p>
+{% endif %}
+
+<script>
+(function(){
+  document.querySelectorAll('.tax-node-cb').forEach(function(cb){
+    cb.addEventListener('change', function(){
+      if(!this.checked){
+        var prefix = this.dataset.path + '::';
+        document.querySelectorAll('.tax-node-cb').forEach(function(c){
+          if(c.dataset.path.startsWith(prefix)){ c.checked = false; }
+        });
+      }
+    });
+  });
+})();
+</script>

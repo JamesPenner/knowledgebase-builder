@@ -162,6 +162,8 @@ def run_analyse(
     token_files: dict[str, set[int]] = defaultdict(set)
     token_freq: dict[str, int] = defaultdict(int)
     token_depth: dict[str, int] = defaultdict(int)
+    bigram_files: dict[str, set[int]] = defaultdict(set)
+    bigram_freq: dict[str, int] = defaultdict(int)
 
     start = time.monotonic()
     total = len(files)
@@ -187,12 +189,20 @@ def run_analyse(
         tokens = tokenize_path(tokenize_input)
 
         file_id = file_row["id"]
+        file_word_tokens: list[str] = []
         for tok in tokens:
             token_files[tok].add(file_id)
             token_freq[tok] += 1
             # Track the primary depth (first time we see it at a given depth; overwrite later)
             if tok not in token_depth:
                 token_depth[tok] = depth
+            if classify_token(tok)[0] == "word":
+                file_word_tokens.append(tok)
+
+        for j in range(len(file_word_tokens) - 1):
+            bigram = f"{file_word_tokens[j]} {file_word_tokens[j + 1]}"
+            bigram_files[bigram].add(file_id)
+            bigram_freq[bigram] += 1
 
         progress.update(i + 1, total)
 
@@ -232,9 +242,34 @@ def run_analyse(
             )
         conn.commit()
 
+    # Write bigrams — only those appearing in >= 2 files
+    _MIN_BIGRAM_FILES = 2
+    bigram_items = [
+        (bg, fids) for bg, fids in bigram_files.items() if len(fids) >= _MIN_BIGRAM_FILES
+    ]
+    for j in range(0, len(bigram_items), batch_size):
+        if cancel_event.is_set():
+            break
+        chunk = bigram_items[j:j + batch_size]
+        for bigram, file_id_set in chunk:
+            upsert_analyse_token(
+                conn,
+                token=bigram,
+                pattern_class="ngram",
+                semantic_type="compound",
+                frequency=bigram_freq[bigram],
+                file_count=len(file_id_set),
+                proposed_action="none",
+                proposed_extract_as="",
+                is_cross_source=bigram in meta_keywords,
+                depth_position=0,
+            )
+        conn.commit()
+
     # Remove tokens that no longer appear in any corpus file
+    surviving_bigrams = {bg for bg, fids in bigram_files.items() if len(fids) >= _MIN_BIGRAM_FILES}
     if not cancel_event.is_set():
-        delete_stale_analyse_tokens(conn, set(token_files.keys()))
+        delete_stale_analyse_tokens(conn, set(token_files.keys()) | surviving_bigrams)
 
     duration = time.monotonic() - start
     update_pipeline_checkpoint(

@@ -8,10 +8,17 @@ from src.db.corpus import open_corpus, upsert_face_region
 from src.db.kb import (
     get_face_embeddings_for_person,
     open_kb,
-    update_face_centroid,
-    update_face_centroid_with_spread,
+    update_person_centroid,
     upsert_person,
 )
+
+
+def update_face_centroid(conn, person_id, blob, count):
+    update_person_centroid(conn, person_id, blob, count, kind="face")
+
+
+def update_face_centroid_with_spread(conn, person_id, blob, count, spread):
+    update_person_centroid(conn, person_id, blob, count, kind="face", spread=spread)
 from src.stages.face import compute_trimmed_centroid
 
 

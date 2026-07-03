@@ -1,20 +1,39 @@
+import re
 import sqlite3
 from pathlib import Path
 
 from src.db.migrations import apply_migrations
+from src.db.utils import configure_connection as _configure
 from src.pipeline.filter_spec import CorpusFilterSpec
 
+
+def parse_gps_value(raw: str | None) -> float | None:
+    """Convert ExifTool GPS string to signed decimal degrees.
+
+    Handles decimal strings (e.g. '48.3853') and DMS strings produced by
+    ExifTool (e.g. '48 deg 23\' 7.18" N', '123 deg 30\' 53.67" W').
+    Returns None if the value is absent or unparseable.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    m = re.match(r"(\d+)\s+deg\s+(\d+)'\s+([\d.]+)\"\s*([NSEWnsew])?", s)
+    if m:
+        deg = float(m.group(1))
+        mins = float(m.group(2))
+        secs = float(m.group(3))
+        direction = (m.group(4) or "").upper()
+        result = deg + mins / 60.0 + secs / 3600.0
+        if direction in ("S", "W"):
+            result = -result
+        return result
+    return None
+
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations" / "corpus"
-
-
-def _configure(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA foreign_keys = ON;
-        PRAGMA cache_size = -32000;
-        PRAGMA temp_store = MEMORY;
-    """)
 
 
 def open_corpus(path: Path) -> sqlite3.Connection:
@@ -51,6 +70,40 @@ def add_source(
     return row["id"]
 
 
+# Tables that store per-file derived data and must be cleared when files are removed.
+# NOTE: file_set_members is intentionally excluded here — set membership is a user-defined
+# grouping that should survive source removal. It is only cleared by reset_corpus_files.
+_CORPUS_DERIVED_TABLES = [
+    "face_cluster_members",
+    "file_voice_segments",
+    "file_voice_embeddings",
+    "file_face_regions",
+    "file_geolabels",
+    "file_gps_masks",
+    "file_gps_cluster_assignments",
+    "validation_results",
+    "file_temporal_fields",
+    "file_derived_tags",
+    "file_entity_matches",
+    "file_quality",
+    "file_aesthetic",
+    "file_hashes",
+    "file_captured_fields",
+    "file_exif",
+    "file_metadata_fields",
+    "file_metadata_keywords",
+    "descriptions",
+    "video_frames",
+    "candidates",
+    "transcriptions",
+    "transcript_segments",
+    "retag_output",
+    "writeback_log",
+    "file_summaries",
+    "file_location_labels",
+]
+
+
 def remove_source(conn: sqlite3.Connection, source_id: int, cascade: bool = False) -> int:
     """Soft-delete or cascade-delete a source.
 
@@ -80,37 +133,7 @@ def remove_source(conn: sqlite3.Connection, source_id: int, cascade: bool = Fals
     file_ids = [r["id"] for r in file_id_rows]
     placeholders = ",".join("?" * len(file_ids))
 
-    child_tables = [
-        "face_cluster_members",
-        "file_voice_segments",
-        "file_voice_embeddings",
-        "file_face_regions",
-        "file_geolabels",
-        "file_gps_masks",
-        "file_gps_cluster_assignments",
-        "validation_results",
-        "file_temporal_fields",
-        "file_derived_tags",
-        "file_entity_matches",
-        "file_quality",
-        "file_aesthetic",
-        "file_hashes",
-        "file_captured_fields",
-        "file_exif",
-        "file_metadata_fields",
-        "file_metadata_keywords",
-        "descriptions",
-        "video_frames",
-        "candidates",
-        "transcriptions",
-        "transcript_segments",
-        "retag_output",
-        "writeback_log",
-        "file_summaries",
-        "file_location_labels",
-    ]
-
-    for tbl in child_tables:
+    for tbl in _CORPUS_DERIVED_TABLES:
         conn.execute(
             f"DELETE FROM {tbl} WHERE file_id IN ({placeholders})", file_ids
         )
@@ -153,37 +176,8 @@ def update_source(
 def reset_corpus_files(conn: sqlite3.Connection) -> int:
     """Delete all corpus files and their derived data. Returns the file count cleared."""
     count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    derived_tables = [
-        "file_set_members",
-        "face_cluster_members",
-        "file_voice_segments",
-        "file_voice_embeddings",
-        "file_face_regions",
-        "file_geolabels",
-        "file_gps_masks",
-        "file_gps_cluster_assignments",
-        "validation_results",
-        "file_temporal_fields",
-        "file_derived_tags",
-        "file_entity_matches",
-        "file_quality",
-        "file_aesthetic",
-        "file_hashes",
-        "file_captured_fields",
-        "file_exif",
-        "file_metadata_fields",
-        "file_metadata_keywords",
-        "descriptions",
-        "video_frames",
-        "candidates",
-        "transcriptions",
-        "transcript_segments",
-        "retag_output",
-        "writeback_log",
-        "file_summaries",
-        "file_location_labels",
-    ]
-    for tbl in derived_tables:
+    # Also clear file_set_members — a full reset removes all user-defined groupings too.
+    for tbl in ["file_set_members"] + _CORPUS_DERIVED_TABLES:
         conn.execute(f"DELETE FROM {tbl}")
     conn.execute("DELETE FROM files")
     conn.execute(
@@ -783,6 +777,7 @@ _CLASS_LABEL: dict[str, str] = {
     "route_code":     "Route codes",
     "camelcase":      "CamelCase compound terms",
     "word":           "Words",
+    "ngram":          "Filename compound terms",
 }
 _SEMANTIC_LABEL: dict[str, str] = {
     "date":         "Likely dates",
@@ -808,8 +803,8 @@ def get_files_with_gps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.id, f.path,
-               CAST(lat.value AS REAL) AS lat,
-               CAST(lon.value AS REAL) AS lon
+               lat.value AS lat,
+               lon.value AS lon
         FROM files f
         JOIN file_metadata_fields lat ON lat.file_id = f.id AND lat.canonical_name = 'exif_gps_lat'
         JOIN file_metadata_fields lon ON lon.file_id = f.id AND lon.canonical_name = 'exif_gps_lon'
@@ -1128,6 +1123,19 @@ def set_candidate_status(
     conn.execute(
         "UPDATE candidates SET status=?, corrected_to=? WHERE id=?",
         (status, corrected_to, candidate_id),
+    )
+
+
+def set_term_candidates_status(
+    conn: sqlite3.Connection,
+    term: str,
+    status: str,
+    corrected_to: str | None = None,
+) -> None:
+    """Update ALL pending candidate rows for a term to a new status."""
+    conn.execute(
+        "UPDATE candidates SET status=?, corrected_to=? WHERE term=? AND status='pending'",
+        (status, corrected_to, term),
     )
 
 
@@ -2592,8 +2600,8 @@ def get_gps_files_without_location_label(
     return conn.execute(
         f"""
         SELECT f.id, f.path,
-               CAST(lat.value AS REAL) AS lat,
-               CAST(lon.value AS REAL) AS lon
+               lat.value AS lat,
+               lon.value AS lon
         FROM files f
         JOIN file_metadata_fields lat ON lat.file_id = f.id AND lat.canonical_name = 'exif_gps_lat'
         JOIN file_metadata_fields lon ON lon.file_id = f.id AND lon.canonical_name = 'exif_gps_lon'
@@ -2769,6 +2777,18 @@ def get_gps_cluster_with_assignments(conn: sqlite3.Connection, cluster_id: int) 
     result = dict(row)
     result["file_paths"] = [r["path"] for r in paths]
     return result
+
+
+def get_analyse_token_by_id(conn: sqlite3.Connection, token_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT token FROM analyse_tokens WHERE id=?", (token_id,)).fetchone()
+
+
+def get_candidate_by_id(conn: sqlite3.Connection, candidate_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT term FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+
+
+def get_file_path_by_id(conn: sqlite3.Connection, file_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT path FROM files WHERE id=?", (file_id,)).fetchone()
 
 
 def get_validation_results_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:

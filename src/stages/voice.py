@@ -1,15 +1,17 @@
 import logging
+import threading
 import wave
 from pathlib import Path
+
+from src.config import Config
+from src.llm.session import ModelLoadError  # noqa: F401 — re-exported for callers
+from src.pipeline.embeddings import cosine_similarity, update_centroid
+from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
 _MIN_DURATION_S = 1.0
 _EMBEDDING_DIM = 256
-
-
-class ModelLoadError(Exception):
-    pass
 
 
 def embed_voice(wav_path: Path, model_name: str = "resemblyzer") -> tuple[bytes, int] | tuple[None, None]:
@@ -52,43 +54,13 @@ def embed_voice(wav_path: Path, model_name: str = "resemblyzer") -> tuple[bytes,
     return embedding.astype(np.float32).tobytes(), duration_ms
 
 
-def cosine_similarity_voice(a: bytes, b: bytes) -> float:
-    """Cosine similarity between two 256D float32 voice embeddings stored as bytes."""
-    import numpy as np
-    va = np.frombuffer(a, dtype=np.float32)
-    vb = np.frombuffer(b, dtype=np.float32)
-    norm_a = float(np.linalg.norm(va))
-    norm_b = float(np.linalg.norm(vb))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (norm_a * norm_b))
-
-
-def update_voice_centroid(
-    old_blob: bytes | None,
-    old_count: int,
-    new_embedding: bytes,
-) -> tuple[bytes, int]:
-    """Incremental running mean centroid update (same algorithm as face stage).
-
-    Returns (new_centroid_blob, new_count).
-    """
-    import numpy as np
-    new_vec = np.frombuffer(new_embedding, dtype=np.float32).copy()
-    if old_blob is None or old_count == 0:
-        new_count = 1
-        centroid = new_vec
-    else:
-        old_vec = np.frombuffer(old_blob, dtype=np.float32).copy()
-        new_count = old_count + 1
-        centroid = (old_vec * old_count + new_vec) / new_count
-    norm = float(np.linalg.norm(centroid))
-    if norm > 0:
-        centroid = centroid / norm
-    return centroid.astype(np.float32).tobytes(), new_count
-
-
-def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
+def run_voice(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+) -> dict:
     """Embed speaker voice from pending audio/video files and match to known people."""
     import time as _time
     from src.db.corpus import (
@@ -100,9 +72,9 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
         upsert_voice_embedding,
     )
     from src.db.kb import (
-        get_people_with_voice_centroids,
+        get_people_with_centroids,
         open_kb,
-        update_voice_centroid as _db_update_voice_centroid,
+        update_person_centroid as _db_update_person_centroid,
     )
     from src.media.audiotrack import prepare_audio
 
@@ -116,7 +88,7 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
     _start = _time.monotonic()
 
     try:
-        people_rows = get_people_with_voice_centroids(kb_conn)
+        people_rows = get_people_with_centroids(kb_conn, "voice")
         centroids: dict[int, dict] = {
             row["id"]: {
                 "blob": bytes(row["voice_centroid"]),
@@ -130,7 +102,7 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
         progress.update(0, total, "Embedding voices…")
 
         for i, row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
 
             file_path = Path(row["path"])
@@ -182,7 +154,7 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
                     best_person_id = None
                     best_similarity = 0.0
                     for person_id, cent in centroids.items():
-                        sim = cosine_similarity_voice(embedding_bytes, cent["blob"])
+                        sim = cosine_similarity(embedding_bytes, cent["blob"])
                         if sim > best_similarity:
                             best_similarity = sim
                             best_person_id = person_id
@@ -190,9 +162,9 @@ def run_voice(corpus_path, kb_path, config, progress, cancel) -> dict:
                     if best_person_id is not None and best_similarity >= config.voice_similarity_threshold:
                         files_matched += 1
                         old = centroids[best_person_id]
-                        new_blob, new_count = update_voice_centroid(old["blob"], old["count"], embedding_bytes)
+                        new_blob, new_count = update_centroid(old["blob"], old["count"], embedding_bytes)
                         centroids[best_person_id] = {"blob": new_blob, "count": new_count}
-                        _db_update_voice_centroid(kb_conn, best_person_id, new_blob, new_count)
+                        _db_update_person_centroid(kb_conn, best_person_id, new_blob, new_count, kind="voice")
 
                     corpus_conn.commit()
                     kb_conn.commit()
@@ -344,7 +316,13 @@ def embed_voice_segment(
     return embedding.astype(np.float32).tobytes()
 
 
-def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
+def run_voice_diarize(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+) -> dict:
     """Diarize audio/video files and match speaker segments to known people."""
     import time as _time
     from src.db.corpus import (
@@ -358,9 +336,9 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
         upsert_voice_speaker_cluster,
     )
     from src.db.kb import (
-        get_people_with_voice_centroids,
+        get_people_with_centroids,
         open_kb,
-        update_voice_centroid as _db_update_voice_centroid,
+        update_person_centroid as _db_update_person_centroid,
     )
     from src.media.audiotrack import prepare_audio
 
@@ -374,7 +352,7 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
     _start = _time.monotonic()
 
     try:
-        people_rows = get_people_with_voice_centroids(kb_conn)
+        people_rows = get_people_with_centroids(kb_conn, "voice")
         centroids: dict[int, dict] = {
             row["id"]: {
                 "blob": bytes(row["voice_centroid"]),
@@ -394,7 +372,7 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
         progress.update(0, total, "Diarizing audio…")
 
         for i, row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
 
             file_path = Path(row["path"])
@@ -459,7 +437,7 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
                             best_person_id = None
                             best_sim = 0.0
                             for person_id, cent in centroids.items():
-                                sim = cosine_similarity_voice(embedding, cent["blob"])
+                                sim = cosine_similarity(embedding, cent["blob"])
                                 if sim > best_sim:
                                     best_sim = sim
                                     best_person_id = person_id
@@ -469,16 +447,16 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
                                 matched_similarity = best_sim
                                 segments_matched += 1
                                 old = centroids[best_person_id]
-                                new_blob, new_count = update_voice_centroid(
+                                new_blob, new_count = update_centroid(
                                     old["blob"], old["count"], embedding
                                 )
                                 centroids[best_person_id] = {"blob": new_blob, "count": new_count}
-                                _db_update_voice_centroid(kb_conn, best_person_id, new_blob, new_count)
+                                _db_update_person_centroid(kb_conn, best_person_id, new_blob, new_count, kind="voice")
                             else:
                                 best_ci = None
                                 best_cluster_sim = 0.0
                                 for ci, cl in enumerate(cluster_centroids):
-                                    sim = cosine_similarity_voice(embedding, cl["blob"])
+                                    sim = cosine_similarity(embedding, cl["blob"])
                                     if sim > best_cluster_sim:
                                         best_cluster_sim = sim
                                         best_ci = ci
@@ -489,7 +467,7 @@ def run_voice_diarize(corpus_path, kb_path, config, progress, cancel) -> dict:
                                     matched_cluster_id = cid
                                 else:
                                     cl = cluster_centroids[best_ci]
-                                    new_blob, new_count = update_voice_centroid(
+                                    new_blob, new_count = update_centroid(
                                         cl["blob"], cl["count"], embedding
                                     )
                                     spread = 1.0 - best_cluster_sim

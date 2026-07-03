@@ -37,71 +37,50 @@ const WB = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Sources header collapse/expand
+  // Collapsible panel factory — shared by Sources and Sets
   // ---------------------------------------------------------------------------
 
-  function toggleSources() {
-    const body = document.getElementById('wb-sources-body');
-    const arrow = document.getElementById('wb-sources-arrow');
-    if (!body) return;
-    const open = body.style.display !== 'none';
-    body.style.display = open ? 'none' : '';
-    if (arrow) arrow.textContent = open ? '▸' : '▾';
-    try {
-      const kb = window.KB_NAME || '';
-      localStorage.setItem('kb-sources-open-' + kb, open ? '0' : '1');
-    } catch (_) {}
-  }
-
-  function _initSources() {
-    const body = document.getElementById('wb-sources-body');
-    const arrow = document.getElementById('wb-sources-arrow');
-    if (!body) return;
-    const kb = window.KB_NAME || '';
-    const sources = window.KB_SOURCES || [];
-
-    let open;
-    if (sources.length === 0) {
-      open = true;
-    } else {
-      try {
-        const stored = localStorage.getItem('kb-sources-open-' + kb);
-        open = stored === '1';
-      } catch (_) {
-        open = false;
-      }
+  function _makeCollapsible(bodyId, arrowId, storageKey, defaultOpen) {
+    function toggle() {
+      const body = document.getElementById(bodyId);
+      const arrow = document.getElementById(arrowId);
+      if (!body) return;
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : '';
+      if (arrow) arrow.textContent = open ? '▸' : '▾';
+      try { localStorage.setItem(storageKey, open ? '0' : '1'); } catch (_) {}
     }
-    body.style.display = open ? '' : 'none';
-    if (arrow) arrow.textContent = open ? '▾' : '▸';
-  }
-
-  // ---------------------------------------------------------------------------
-  // Sets collapsible
-  // ---------------------------------------------------------------------------
-
-  function toggleSets() {
-    const body = document.getElementById('wb-sets-body');
-    const arrow = document.getElementById('wb-sets-arrow');
-    if (!body) return;
-    const open = body.style.display !== 'none';
-    body.style.display = open ? 'none' : '';
-    if (arrow) arrow.textContent = open ? '▸' : '▾';
-    try {
-      localStorage.setItem('kb-sets-open-' + (window.KB_NAME || ''), open ? '0' : '1');
-    } catch (_) {}
-  }
-
-  function _initSets() {
-    const body = document.getElementById('wb-sets-body');
-    const arrow = document.getElementById('wb-sets-arrow');
-    if (!body) return;
-    try {
-      const stored = localStorage.getItem('kb-sets-open-' + (window.KB_NAME || ''));
-      const open = stored === '1';
+    function init(forceOpen) {
+      const body = document.getElementById(bodyId);
+      const arrow = document.getElementById(arrowId);
+      if (!body) return;
+      let open;
+      if (forceOpen) {
+        open = true;
+      } else {
+        try {
+          const stored = localStorage.getItem(storageKey);
+          open = stored !== null ? stored === '1' : defaultOpen;
+        } catch (_) { open = defaultOpen; }
+      }
       body.style.display = open ? '' : 'none';
       if (arrow) arrow.textContent = open ? '▾' : '▸';
-    } catch (_) {}
+    }
+    return { toggle, init };
   }
+
+  const _kb = window.KB_NAME || '';
+  const _collapsibleSources = _makeCollapsible('wb-sources-body', 'wb-sources-arrow', 'kb-sources-open-' + _kb, false);
+  const _collapsibleSets = _makeCollapsible('wb-sets-body', 'wb-sets-arrow', 'kb-sets-open-' + _kb, false);
+
+  function toggleSources() { _collapsibleSources.toggle(); }
+  function toggleSets() { _collapsibleSets.toggle(); }
+
+  function _initSources() {
+    const noSources = (window.KB_SOURCES || []).length === 0;
+    _collapsibleSources.init(noSources);
+  }
+  function _initSets() { _collapsibleSets.init(false); }
 
   // ---------------------------------------------------------------------------
   // Scope bar

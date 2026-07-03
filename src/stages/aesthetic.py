@@ -1,6 +1,11 @@
 import logging
+import threading
 import time
 from pathlib import Path
+
+from src.config import Config
+from src.llm.session import ModelLoadError  # noqa: F401 — re-exported for callers
+from src.pipeline.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +33,6 @@ _BANDS = {
     "clip_vit_b32":   _CLIP_BANDS,
     "combined_rank":  _COMBINED_BANDS,
 }
-
-
-class ModelLoadError(Exception):
-    pass
 
 
 def assign_band(score: float, model_name: str) -> str:
@@ -135,7 +136,15 @@ def score_clip(img_path: Path, model_dir: str) -> float:
     return float(max(0.0, min(1.0, (raw_score - 1) / 8)))
 
 
-def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, scope=None) -> dict:
+def run_aesthetic(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+    *,
+    scope=None,
+) -> dict:
     """Score all pending image files with configured NIMA and/or CLIP models."""
     from src.db.corpus import (
         compute_combined_rank_scores,
@@ -167,7 +176,7 @@ def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, scope=None)
         total = len(pending)
         progress.update(0, total, "Scoring NIMA…")
         for i, row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
             try:
                 score = score_nima(Path(row["path"]), config.aesthetic_nima)
@@ -187,7 +196,7 @@ def run_aesthetic(corpus_path, kb_path, config, progress, cancel, *, scope=None)
         total = len(pending)
         progress.update(0, total, "Scoring CLIP…")
         for i, row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
             try:
                 score = score_clip(Path(row["path"]), config.aesthetic_clip)

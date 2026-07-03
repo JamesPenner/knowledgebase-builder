@@ -16,9 +16,8 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1556 passing, 2 skipped
-- **Last completed sprint:** KB.AC1 (Unified Scope & Working Sets — `CorpusFilterSpec`, migration 0024, Sets panel, expanded scope bar with 6 controls, export scope, `scope_aware` badges, localStorage persistence; +55 net tests)
-- **Last fix:** Normalise Review reject — token_rejections table (migration 0007); rejected tokens no longer stored in pattern_rules
+- **Tests:** 1704 passing, 2 skipped
+- **Last completed sprint:** KB.AI1 (Navigation Restructure — four-section nav: Build/Review/Knowledge/Corpus; Normalise/Suggest/New Terms added to Review section with badge spans; `nav_badges.js` polls all three pending endpoints; `suggest_badge.js` deleted; +19 net tests)
 - **Next planned sprint:** TBD
 
 ---

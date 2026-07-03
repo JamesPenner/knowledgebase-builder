@@ -370,7 +370,7 @@ class TestPeopleKBHelpers:
         from src.db.kb import get_people_with_centroids
         conn = _make_kb_db()
         conn.execute("INSERT INTO people(preferred_name) VALUES ('Alice')")
-        rows = get_people_with_centroids(conn)
+        rows = get_people_with_centroids(conn, "face")
         assert rows == []
 
     def test_get_people_with_centroids_returns_match(self):
@@ -381,16 +381,16 @@ class TestPeopleKBHelpers:
             "INSERT INTO people(preferred_name, face_centroid, face_samples) VALUES (?, ?, ?)",
             ("Alice", emb, 3),
         )
-        rows = get_people_with_centroids(conn)
+        rows = get_people_with_centroids(conn, "face")
         assert len(rows) == 1
         assert rows[0]["preferred_name"] == "Alice"
 
     def test_update_face_centroid(self):
-        from src.db.kb import update_face_centroid
+        from src.db.kb import update_person_centroid
         conn = _make_kb_db()
         conn.execute("INSERT INTO people(id, preferred_name) VALUES (1, 'Bob')")
         emb = _fake_embedding()
-        update_face_centroid(conn, 1, emb, 5)
+        update_person_centroid(conn, 1, emb, 5, kind="face")
         row = conn.execute("SELECT face_centroid, face_samples FROM people WHERE id=1").fetchone()
         assert bytes(row["face_centroid"]) == emb
         assert row["face_samples"] == 5
@@ -403,7 +403,7 @@ class TestPeopleKBHelpers:
             "INSERT INTO people(preferred_name, face_centroid, face_samples) VALUES (?, ?, ?)",
             ("WithCentroid", _fake_embedding(), 1),
         )
-        rows = get_people_with_centroids(conn)
+        rows = get_people_with_centroids(conn, "face")
         assert len(rows) == 1
         assert rows[0]["preferred_name"] == "WithCentroid"
 

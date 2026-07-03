@@ -15,6 +15,7 @@ from src.db.corpus import (
     get_files_for_text_match,
     get_files_with_gps,
     open_corpus,
+    parse_gps_value,
     update_pipeline_checkpoint,
     upsert_entity_match,
 )
@@ -122,8 +123,8 @@ def run_entity_match(
                     progress.done()
                     return
 
-                file_lat = file_row["lat"]
-                file_lon = file_row["lon"]
+                file_lat = parse_gps_value(file_row["lat"])
+                file_lon = parse_gps_value(file_row["lon"])
                 if file_lat is None or file_lon is None:
                     continue
 

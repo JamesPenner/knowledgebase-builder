@@ -64,7 +64,7 @@
       <td class="stage-files">{{ st.covered }}</td>
       <td class="stage-files">{{ st.eligible }}</td>
       <td class="stage-files">
-        <span class="badge {% if st.eligible_pct >= 90 %}badge-done{% else %}badge-pending{% endif %}">
+        <span class="badge {% if st.eligible_pct >= 90 %}badge--accept{% else %}badge-pending{% endif %}">
           {{ "%.1f"|format(st.eligible_pct) }}%
         </span>
       </td>

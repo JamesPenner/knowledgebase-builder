@@ -15,7 +15,7 @@
              value="{{ rule.pattern if rule else '' }}"
              placeholder="^\d{8}$" required
              oninput="prTestRegex()"
-             style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;font-family:monospace;box-sizing:border-box">
+             class="form-field-input" style="font-family:monospace">
       <span style="font-size:.75rem;color:#475569">Python-compatible regex. Toggle "Exact match" below to use literal strings.</span>
     </label>
 
@@ -39,7 +39,7 @@
     <label style="font-size:.85rem;color:#94a3b8">Action <span style="color:#f87171">*</span>
       <select name="action" id="pr-action"
               onchange="prToggleAction()"
-              style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+              class="form-field-input">
         <option value="capture" {% if not rule or rule.action == 'capture' %}selected{% endif %}>Capture — extract field value</option>
         <option value="ignore" {% if rule and rule.action == 'ignore' %}selected{% endif %}>Ignore — drop from name (keep for models)</option>
         <option value="replace" {% if rule and rule.action == 'replace' %}selected{% endif %}>Replace — substitute token value</option>
@@ -51,7 +51,7 @@
       <input name="label" type="text"
              value="{{ rule.label if rule else '' }}"
              placeholder="Date YYYYMMDD"
-             style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+             class="form-field-input">
     </label>
 
     <!-- Replace-specific fields -->
@@ -61,12 +61,12 @@
           <input name="replace_with" type="text"
                  value="{{ rule.replace_with if rule else '' }}"
                  placeholder="canonical_term"
-                 style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+                 class="form-field-input">
           <span style="font-size:.75rem;color:#475569">For regex: use format string syntax <code>{1}</code>. For exact: plain text value.</span>
         </label>
         <label style="font-size:.85rem;color:#94a3b8">Replace Type
           <select name="replace_type"
-                  style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+                  class="form-field-input">
             <option value="correction" {% if not rule or not rule.replace_type or rule.replace_type == 'correction' %}selected{% endif %}>correction — source is wrong (typo, abbreviation)</option>
             <option value="synonym" {% if rule and rule.replace_type == 'synonym' %}selected{% endif %}>synonym — source is valid, canonical form differs</option>
           </select>
@@ -82,14 +82,14 @@
           <input id="pr-extract-as" name="extract_as" type="text"
                  value="{{ rule.extract_as if rule else '' }}"
                  placeholder="file_date_full"
-                 style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+                 class="form-field-input">
           <span style="font-size:.75rem;color:#475569">Field name written to the corpus record.</span>
         </label>
 
         <label style="font-size:.85rem;color:#94a3b8">Value Type
           <select name="value_type" id="pr-value-type"
                   onchange="prToggleDatePrecision()"
-                  style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+                  class="form-field-input">
             <option value="" {% if not rule or not rule.value_type %}selected{% endif %}>text</option>
             <option value="date" {% if rule and rule.value_type == 'date' %}selected{% endif %}>date</option>
             <option value="integer" {% if rule and rule.value_type == 'integer' %}selected{% endif %}>integer</option>
@@ -100,7 +100,7 @@
         <label id="pr-precision-field"
                style="font-size:.85rem;color:#94a3b8;{{ '' if (rule and rule.value_type == 'date') else 'display:none' }}">Date Precision
           <select name="date_precision"
-                  style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;box-sizing:border-box">
+                  class="form-field-input">
             <option value="" {% if not rule or not rule.date_precision %}selected{% endif %}>—</option>
             <option value="day" {% if rule and rule.date_precision == 'day' %}selected{% endif %}>day</option>
             <option value="month" {% if rule and rule.date_precision == 'month' %}selected{% endif %}>month</option>
@@ -113,7 +113,7 @@
           <input name="format_str" type="text"
                  value="{{ rule.format_str if rule else '' }}"
                  placeholder="{1:0:4}-{1:4:6}-{1:6:8}"
-                 style="display:block;width:100%;margin-top:.2rem;padding:.35rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;font-family:monospace;box-sizing:border-box">
+                 class="form-field-input" style="font-family:monospace">
           <span style="font-size:.75rem;color:#475569"><code>{0}</code> = full match · <code>{1}</code> = group 1 · <code>{1:4:6}</code> = chars 4–5 of group 1</span>
         </label>
 
@@ -127,7 +127,7 @@
     </div>
 
     <div style="display:flex;gap:.5rem;margin-top:.25rem">
-      <button type="submit" class="btn-primary">{{ 'Save' if rule else 'Add rule' }}</button>
+      <button type="submit" class="btn btn--capture">{{ 'Save' if rule else 'Add rule' }}</button>
       <button type="button" class="btn"
               hx-get="/knowledge/pattern-rules/partials/form?kb={{ kb }}"
               hx-target="#pattern-rule-form"

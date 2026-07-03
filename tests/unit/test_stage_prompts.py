@@ -51,14 +51,14 @@ def bare_conn(tmp_path):
 # seed_stage_prompts
 # ---------------------------------------------------------------------------
 
-def test_seed_inserts_four_builtin_rows(kb_conn):
+def test_seed_inserts_builtin_rows(kb_conn):
     rows = kb_conn.execute(
         "SELECT COUNT(*) FROM stage_prompts WHERE is_builtin=1"
     ).fetchone()[0]
-    assert rows == 4
+    assert rows == 8
 
 
-def test_seed_covers_all_four_keys(kb_conn):
+def test_seed_covers_all_builtin_keys(kb_conn):
     keys = {
         (r["stage"], r["prompt_key"])
         for r in kb_conn.execute("SELECT stage, prompt_key FROM stage_prompts WHERE is_builtin=1").fetchall()
@@ -68,6 +68,10 @@ def test_seed_covers_all_four_keys(kb_conn):
         ("describe", "aggregate"),
         ("retag", "system"),
         ("summarize", "system"),
+        ("vocab_suggest", "synonyms"),
+        ("vocab_suggest", "semantic"),
+        ("vocab_suggest", "thematic"),
+        ("vocab_suggest", "taxonomy"),
     }
 
 
@@ -82,7 +86,7 @@ def test_seed_is_idempotent(kb_conn):
     seed_stage_prompts(kb_conn)
     seed_stage_prompts(kb_conn)
     rows = kb_conn.execute("SELECT COUNT(*) FROM stage_prompts WHERE is_builtin=1").fetchone()[0]
-    assert rows == 4
+    assert rows == 8
 
 
 # ---------------------------------------------------------------------------

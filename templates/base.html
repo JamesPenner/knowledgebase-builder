@@ -14,26 +14,37 @@
     <a class="nav-new-kb" href="/kb/new" title="Create new KB">+</a>
     {% if kb %}
     <span class="nav-sep">›</span>
-    <select class="nav-kb-select" id="kb-switcher" data-current="{{ kb }}">
+    <select class="nav-kb-select" id="kb-switcher" data-current="{{ kb }}" data-kb="{{ kb }}">
       <option value="{{ kb }}">{{ kb }}</option>
     </select>
-    <a class="nav-link" href="/pipeline?kb={{ kb }}">Pipeline</a>
-    <a class="nav-link" href="/corpus-stats?kb={{ kb }}">Stats</a>
-    <a class="nav-link" href="/health?kb={{ kb }}">Health</a>
+    <span class="nav-sep">·</span>
+    <span class="nav-label">Build</span>
+    <a class="nav-link" href="/pipeline?kb={{ kb }}">Workbench</a>
+    <span class="nav-sep">·</span>
+    <span class="nav-label">Review</span>
+    <a class="nav-link" href="/review/normalise?kb={{ kb }}">Normalise</a><span id="normalise-badge" class="nav-badge" style="display:none"></span>
+    <a class="nav-link" href="/review/suggest?kb={{ kb }}">Suggest</a><span id="suggest-badge" class="nav-badge" style="display:none"></span>
+    <a class="nav-link" href="/review/new-terms?kb={{ kb }}">New Terms</a><span id="new-terms-badge" class="nav-badge" style="display:none"></span>
     <span class="nav-sep">·</span>
     <span class="nav-label">Knowledge</span>
     <a class="nav-link" href="/knowledge/locations?kb={{ kb }}">Locations</a>
     <a class="nav-link" href="/knowledge/locations/registry?kb={{ kb }}">Registry</a>
+    <a class="nav-link" href="/knowledge/people?kb={{ kb }}">People</a>
     <a class="nav-link" href="/knowledge/people/faces?kb={{ kb }}">Faces</a>
     <a class="nav-link" href="/knowledge/people/speakers?kb={{ kb }}">Speakers</a>
-    <a class="nav-link" href="/knowledge/people?kb={{ kb }}">People</a>
     <a class="nav-link" href="/knowledge/prompts?kb={{ kb }}">Prompts</a>
     <a class="nav-link" href="/knowledge/pattern-rules?kb={{ kb }}">Pattern Rules</a>
+    <a class="nav-link" href="/knowledge/vocabulary?kb={{ kb }}">Vocabulary</a>
+    <span class="nav-sep">·</span>
+    <span class="nav-label">Corpus</span>
+    <a class="nav-link" href="/corpus-stats?kb={{ kb }}">Stats</a>
+    <a class="nav-link" href="/health?kb={{ kb }}">Health</a>
     {% endif %}
   </nav>
   <main class="main">
     {% block content %}{% endblock %}
   </main>
   <script src="/static/js/kb_switcher.js"></script>
+  <script src="/static/js/nav_badges.js"></script>
 </body>
 </html>

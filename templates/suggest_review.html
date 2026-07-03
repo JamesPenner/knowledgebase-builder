@@ -19,12 +19,12 @@
 {% block review_extra %}
 <div class="level-c-controls">
   {% if has_level_b_clusters %}
-  <button id="btn-run-level-c" class="btn btn--run"
-          onclick="runLevelC('{{ kb }}')">Run Level C</button>
-  <button id="btn-cancel-level-c" class="btn btn--cancel"
+  <button id="btn-run-suggest" class="btn btn--run"
+          onclick="runStage('suggest', '{{ kb }}')">Run Level C</button>
+  <button id="btn-cancel-suggest" class="btn btn--cancel"
           style="display:none"
-          onclick="cancelLevelC('{{ kb }}')">Cancel</button>
-  <span id="progress-level-c" class="stage-progress"></span>
+          onclick="cancelStage('suggest')">Cancel</button>
+  <span id="progress-suggest" class="stage-progress"></span>
   {% else %}
   <button class="btn" disabled title="Run Level B (Suggest) first">Run Level C — run Level B first</button>
   {% endif %}
@@ -78,33 +78,5 @@ ReviewFilter.init({
   searchId: 'vocab-search',
 });
 
-function runLevelC(kb) {
-  document.getElementById('btn-run-level-c').disabled = true;
-  document.getElementById('btn-cancel-level-c').style.display = '';
-  fetch('/api/stages/suggest/run', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({kb: kb, levels: ['c']}),
-  });
-  const es = new EventSource('/api/stages/suggest/stream');
-  es.onmessage = function(e) {
-    const d = JSON.parse(e.data);
-    const prog = document.getElementById('progress-level-c');
-    if (d.total > 0) prog.textContent = d.current + ' / ' + d.total;
-    if (d.status === 'done') {
-      document.getElementById('btn-run-level-c').disabled = false;
-      document.getElementById('btn-cancel-level-c').style.display = 'none';
-      prog.textContent = '';
-      es.close();
-      htmx.trigger(document.body, 'pendingChanged');
-    }
-  };
-  es.onerror = function() { es.close(); };
-}
-function cancelLevelC(kb) {
-  fetch('/api/stages/suggest/cancel', {method: 'POST'});
-  document.getElementById('btn-run-level-c').disabled = false;
-  document.getElementById('btn-cancel-level-c').style.display = 'none';
-  document.getElementById('progress-level-c').textContent = '';
-}
 </script>
 {% endblock %}

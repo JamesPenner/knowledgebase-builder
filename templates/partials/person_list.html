@@ -45,7 +45,7 @@
         {% endif %}
       </td>
       <td>
-        <button class="btn btn--small"
+        <button class="btn btn--xs"
                 hx-get="/knowledge/people/partials/person-detail/{{ person.id }}?kb={{ kb }}"
                 hx-target="#person-detail-panel"
                 hx-swap="innerHTML">Edit</button>
@@ -65,6 +65,6 @@
         style="display:flex;gap:.5rem;align-items:center">
     <input type="text" name="preferred_name" placeholder="Preferred name" required
            style="flex:1;padding:.3rem .5rem;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
-    <button type="submit" class="btn-primary">Add</button>
+    <button type="submit" class="btn btn--capture">Add</button>
   </form>
 </div>

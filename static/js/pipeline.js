@@ -70,11 +70,27 @@ async function runStage(stage, kb) {
     return;
   }
 
-  await fetch('/api/stages/' + stage + '/run', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body,
-  });
+  let resp;
+  try {
+    resp = await fetch('/api/stages/' + stage + '/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body,
+    });
+  } catch (err) {
+    console.error('runStage: network error for', stage, err);
+    if (runBtn) runBtn.disabled = false;
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (badge) { badge.className = 'badge badge-failed'; badge.textContent = 'failed'; }
+    return;
+  }
+  if (!resp.ok) {
+    console.error('runStage: server error', resp.status, 'for', stage);
+    if (runBtn) runBtn.disabled = false;
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (badge) { badge.className = 'badge badge-failed'; badge.textContent = 'failed'; }
+    return;
+  }
 
   const es = new EventSource('/api/stages/' + stage + '/stream');
   _sources[stage] = es;
@@ -115,9 +131,11 @@ function cancelStage(stage) {
   fetch('/api/stages/' + stage + '/cancel', {method: 'POST'});
   if (_sources[stage]) { _sources[stage].close(); delete _sources[stage]; }
   const badge = document.getElementById('badge-' + stage);
-  badge.className = 'badge badge-pending';
-  badge.textContent = 'pending';
-  document.getElementById('btn-run-' + stage).disabled = false;
-  document.getElementById('btn-cancel-' + stage).style.display = 'none';
-  document.getElementById('progress-' + stage).innerHTML = '';
+  if (badge) { badge.className = 'badge badge-pending'; badge.textContent = 'pending'; }
+  const rb = document.getElementById('btn-run-' + stage);
+  if (rb) rb.disabled = false;
+  const cb = document.getElementById('btn-cancel-' + stage);
+  if (cb) cb.style.display = 'none';
+  const prog = document.getElementById('progress-' + stage);
+  if (prog) prog.innerHTML = '';
 }

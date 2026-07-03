@@ -106,6 +106,15 @@ def _run_level_a(
 
     exclusion: set[str] = {r["term"] for r in get_vocabulary_terms(kb_conn)}
     exclusion |= get_stoplist_terms(kb_conn)
+    from src.db.kb import get_synonym_map
+    synonym_map = get_synonym_map(kb_conn)
+    # Rejected candidates survive delete_pending_candidates; re-exclude them so
+    # they don't reappear as pending on subsequent suggest runs.
+    exclusion |= {
+        row["term"] for row in corpus_conn.execute(
+            "SELECT DISTINCT term FROM candidates WHERE source='level_a' AND status='rejected'"
+        ).fetchall()
+    }
 
     pattern_filters = _build_pattern_filters(get_pattern_rules(kb_conn))
 
@@ -121,13 +130,14 @@ def _run_level_a(
         file_id = row["id"]
         ctx = build_file_context(corpus_conn, None, file_id)
 
-        def _extract_tokens(text, pos_tags, extract_chunks=False):
+        def _extract_tokens(text, pos_tags, extract_chunks=False, extract_ngrams=False):
             if not text.strip():
                 return
             doc = nlp(text)
             for token in doc:
                 if token.pos_ in pos_tags and not token.is_stop:
                     lemma = _clean_term(token.lemma_.lower())
+                    lemma = synonym_map.get(lemma, lemma)
                     if len(lemma) > 2 and lemma not in exclusion and not _matches_any_filter(lemma, pattern_filters):
                         term_file_ids[lemma].add(file_id)
             if extract_chunks:
@@ -135,11 +145,21 @@ def _run_level_a(
                     if len(chunk) < 2:
                         continue
                     phrase = _clean_term(chunk.text.lower())
+                    phrase = synonym_map.get(phrase, phrase)
                     if len(phrase) > 4 and phrase not in exclusion and not _matches_any_filter(phrase, pattern_filters):
                         term_file_ids[phrase].add(file_id)
+            if extract_ngrams:
+                noun_propn = [t for t in doc if t.pos_ in {"NOUN", "PROPN"} and not t.is_stop]
+                for j in range(len(noun_propn) - 1):
+                    a, b = noun_propn[j], noun_propn[j + 1]
+                    if b.i == a.i + 1:
+                        phrase = _clean_term(f"{a.lemma_.lower()} {b.lemma_.lower()}")
+                        phrase = synonym_map.get(phrase, phrase)
+                        if len(phrase) > 4 and phrase not in exclusion and not _matches_any_filter(phrase, pattern_filters):
+                            term_file_ids[phrase].add(file_id)
 
-        _extract_tokens(_build_metadata_text(ctx), {"NOUN", "PROPN"})
-        _extract_tokens(_build_prose_text(ctx), {"NOUN", "PROPN", "VERB"}, extract_chunks=True)
+        _extract_tokens(_build_metadata_text(ctx), {"NOUN", "PROPN"}, extract_ngrams=True)
+        _extract_tokens(_build_prose_text(ctx), {"NOUN", "PROPN", "VERB"}, extract_chunks=True, extract_ngrams=True)
 
     min_files = config.suggest_min_files
     progress.update(total, total, "Level A: writing candidates")

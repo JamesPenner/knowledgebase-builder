@@ -1,12 +1,14 @@
 import json
 import logging
+import threading
 from pathlib import Path
 
+from src.config import Config
+from src.llm.session import ModelLoadError  # noqa: F401 — re-exported for callers
+from src.pipeline.embeddings import cosine_similarity, update_centroid
+from src.pipeline.progress import ProgressReporter
+
 logger = logging.getLogger(__name__)
-
-
-class ModelLoadError(Exception):
-    pass
 
 
 def detect_faces(img_bytes: bytes, detection_model_path: str) -> list[dict]:
@@ -135,43 +137,6 @@ def embed_face(img_bytes: bytes, bbox: list, embedding_model_path: str) -> bytes
     return embedding.astype(np.float32).tobytes()
 
 
-def cosine_similarity(a: bytes, b: bytes) -> float:
-    """Cosine similarity between two 512D float32 embeddings stored as bytes."""
-    import numpy as np
-    va = np.frombuffer(a, dtype=np.float32)
-    vb = np.frombuffer(b, dtype=np.float32)
-    norm_a = float(np.linalg.norm(va))
-    norm_b = float(np.linalg.norm(vb))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (norm_a * norm_b))
-
-
-def update_centroid(
-    old_blob: bytes | None,
-    old_count: int,
-    new_embedding: bytes,
-) -> tuple[bytes, int]:
-    """Incremental running mean centroid update.
-
-    Returns (new_centroid_blob, new_count).
-    """
-    import numpy as np
-    new_vec = np.frombuffer(new_embedding, dtype=np.float32).copy()
-    if old_blob is None or old_count == 0:
-        new_count = 1
-        centroid = new_vec
-    else:
-        old_vec = np.frombuffer(old_blob, dtype=np.float32).copy()
-        new_count = old_count + 1
-        centroid = (old_vec * old_count + new_vec) / new_count
-    # Re-normalise
-    norm = float(np.linalg.norm(centroid))
-    if norm > 0:
-        centroid = centroid / norm
-    return centroid.astype(np.float32).tobytes(), new_count
-
-
 def compute_trimmed_centroid(
     embeddings: list[bytes],
     trim_fraction: float = 0.10,
@@ -206,7 +171,13 @@ def compute_trimmed_centroid(
     return centroid.astype(np.float32).tobytes(), len(retained), spread
 
 
-def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
+def run_face(
+    corpus_path: Path,
+    kb_path: Path,
+    config: Config,
+    progress: ProgressReporter,
+    cancel_event: threading.Event,
+) -> dict:
     """Detect faces in pending image files and match to known people."""
     import time as _time
     from src.db.corpus import (
@@ -221,7 +192,7 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
     from src.db.kb import (
         get_people_with_centroids,
         open_kb,
-        update_face_centroid,
+        update_person_centroid,
     )
 
     if not config.face_detection_model:
@@ -240,7 +211,7 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
 
     try:
         # Pre-load people centroids into memory {person_id: {"blob": ..., "count": ..., "name": ...}}
-        people_rows = get_people_with_centroids(kb_conn)
+        people_rows = get_people_with_centroids(kb_conn, "face")
         centroids: dict[int, dict] = {
             row["id"]: {
                 "blob": bytes(row["face_centroid"]),
@@ -264,7 +235,7 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
         progress.update(0, total, "Detecting faces…")
 
         for i, row in enumerate(pending):
-            if cancel.is_set():
+            if cancel_event.is_set():
                 break
 
             img_path = Path(row["path"])
@@ -326,7 +297,7 @@ def run_face(corpus_path, kb_path, config, progress, cancel) -> dict:
                         old = centroids[best_person_id]
                         new_blob, new_count = update_centroid(old["blob"], old["count"], embedding)
                         centroids[best_person_id] = {"blob": new_blob, "count": new_count}
-                        update_face_centroid(kb_conn, best_person_id, new_blob, new_count)
+                        update_person_centroid(kb_conn, best_person_id, new_blob, new_count, kind="face")
                     elif config.unknown_face_clusters:
                         best_cluster_idx = None
                         best_cluster_sim = 0.0

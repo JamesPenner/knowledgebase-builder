@@ -74,6 +74,18 @@ def test_image_ext_set_contains_common_types():
     assert ".mp4" not in _IMAGE_EXTS
 
 
+def test_image_exts_includes_raw_formats():
+    raw_formats = {".raw", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2"}
+    missing = raw_formats - _IMAGE_EXTS
+    assert not missing, f"_IMAGE_EXTS missing raw formats: {missing}"
+
+
+def test_image_exts_superset_of_ingest():
+    from src.stages.ingest import _IMAGE_EXTS as ingest_exts
+    missing = ingest_exts - _IMAGE_EXTS
+    assert not missing, f"describe._IMAGE_EXTS missing formats from ingest: {missing}"
+
+
 def test_video_ext_set_contains_common_types():
     assert ".mp4" in _VIDEO_EXTS
     assert ".mov" in _VIDEO_EXTS

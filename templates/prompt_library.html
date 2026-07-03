@@ -3,7 +3,7 @@
 
 {% block content %}
 <h1 class="page-title">Prompt Library</h1>
-<p style="color:var(--text-muted);margin-bottom:1.5rem">
+<p style="color:#94a3b8;margin-bottom:1.5rem">
   Customise the instructions used by LLM stages. Built-in prompts cannot be deleted.
   Create a variant, edit it, then activate it to use it for a stage.
 </p>
@@ -13,33 +13,33 @@
 
 {% for stage, keys in grouped.items() %}
 <section style="margin-bottom:2rem">
-  <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:.4rem">
+  <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:1rem;border-bottom:1px solid #334155;padding-bottom:.4rem">
     {{ stage_labels.get(stage, stage) }}
   </h2>
 
   {% for prompt_key, prompts in keys.items() %}
   <div style="margin-bottom:1.5rem" id="group-{{ stage }}-{{ prompt_key }}">
-    <h3 style="font-size:.9rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.75rem">
+    <h3 style="font-size:.9rem;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.75rem">
       {{ key_labels.get(prompt_key, prompt_key) }}
     </h3>
 
     {% for p in prompts %}
     <div id="prompt-{{ p.id }}"
-         style="border:1px solid var(--border);border-radius:6px;padding:1rem;margin-bottom:.75rem;{% if p.is_active %}border-color:var(--accent){% endif %}">
+         style="border:1px solid #334155;border-radius:6px;padding:1rem;margin-bottom:.75rem;{% if p.is_active %}border-color:#1d4ed8{% endif %}">
       <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
         <span style="font-weight:600">{{ p.name }}</span>
-        {% if p.is_builtin %}<span style="font-size:.75rem;color:var(--text-muted);background:var(--surface-alt);padding:.1rem .4rem;border-radius:3px">built-in</span>{% endif %}
-        {% if p.is_active %}<span style="font-size:.75rem;color:#fff;background:var(--accent);padding:.1rem .5rem;border-radius:3px">Active</span>{% endif %}
+        {% if p.is_builtin %}<span style="font-size:.75rem;color:#94a3b8;background:#0f172a;padding:.1rem .4rem;border-radius:3px">built-in</span>{% endif %}
+        {% if p.is_active %}<span style="font-size:.75rem;color:#fff;background:#1d4ed8;padding:.1rem .5rem;border-radius:3px">Active</span>{% endif %}
       </div>
 
       <textarea id="body-{{ p.id }}"
                 rows="5"
-                style="width:100%;font-family:monospace;font-size:.82rem;padding:.5rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);resize:vertical;box-sizing:border-box"
+                style="width:100%;font-family:monospace;font-size:.82rem;padding:.5rem;border:1px solid #334155;border-radius:4px;background:#1e293b;color:#e2e8f0;resize:vertical;box-sizing:border-box"
                 {% if p.is_builtin %}readonly{% endif %}>{{ p.body }}</textarea>
 
       <div style="display:flex;gap:.5rem;margin-top:.5rem;flex-wrap:wrap">
         {% if not p.is_builtin %}
-        <button class="btn btn-sm"
+        <button class="btn btn--sm"
                 hx-put="/api/knowledge/prompts/{{ p.id }}?kb={{ kb }}"
                 hx-vals='js:{"body": document.getElementById("body-{{ p.id }}").value}'
                 hx-target="#prompt-{{ p.id }}"
@@ -47,18 +47,17 @@
         {% endif %}
 
         {% if not p.is_active %}
-        <button class="btn btn-sm btn-primary"
+        <button class="btn btn--sm btn--capture"
                 hx-post="/api/knowledge/prompts/{{ p.id }}/activate?kb={{ kb }}"
                 hx-target="#group-{{ stage }}-{{ prompt_key }}"
-                hx-swap="outerHTML"
-                hx-get="/knowledge/prompts/partials/group?kb={{ kb }}&stage={{ stage }}&prompt_key={{ prompt_key }}">Activate</button>
+                hx-swap="outerHTML">Activate</button>
         {% endif %}
 
-        <button class="btn btn-sm"
-                onclick="(function(id){var t=document.getElementById('body-'+id);var f=document.getElementById('new-variant-form-'+id);if(f){f.remove();}else{var d=document.createElement('div');d.id='new-variant-form-'+id;d.style='margin-top:.75rem;padding:.75rem;background:var(--surface-alt);border-radius:4px';d.innerHTML='<label style=font-size:.85rem>Variant name: <input id=variant-name-'+id+' type=text style=margin-left:.4rem;padding:.25rem .4rem;border:1px solid var(--border);border-radius:3px;background:var(--surface);color:var(--text)></label><br><textarea id=variant-body-'+id+' rows=5 style=width:100%;margin-top:.5rem;font-family:monospace;font-size:.82rem;padding:.5rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);resize:vertical;box-sizing:border-box>'+t.value+'</textarea><div style=margin-top:.5rem><button class=\"btn btn-sm btn-primary\" onclick=saveVariant('+id+',\'{{ stage }}\',\'{{ prompt_key }}\',\'{{ kb }}\')>Create variant</button></div>';t.closest(\'.prompt-group-{{ stage }}-{{ prompt_key }}\').appendChild(d);}})({{ p.id }})">New variant…</button>
+        <button class="btn btn--sm"
+                onclick="(function(id){var t=document.getElementById('body-'+id);var f=document.getElementById('new-variant-form-'+id);if(f){f.remove();}else{var d=document.createElement('div');d.id='new-variant-form-'+id;d.style='margin-top:.75rem;padding:.75rem;background:#0f172a;border-radius:4px';d.innerHTML='<label style=font-size:.85rem>Variant name: <input id=variant-name-'+id+' type=text style=margin-left:.4rem;padding:.25rem .4rem;border:1px solid #334155;border-radius:3px;background:#1e293b;color:#e2e8f0></label><br><textarea id=variant-body-'+id+' rows=5 style=width:100%;margin-top:.5rem;font-family:monospace;font-size:.82rem;padding:.5rem;border:1px solid #334155;border-radius:4px;background:#1e293b;color:#e2e8f0;resize:vertical;box-sizing:border-box>'+t.value+'</textarea><div style=margin-top:.5rem><button class=\"btn btn--sm btn--capture\" onclick=saveVariant('+id+',\'{{ stage }}\',\'{{ prompt_key }}\',\'{{ kb }}\')>Create variant</button></div>';t.closest(\'.prompt-group-{{ stage }}-{{ prompt_key }}\').appendChild(d);}})({{ p.id }})">New variant…</button>
 
         {% if not p.is_builtin %}
-        <button class="btn btn-sm btn-danger"
+        <button class="btn btn--sm btn--danger"
                 hx-delete="/api/knowledge/prompts/{{ p.id }}?kb={{ kb }}"
                 hx-confirm="Delete this prompt variant?"
                 hx-target="#prompt-{{ p.id }}"
