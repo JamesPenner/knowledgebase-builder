@@ -80,6 +80,18 @@ def test_people_registry_page_loads(tmp_path):
     assert b"People" in r.content
 
 
+def test_person_list_partial_shows_status_badge(tmp_path):
+    corpus_conn, kb_conn, corpus_path, kb_path = _open_dbs(tmp_path)
+    pid = _add_person(kb_conn, "Dana")
+    _add_voice_cluster(corpus_conn, person_id=pid)
+    corpus_conn.close()
+    kb_conn.close()
+    client = _make_client(corpus_path, kb_path)
+    r = client.get("/knowledge/people/partials/person-list?kb=test")
+    assert r.status_code == 200
+    assert b"Needs More Samples" in r.content
+
+
 # ---------------------------------------------------------------------------
 # API: GET /api/knowledge/people
 # ---------------------------------------------------------------------------
@@ -99,6 +111,8 @@ def test_api_list_people_with_data(tmp_path):
     assert data["people"][0]["preferred_name"] == "Alice"
     assert data["people"][0]["voice_cluster_count"] == 1
     assert data["people"][0]["face_cluster_count"] == 1
+    assert data["people"][0]["face_status"] == "needs_more_samples"
+    assert data["people"][0]["voice_status"] == "needs_more_samples"
 
 
 def test_api_list_people_empty(tmp_path):

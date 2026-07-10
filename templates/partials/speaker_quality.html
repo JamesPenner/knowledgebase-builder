@@ -1,0 +1,37 @@
+{% if all_reliable %}
+<p style="background:#14532d;color:#dcfce7;padding:.5rem .75rem;border-radius:4px;margin:0 0 1rem">
+  Centroids reliable — further review optional.
+</p>
+{% endif %}
+{% if not quality_people %}
+<p class="empty-state">No people in the registry yet.</p>
+{% else %}
+<table class="data-table" style="width:100%">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th style="text-align:center">Clusters</th>
+      <th style="text-align:center">Mean similarity</th>
+      <th style="text-align:center">Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in quality_people %}
+    <tr>
+      <td>{{ p.preferred_name }}</td>
+      <td style="text-align:center">{{ p.cluster_count }}</td>
+      <td style="text-align:center">{% if p.mean_similarity is not none %}{{ "%.2f"|format(p.mean_similarity) }}{% else %}—{% endif %}</td>
+      <td style="text-align:center">
+        {% if p.status == "reliable" %}
+        <span style="display:inline-block;padding:.15rem .4rem;border-radius:3px;font-size:.72rem;font-weight:600;color:#fff;background:#16a34a">Reliable</span>
+        {% elif p.status == "needs_more_samples" %}
+        <span style="display:inline-block;padding:.15rem .4rem;border-radius:3px;font-size:.72rem;font-weight:600;color:#fff;background:#ca8a04">Needs More Samples</span>
+        {% else %}
+        <span style="display:inline-block;padding:.15rem .4rem;border-radius:3px;font-size:.72rem;font-weight:600;color:#fff;background:#64748b">Too Few Samples</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

@@ -338,6 +338,73 @@ class TestSpeakerReviewUIRoutes:
         assert r.status_code == 200
         assert b"Alice" in r.content
 
+
+# ---------------------------------------------------------------------------
+# Centroid quality (KB.AJ2)
+# ---------------------------------------------------------------------------
+
+class TestSpeakerCentroidQuality:
+    def test_queue_ranks_pending_clusters_by_similarity(self, tmp_path):
+        corpus_conn, kb_conn, corpus_path, kb_path = _setup(tmp_path)
+        near_id = _seed_cluster(corpus_conn, seed=0)
+        far_id = _seed_cluster(corpus_conn, seed=9)
+        kb_conn.execute(
+            "INSERT INTO people (preferred_name, voice_centroid, voice_samples) VALUES (?, ?, 1)",
+            ("Dora", _blob(0)),
+        )
+        kb_conn.commit()
+        corpus_conn.close()
+        kb_conn.close()
+
+        client = _make_client(corpus_path, kb_path)
+        r = client.get("/review/speakers/partials/queue?kb=test")
+        assert r.status_code == 200
+        text = r.text
+        assert "Suggested: <strong>Dora</strong>" in text
+        assert text.index(f"Cluster #{near_id}") < text.index(f"Cluster #{far_id}")
+
+    def test_quality_partial_shows_reliable_banner_when_thresholds_met(self, tmp_path):
+        corpus_conn, kb_conn, corpus_path, kb_path = _setup(tmp_path)
+        centroid = _blob(1)
+        pid = kb_conn.execute(
+            "INSERT INTO people (preferred_name, voice_centroid, voice_samples) VALUES ('Eli', ?, 1)",
+            (centroid,),
+        ).lastrowid
+        kb_conn.commit()
+        kb_conn.close()
+        fid = _seed_file(corpus_conn)
+        for i in range(5):
+            _seed_cluster(corpus_conn, person_id=pid, seed=1)
+        _seed_segment(corpus_conn, fid, None, seg_index=0)
+        corpus_conn.execute(
+            "UPDATE file_voice_segments SET person_id=?, embedding=? WHERE file_id=? AND segment_index=0",
+            (pid, centroid, fid),
+        )
+        corpus_conn.commit()
+        corpus_conn.close()
+
+        client = _make_client(corpus_path, kb_path)
+        r = client.get("/review/speakers/partials/quality?kb=test")
+        assert r.status_code == 200
+        assert b"Centroids reliable" in r.content
+        assert b"Reliable" in r.content
+
+    def test_quality_partial_no_banner_when_needs_more_samples(self, tmp_path):
+        corpus_conn, kb_conn, corpus_path, kb_path = _setup(tmp_path)
+        pid = kb_conn.execute(
+            "INSERT INTO people (preferred_name) VALUES ('Finn')"
+        ).lastrowid
+        kb_conn.commit()
+        kb_conn.close()
+        _seed_cluster(corpus_conn, person_id=pid)
+        corpus_conn.close()
+
+        client = _make_client(corpus_path, kb_path)
+        r = client.get("/review/speakers/partials/quality?kb=test")
+        assert r.status_code == 200
+        assert b"Centroids reliable" not in r.content
+        assert b"Needs More Samples" in r.content
+
     def test_nav_link_present_in_base(self):
         base = Path("D:/Python_Environments/kb-builder/templates/base.html").read_text()
         assert "/knowledge/people/speakers" in base

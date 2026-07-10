@@ -1123,6 +1123,41 @@ def health_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)
 
 
 # ---------------------------------------------------------------------------
+# Centroid quality (KB.AJ2) — shared by face/speaker review and people registry
+# ---------------------------------------------------------------------------
+
+def _load_review_config(corpus_path: Path):
+    from src.config import load_config
+    return load_config(Path("config.yaml"), corpus_path.parent / "config.yaml")
+
+
+def _centroid_quality(kb_conn, corpus_conn, config, kind: str) -> tuple[list[dict], bool]:
+    from src.db.kb import get_centroid_quality
+    if kind == "face":
+        return get_centroid_quality(
+            kb_conn, corpus_conn, kind,
+            min_clusters=config.face_centroid_reliable_min_clusters,
+            min_similarity=config.face_centroid_reliable_min_similarity,
+        )
+    return get_centroid_quality(
+        kb_conn, corpus_conn, kind,
+        min_clusters=config.voice_centroid_reliable_min_clusters,
+        min_similarity=config.voice_centroid_reliable_min_similarity,
+    )
+
+
+def _annotate_people_status(people: list[dict], config) -> list[dict]:
+    from src.db.kb import annotate_people_centroid_status
+    return annotate_people_centroid_status(
+        people,
+        face_min_clusters=config.face_centroid_reliable_min_clusters,
+        face_min_similarity=config.face_centroid_reliable_min_similarity,
+        voice_min_clusters=config.voice_centroid_reliable_min_clusters,
+        voice_min_similarity=config.voice_centroid_reliable_min_similarity,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Speaker cluster review UI
 # ---------------------------------------------------------------------------
 
@@ -1139,17 +1174,22 @@ def speaker_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(r
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
     from src.db.corpus import get_pending_speaker_clusters, open_corpus
-    from src.db.kb import get_all_people, open_kb
+    from src.db.kb import get_all_people, get_people_with_centroids, open_kb
+    from src.pipeline.embeddings import rank_clusters_by_similarity
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
     pending = get_pending_speaker_clusters(corpus_conn)
     people = get_all_people(kb_conn)
+    people_centroids = get_people_with_centroids(kb_conn, "voice")
     corpus_conn.close()
     kb_conn.close()
+    ranked = rank_clusters_by_similarity(
+        [dict(r) for r in pending], [dict(r) for r in people_centroids], "voice_centroid"
+    )
     return templates.TemplateResponse(request, "partials/speaker_clusters_queue.html", {
         "kb": kb_name,
-        "pending": [dict(r) for r in pending],
+        "pending": ranked,
         "people": [dict(r) for r in people],
     })
 
@@ -1172,6 +1212,27 @@ def speaker_decisions_partial(request: Request, paths: tuple[Path, Path] = Depen
         "kb": kb_name,
         "assigned": [dict(r) for r in assigned],
         "people_map": people_map,
+    })
+
+
+@router.get("/review/speakers/partials/quality", include_in_schema=False)
+@router.get("/knowledge/people/speakers/partials/quality", include_in_schema=False)
+def speaker_quality_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import open_corpus
+    from src.db.kb import open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    config = _load_review_config(corpus_path)
+    quality_people, all_reliable = _centroid_quality(kb_conn, corpus_conn, config, "voice")
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/speaker_quality.html", {
+        "kb": kb_name,
+        "quality_people": quality_people,
+        "all_reliable": all_reliable,
     })
 
 
@@ -1330,7 +1391,8 @@ def face_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolv
         get_pending_face_clusters,
         open_corpus,
     )
-    from src.db.kb import get_all_people, open_kb
+    from src.db.kb import get_all_people, get_people_with_centroids, open_kb
+    from src.pipeline.embeddings import rank_clusters_by_similarity
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
@@ -1338,15 +1400,23 @@ def face_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolv
     assigned = get_assigned_face_clusters(corpus_conn)
     people = get_all_people(kb_conn)
     people_map = {r["id"]: r["preferred_name"] for r in people}
+    people_centroids = get_people_with_centroids(kb_conn, "face")
+    config = _load_review_config(corpus_path)
+    quality_people, all_reliable = _centroid_quality(kb_conn, corpus_conn, config, "face")
     corpus_conn.close()
     kb_conn.close()
+    ranked = rank_clusters_by_similarity(
+        [dict(r) for r in pending], [dict(r) for r in people_centroids], "face_centroid"
+    )
     return templates.TemplateResponse(request, "face_review.html", {
         "kb": kb_name,
-        "pending": [dict(r) for r in pending],
+        "pending": ranked,
         "assigned": [dict(r) for r in assigned],
         "people": [dict(r) for r in people],
         "people_map": people_map,
         "counts": {"pending": len(pending), "assigned": len(assigned)},
+        "quality_people": quality_people,
+        "all_reliable": all_reliable,
     })
 
 
@@ -1355,17 +1425,22 @@ def face_queue_partial(request: Request, paths: tuple[Path, Path] = Depends(reso
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
     from src.db.corpus import get_pending_face_clusters, open_corpus
-    from src.db.kb import get_all_people, open_kb
+    from src.db.kb import get_all_people, get_people_with_centroids, open_kb
+    from src.pipeline.embeddings import rank_clusters_by_similarity
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
     pending = get_pending_face_clusters(corpus_conn)
     people = get_all_people(kb_conn)
+    people_centroids = get_people_with_centroids(kb_conn, "face")
     corpus_conn.close()
     kb_conn.close()
+    ranked = rank_clusters_by_similarity(
+        [dict(r) for r in pending], [dict(r) for r in people_centroids], "face_centroid"
+    )
     return templates.TemplateResponse(request, "partials/face_clusters_queue.html", {
         "kb": kb_name,
-        "pending": [dict(r) for r in pending],
+        "pending": ranked,
         "people": [dict(r) for r in people],
     })
 
@@ -1387,6 +1462,26 @@ def face_assigned_partial(request: Request, paths: tuple[Path, Path] = Depends(r
         "kb": kb_name,
         "assigned": [dict(r) for r in assigned],
         "people_map": people_map,
+    })
+
+
+@router.get("/knowledge/people/faces/partials/quality", include_in_schema=False)
+def face_quality_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import open_corpus
+    from src.db.kb import open_kb
+
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    config = _load_review_config(corpus_path)
+    quality_people, all_reliable = _centroid_quality(kb_conn, corpus_conn, config, "face")
+    corpus_conn.close()
+    kb_conn.close()
+    return templates.TemplateResponse(request, "partials/face_quality.html", {
+        "kb": kb_name,
+        "quality_people": quality_people,
+        "all_reliable": all_reliable,
     })
 
 
@@ -1454,6 +1549,8 @@ def people_registry_page(request: Request, paths: tuple[Path, Path] = Depends(re
     kb_conn = open_kb(kb_path)
     corpus_conn = open_corpus(corpus_path)
     people = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    config = _load_review_config(corpus_path)
+    people = _annotate_people_status(people, config)
     kb_conn.close()
     corpus_conn.close()
     return templates.TemplateResponse(request, "people_registry.html", {
@@ -1472,6 +1569,8 @@ def people_list_partial(request: Request, paths: tuple[Path, Path] = Depends(res
     kb_conn = open_kb(kb_path)
     corpus_conn = open_corpus(corpus_path)
     people = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    config = _load_review_config(corpus_path)
+    people = _annotate_people_status(people, config)
     kb_conn.close()
     corpus_conn.close()
     return templates.TemplateResponse(request, "partials/person_list.html", {
@@ -1608,7 +1707,8 @@ def speaker_review_page(request: Request, paths: tuple[Path, Path] = Depends(res
         get_pending_speaker_clusters,
         open_corpus,
     )
-    from src.db.kb import get_all_people, open_kb
+    from src.db.kb import get_all_people, get_people_with_centroids, open_kb
+    from src.pipeline.embeddings import rank_clusters_by_similarity
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
@@ -1616,15 +1716,23 @@ def speaker_review_page(request: Request, paths: tuple[Path, Path] = Depends(res
     assigned = get_assigned_speaker_clusters(corpus_conn)
     people = get_all_people(kb_conn)
     people_map = {r["id"]: r["preferred_name"] for r in people}
+    people_centroids = get_people_with_centroids(kb_conn, "voice")
+    config = _load_review_config(corpus_path)
+    quality_people, all_reliable = _centroid_quality(kb_conn, corpus_conn, config, "voice")
     corpus_conn.close()
     kb_conn.close()
+    ranked = rank_clusters_by_similarity(
+        [dict(r) for r in pending], [dict(r) for r in people_centroids], "voice_centroid"
+    )
     return templates.TemplateResponse(request, "speaker_review.html", {
         "kb": kb_name,
-        "pending": [dict(r) for r in pending],
+        "pending": ranked,
         "assigned": [dict(r) for r in assigned],
         "people": [dict(r) for r in people],
         "people_map": people_map,
         "counts": {"pending": len(pending), "assigned": len(assigned)},
+        "quality_people": quality_people,
+        "all_reliable": all_reliable,
     })
 
 

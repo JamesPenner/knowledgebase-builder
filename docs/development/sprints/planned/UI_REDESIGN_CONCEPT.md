@@ -103,6 +103,14 @@ Server-side scheduling (survives browser close) is deferred.
 
 ## 2. Face Review — Centroid Quality Focus
 
+**Status:** Done — `KB.AJ2` (see `docs/development/sprints/complete/KB.AJ2.md`).
+Implemented for both face and speaker/voice review (§3 below), sharing the
+same backend classification logic. Metric used is mean cosine similarity of
+assigned embeddings to the centroid, computed live rather than from the
+`face_centroid_spread` column. The `review_base.html` page-shell migration
+(tabs/action-legend/shared JS) was explicitly kept out of scope — the flat
+layout gained the new quality section and stopping-point banner without it.
+
 ### Problem with the current face review
 
 The current queue presents all unassigned face clusters and implies the task
@@ -136,6 +144,8 @@ expected and fine.
 ---
 
 ## 3. Voice / Speaker Review — Same Framing
+
+**Status:** Done — `KB.AJ2`, alongside §2. See that section's status note.
 
 Same philosophy as face review.
 

@@ -514,6 +514,8 @@ def get_speakers_pending(
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
     items = [dict(r) for r in get_pending_speaker_clusters(corpus_conn)]
+    for item in items:
+        item.pop("centroid", None)
     people = [dict(r) for r in get_all_people(kb_conn)]
     corpus_conn.close()
     kb_conn.close()

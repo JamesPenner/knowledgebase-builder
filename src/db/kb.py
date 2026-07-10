@@ -4,6 +4,7 @@ from typing import Literal
 
 from src.db.migrations import apply_migrations
 from src.db.utils import configure_connection as _configure
+from src.pipeline.embeddings import mean_similarity_to_centroid
 
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations" / "knowledge"
 
@@ -1348,6 +1349,18 @@ def get_face_embeddings_for_person(
     return [bytes(row["embedding"]) for row in rows]
 
 
+def get_voice_embeddings_for_person(
+    conn: sqlite3.Connection,
+    corpus_conn: sqlite3.Connection,
+    person_id: int,
+) -> list[bytes]:
+    rows = corpus_conn.execute(
+        "SELECT embedding FROM file_voice_segments WHERE person_id = ? AND embedding IS NOT NULL",
+        (person_id,),
+    ).fetchall()
+    return [bytes(row["embedding"]) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # People export helpers
 # ---------------------------------------------------------------------------
@@ -1498,7 +1511,8 @@ def get_people_with_cluster_counts(
     corpus_conn: sqlite3.Connection,
 ) -> list[dict]:
     people = kb_conn.execute(
-        "SELECT id, preferred_name, face_samples, face_centroid_spread FROM people ORDER BY preferred_name"
+        "SELECT id, preferred_name, face_samples, face_centroid_spread,"
+        " face_centroid, voice_samples, voice_centroid FROM people ORDER BY preferred_name"
     ).fetchall()
     voice_counts = {
         r[0]: r[1]
@@ -1514,17 +1528,93 @@ def get_people_with_cluster_counts(
             " WHERE person_id IS NOT NULL GROUP BY person_id"
         ).fetchall()
     }
-    return [
-        {
+    result = []
+    for r in people:
+        face_cluster_count = face_counts.get(r["id"], 0)
+        voice_cluster_count = voice_counts.get(r["id"], 0)
+        face_mean_similarity = None
+        if face_cluster_count > 0 and r["face_centroid"] is not None:
+            embeddings = get_face_embeddings_for_person(kb_conn, corpus_conn, r["id"])
+            face_mean_similarity = mean_similarity_to_centroid(bytes(r["face_centroid"]), embeddings)
+        voice_mean_similarity = None
+        if voice_cluster_count > 0 and r["voice_centroid"] is not None:
+            embeddings = get_voice_embeddings_for_person(kb_conn, corpus_conn, r["id"])
+            voice_mean_similarity = mean_similarity_to_centroid(bytes(r["voice_centroid"]), embeddings)
+        result.append({
             "id": r["id"],
             "preferred_name": r["preferred_name"],
-            "voice_cluster_count": voice_counts.get(r["id"], 0),
-            "face_cluster_count": face_counts.get(r["id"], 0),
+            "voice_cluster_count": voice_cluster_count,
+            "face_cluster_count": face_cluster_count,
             "face_samples": r["face_samples"] or 0,
             "face_centroid_spread": r["face_centroid_spread"],
-        }
-        for r in people
-    ]
+            "voice_samples": r["voice_samples"] or 0,
+            "face_mean_similarity": face_mean_similarity,
+            "voice_mean_similarity": voice_mean_similarity,
+        })
+    return result
+
+
+def annotate_people_centroid_status(
+    people: list[dict],
+    *,
+    face_min_clusters: int,
+    face_min_similarity: float,
+    voice_min_clusters: int,
+    voice_min_similarity: float,
+) -> list[dict]:
+    """Add face_status/voice_status (KB.AJ2) to each dict from get_people_with_cluster_counts()."""
+    from src.pipeline.embeddings import classify_centroid_status
+
+    for p in people:
+        p["face_status"] = classify_centroid_status(
+            p["face_cluster_count"], p["face_mean_similarity"],
+            min_clusters=face_min_clusters, min_similarity=face_min_similarity,
+        )
+        p["voice_status"] = classify_centroid_status(
+            p["voice_cluster_count"], p["voice_mean_similarity"],
+            min_clusters=voice_min_clusters, min_similarity=voice_min_similarity,
+        )
+    return people
+
+
+def get_centroid_quality(
+    kb_conn: sqlite3.Connection,
+    corpus_conn: sqlite3.Connection,
+    kind: Literal["face", "voice"],
+    *,
+    min_clusters: int,
+    min_similarity: float,
+) -> tuple[list[dict], bool]:
+    """Per-person centroid reliability status for `kind` (KB.AJ2).
+
+    Returns (people_status_list, all_reliable). `all_reliable` is true only when at
+    least one person has an assigned cluster of this kind and every such person is
+    "reliable" — an empty/untracked registry does not count as reliable.
+    """
+    from src.pipeline.embeddings import classify_centroid_status
+
+    count_key = "face_cluster_count" if kind == "face" else "voice_cluster_count"
+    sim_key = "face_mean_similarity" if kind == "face" else "voice_mean_similarity"
+
+    people = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    statuses = []
+    tracked_statuses = []
+    for p in people:
+        cluster_count = p[count_key]
+        status = classify_centroid_status(
+            cluster_count, p[sim_key], min_clusters=min_clusters, min_similarity=min_similarity,
+        )
+        statuses.append({
+            "id": p["id"],
+            "preferred_name": p["preferred_name"],
+            "cluster_count": cluster_count,
+            "mean_similarity": p[sim_key],
+            "status": status,
+        })
+        if cluster_count > 0:
+            tracked_statuses.append(status)
+    all_reliable = bool(tracked_statuses) and all(s == "reliable" for s in tracked_statuses)
+    return statuses, all_reliable
 
 
 def delete_person(
@@ -1578,6 +1668,13 @@ def merge_people(
     for vc in voice_clusters:
         if vc["centroid"] is not None:
             merge_voice_centroid(kb_conn, keep_id, bytes(vc["centroid"]), vc["member_count"] or 0)
+    face_clusters = corpus_conn.execute(
+        "SELECT id, centroid, member_count FROM face_clusters WHERE person_id = ?",
+        (merge_from_id,),
+    ).fetchall()
+    for fc in face_clusters:
+        if fc["centroid"] is not None:
+            merge_face_centroid(kb_conn, keep_id, bytes(fc["centroid"]), fc["member_count"] or 0)
     kb_conn.commit()
     corpus_conn.execute(
         "UPDATE face_clusters SET person_id = ?, label = ? WHERE person_id = ?",

@@ -33,11 +33,20 @@ class PersonMergeBody(BaseModel):
 @router.get("/people")
 def list_people(paths: tuple[Path, Path] = Depends(resolve_kb)) -> dict:
     corpus_path, kb_path = paths
+    from src.config import load_config
     from src.db.corpus import open_corpus
-    from src.db.kb import get_people_with_cluster_counts, open_kb
+    from src.db.kb import annotate_people_centroid_status, get_people_with_cluster_counts, open_kb
     kb_conn = open_kb(kb_path)
     corpus_conn = open_corpus(corpus_path)
     people = get_people_with_cluster_counts(kb_conn, corpus_conn)
+    config = load_config(Path("config.yaml"), corpus_path.parent / "config.yaml")
+    people = annotate_people_centroid_status(
+        people,
+        face_min_clusters=config.face_centroid_reliable_min_clusters,
+        face_min_similarity=config.face_centroid_reliable_min_similarity,
+        voice_min_clusters=config.voice_centroid_reliable_min_clusters,
+        voice_min_similarity=config.voice_centroid_reliable_min_similarity,
+    )
     kb_conn.close()
     corpus_conn.close()
     return {"people": people}

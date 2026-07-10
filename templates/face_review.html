@@ -7,6 +7,16 @@
   · <strong>{{ counts.assigned }}</strong> assigned
 </p>
 
+<section class="decisions-section">
+  <h2 class="section-title">Centroid Quality</h2>
+  <div id="face-quality"
+       hx-get="/knowledge/people/faces/partials/quality?kb={{ kb }}"
+       hx-trigger="decisionsChanged from:body"
+       hx-swap="innerHTML">
+    {% include "partials/face_quality.html" %}
+  </div>
+</section>
+
 <div id="face-queue"
      hx-get="/knowledge/people/faces/partials/queue?kb={{ kb }}"
      hx-trigger="pendingChanged from:body"

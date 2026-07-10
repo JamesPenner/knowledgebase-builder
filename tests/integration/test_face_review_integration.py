@@ -48,13 +48,20 @@ def _seed_file(conn: sqlite3.Connection, src_id: int, path: str) -> int:
     return conn.execute("SELECT id FROM files WHERE path=?", (path,)).fetchone()["id"]
 
 
-def _seed_cluster(conn: sqlite3.Connection, member_count: int = 2, person_id=None, label=None) -> int:
+def _seed_cluster(conn: sqlite3.Connection, member_count: int = 2, person_id=None, label=None, centroid=None) -> int:
     conn.execute(
         "INSERT INTO face_clusters (centroid, member_count, spread, person_id, label) VALUES (?, ?, ?, ?, ?)",
-        (b"\x00" * 512, member_count, 0.1, person_id, label),
+        (centroid or b"\x00" * 512, member_count, 0.1, person_id, label),
     )
     conn.commit()
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def _norm_blob(dim: int, seed: int) -> bytes:
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    v = rng.standard_normal(dim).astype(np.float32)
+    return (v / float(np.linalg.norm(v))).tobytes()
 
 
 def _seed_face_region(conn: sqlite3.Connection, file_id: int, region_index: int = 0, bbox=None) -> int:
@@ -410,3 +417,80 @@ def test_partial_assigned_returns_html(tmp_path):
     resp = client.get("/knowledge/people/faces/partials/assigned", params={"kb": "test"})
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
+
+
+# ---------------------------------------------------------------------------
+# Centroid quality (KB.AJ2)
+# ---------------------------------------------------------------------------
+
+def test_queue_ranks_pending_clusters_by_similarity(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    conn = open_corpus(corpus_path)
+    person_centroid = _norm_blob(512, 0)
+    near_id = _seed_cluster(conn, centroid=_norm_blob(512, 0))
+    far_id = _seed_cluster(conn, centroid=_norm_blob(512, 9))
+    conn.close()
+    kb_conn = open_kb(kb_path)
+    kb_conn.execute(
+        "INSERT INTO people (preferred_name, face_centroid, face_samples) VALUES (?, ?, 1)",
+        ("Alice", person_centroid),
+    )
+    kb_conn.commit()
+    kb_conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/knowledge/people/faces/partials/queue", params={"kb": "test"})
+    assert resp.status_code == 200
+    text = resp.text
+    assert f"Cluster #{near_id}" in text
+    assert "Suggested: <strong>Alice</strong>" in text
+    assert text.index(f"Cluster #{near_id}") < text.index(f"Cluster #{far_id}")
+
+
+def test_quality_partial_shows_reliable_banner_when_thresholds_met(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    conn = open_corpus(corpus_path)
+    src_id = _seed_source(conn)
+    file_id = _seed_file(conn, src_id, "/src/a.jpg")
+    centroid = _norm_blob(512, 1)
+    kb_conn = open_kb(kb_path)
+    person_id = _seed_person(kb_conn, "Bea")
+    kb_conn.execute(
+        "UPDATE people SET face_centroid=?, face_samples=1 WHERE id=?", (centroid, person_id)
+    )
+    kb_conn.commit()
+    kb_conn.close()
+    for i in range(5):
+        _seed_cluster(conn, person_id=person_id, centroid=centroid)
+    _seed_face_region(conn, file_id, region_index=0)
+    conn.execute(
+        "UPDATE file_face_regions SET person_id=?, embedding=? WHERE file_id=? AND region_index=0",
+        (person_id, centroid, file_id),
+    )
+    conn.commit()
+    conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/knowledge/people/faces/partials/quality", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert b"Centroids reliable" in resp.content
+    assert b"Reliable" in resp.content
+
+
+def test_quality_partial_no_banner_when_needs_more_samples(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    person_id = _seed_person(kb_conn, "Cara")
+    kb_conn.close()
+    _seed_cluster(conn, person_id=person_id)
+    conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/knowledge/people/faces/partials/quality", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert b"Centroids reliable" not in resp.content
+    assert b"Needs More Samples" in resp.content

@@ -2423,6 +2423,7 @@ def get_pending_speaker_clusters(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             c.id,
             c.member_count,
             c.spread,
+            c.centroid,
             s.file_id  AS sample_file_id,
             f.path     AS sample_path,
             s.start_ms AS sample_start_ms,
@@ -2841,6 +2842,7 @@ def get_pending_face_clusters(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             c.id,
             c.member_count,
             c.spread,
+            c.centroid,
             m.id        AS rep_member_id,
             f.path      AS rep_file_path,
             fr.id       AS rep_face_region_id

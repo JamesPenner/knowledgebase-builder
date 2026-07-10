@@ -174,3 +174,94 @@ class TestPipelineEmbeddings:
         result = np.frombuffer(blob, dtype=np.float32)
         assert float(np.linalg.norm(result)) == pytest.approx(1.0, abs=1e-5)
         assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# src/pipeline/embeddings.py — centroid quality helpers (KB.AJ2)
+# ---------------------------------------------------------------------------
+
+class TestMeanSimilarityToCentroid:
+    def test_none_when_no_centroid(self):
+        from src.pipeline.embeddings import mean_similarity_to_centroid
+        assert mean_similarity_to_centroid(None, [_blob(128, 1)]) is None
+
+    def test_none_when_no_embeddings(self):
+        from src.pipeline.embeddings import mean_similarity_to_centroid
+        assert mean_similarity_to_centroid(_blob(128, 0), []) is None
+
+    def test_self_similarity_is_one(self):
+        from src.pipeline.embeddings import mean_similarity_to_centroid
+        b = _blob(128, 3)
+        assert mean_similarity_to_centroid(b, [b, b]) == pytest.approx(1.0, abs=1e-5)
+
+    def test_averages_across_embeddings(self):
+        from src.pipeline.embeddings import cosine_similarity, mean_similarity_to_centroid
+        centroid = _blob(128, 0)
+        e1, e2 = _blob(128, 1), _blob(128, 2)
+        expected = (cosine_similarity(centroid, e1) + cosine_similarity(centroid, e2)) / 2
+        assert mean_similarity_to_centroid(centroid, [e1, e2]) == pytest.approx(expected, abs=1e-5)
+
+
+class TestClassifyCentroidStatus:
+    def test_zero_clusters_is_too_few_samples(self):
+        from src.pipeline.embeddings import classify_centroid_status
+        assert classify_centroid_status(0, None, min_clusters=5, min_similarity=0.7) == "too_few_samples"
+
+    def test_below_min_clusters_needs_more_samples(self):
+        from src.pipeline.embeddings import classify_centroid_status
+        assert classify_centroid_status(2, 0.9, min_clusters=5, min_similarity=0.7) == "needs_more_samples"
+
+    def test_below_min_similarity_needs_more_samples(self):
+        from src.pipeline.embeddings import classify_centroid_status
+        assert classify_centroid_status(5, 0.5, min_clusters=5, min_similarity=0.7) == "needs_more_samples"
+
+    def test_none_similarity_needs_more_samples(self):
+        from src.pipeline.embeddings import classify_centroid_status
+        assert classify_centroid_status(5, None, min_clusters=5, min_similarity=0.7) == "needs_more_samples"
+
+    def test_meets_both_thresholds_is_reliable(self):
+        from src.pipeline.embeddings import classify_centroid_status
+        assert classify_centroid_status(5, 0.7, min_clusters=5, min_similarity=0.7) == "reliable"
+
+
+class TestRankClustersBySimilarity:
+    def test_orders_by_best_similarity_descending(self):
+        from src.pipeline.embeddings import rank_clusters_by_similarity
+        person_centroid = _blob(128, 0)
+        near = _blob(128, 0)  # identical direction -> high similarity
+        far = _blob(128, 9)
+        clusters = [
+            {"id": 1, "centroid": far},
+            {"id": 2, "centroid": near},
+        ]
+        people = [{"id": 10, "preferred_name": "Alice", "face_centroid": person_centroid}]
+        ranked = rank_clusters_by_similarity(clusters, people, "face_centroid")
+        assert [r["id"] for r in ranked] == [2, 1]
+        assert ranked[0]["best_person_id"] == 10
+        assert ranked[0]["best_person_name"] == "Alice"
+
+    def test_no_centroid_sorts_last(self):
+        from src.pipeline.embeddings import rank_clusters_by_similarity
+        person_centroid = _blob(128, 0)
+        clusters = [
+            {"id": 1, "centroid": None},
+            {"id": 2, "centroid": _blob(128, 0)},
+        ]
+        people = [{"id": 10, "preferred_name": "Alice", "face_centroid": person_centroid}]
+        ranked = rank_clusters_by_similarity(clusters, people, "face_centroid")
+        assert [r["id"] for r in ranked] == [2, 1]
+        assert ranked[1]["best_similarity"] is None
+
+    def test_no_people_leaves_best_match_none(self):
+        from src.pipeline.embeddings import rank_clusters_by_similarity
+        clusters = [{"id": 1, "centroid": _blob(128, 0)}]
+        ranked = rank_clusters_by_similarity(clusters, [], "face_centroid")
+        assert ranked[0]["best_person_id"] is None
+        assert ranked[0]["best_similarity"] is None
+
+    def test_person_with_null_centroid_ignored(self):
+        from src.pipeline.embeddings import rank_clusters_by_similarity
+        clusters = [{"id": 1, "centroid": _blob(128, 0)}]
+        people = [{"id": 10, "preferred_name": "Alice", "face_centroid": None}]
+        ranked = rank_clusters_by_similarity(clusters, people, "face_centroid")
+        assert ranked[0]["best_person_id"] is None

@@ -4,6 +4,9 @@
 {% for c in pending %}
 <div class="token-group" style="margin-bottom:1.5rem">
   <h3 style="margin:0 0 .4rem">Cluster #{{ c.id }} — {{ c.member_count }} segment(s){% if c.spread is not none %} · spread {{ "%.2f"|format(c.spread) }}{% endif %}</h3>
+  {% if c.best_person_name %}
+  <p style="margin:0 0 .4rem;font-size:.82rem;color:#94a3b8">Suggested: <strong>{{ c.best_person_name }}</strong> ({{ "%.2f"|format(c.best_similarity) }})</p>
+  {% endif %}
   {% if c.sample_path %}
   <p style="font-size:.85em;color:#666;margin:.2rem 0">{{ c.sample_path }} · {{ c.sample_start_ms }}–{{ c.sample_end_ms }} ms</p>
   <audio controls style="width:100%;max-width:32rem;display:block;margin:.4rem 0"

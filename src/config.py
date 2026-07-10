@@ -61,6 +61,10 @@ class Config:
     geo_meta_default_threshold_m: float = 500.0
     voice_similarity_threshold: float = 0.75
     voice_diarization_min_segment_ms: int = 500
+    face_centroid_reliable_min_clusters: int = 5
+    face_centroid_reliable_min_similarity: float = 0.7
+    voice_centroid_reliable_min_clusters: int = 5
+    voice_centroid_reliable_min_similarity: float = 0.7
     near_duplicate_hamming_threshold: int = 10
     gps_cluster_eps_km: float = 1.0
     gps_cluster_min_samples: int = 3
@@ -160,6 +164,10 @@ def _extract_overridable(raw: dict, defaults: Config) -> dict:
     fields["geo_meta_default_threshold_m"] = _typed(thresholds.get("geo_meta_default_threshold_m", defaults.geo_meta_default_threshold_m), float, defaults.geo_meta_default_threshold_m, "thresholds.geo_meta_default_threshold_m")
     fields["voice_similarity_threshold"] = _typed(thresholds.get("voice_similarity_threshold", defaults.voice_similarity_threshold), float, defaults.voice_similarity_threshold, "thresholds.voice_similarity_threshold")
     fields["voice_diarization_min_segment_ms"] = _typed(thresholds.get("voice_diarization_min_segment_ms", defaults.voice_diarization_min_segment_ms), int, defaults.voice_diarization_min_segment_ms, "thresholds.voice_diarization_min_segment_ms")
+    fields["face_centroid_reliable_min_clusters"] = _typed(thresholds.get("face_centroid_reliable_min_clusters", defaults.face_centroid_reliable_min_clusters), int, defaults.face_centroid_reliable_min_clusters, "thresholds.face_centroid_reliable_min_clusters")
+    fields["face_centroid_reliable_min_similarity"] = _typed(thresholds.get("face_centroid_reliable_min_similarity", defaults.face_centroid_reliable_min_similarity), float, defaults.face_centroid_reliable_min_similarity, "thresholds.face_centroid_reliable_min_similarity")
+    fields["voice_centroid_reliable_min_clusters"] = _typed(thresholds.get("voice_centroid_reliable_min_clusters", defaults.voice_centroid_reliable_min_clusters), int, defaults.voice_centroid_reliable_min_clusters, "thresholds.voice_centroid_reliable_min_clusters")
+    fields["voice_centroid_reliable_min_similarity"] = _typed(thresholds.get("voice_centroid_reliable_min_similarity", defaults.voice_centroid_reliable_min_similarity), float, defaults.voice_centroid_reliable_min_similarity, "thresholds.voice_centroid_reliable_min_similarity")
     fields["near_duplicate_hamming_threshold"] = _typed(thresholds.get("near_duplicate_hamming_threshold", defaults.near_duplicate_hamming_threshold), int, defaults.near_duplicate_hamming_threshold, "thresholds.near_duplicate_hamming_threshold")
     fields["gps_cluster_eps_km"] = _typed(thresholds.get("gps_cluster_eps_km", defaults.gps_cluster_eps_km), float, defaults.gps_cluster_eps_km, "thresholds.gps_cluster_eps_km")
     fields["gps_cluster_min_samples"] = _typed(thresholds.get("gps_cluster_min_samples", defaults.gps_cluster_min_samples), int, defaults.gps_cluster_min_samples, "thresholds.gps_cluster_min_samples")
@@ -249,6 +257,10 @@ def _extract_per_kb(raw: dict, global_fields: dict) -> dict:
         "geo_meta_default_threshold_m": ("geo_meta_default_threshold_m", float),
         "voice_similarity_threshold": ("voice_similarity_threshold", float),
         "voice_diarization_min_segment_ms": ("voice_diarization_min_segment_ms", int),
+        "face_centroid_reliable_min_clusters": ("face_centroid_reliable_min_clusters", int),
+        "face_centroid_reliable_min_similarity": ("face_centroid_reliable_min_similarity", float),
+        "voice_centroid_reliable_min_clusters": ("voice_centroid_reliable_min_clusters", int),
+        "voice_centroid_reliable_min_similarity": ("voice_centroid_reliable_min_similarity", float),
         "gps_cluster_eps_km": ("gps_cluster_eps_km", float),
         "gps_cluster_min_samples": ("gps_cluster_min_samples", int),
         "vad_silence_threshold": ("vad_silence_threshold", float),

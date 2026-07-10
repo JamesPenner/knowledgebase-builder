@@ -4,6 +4,9 @@
 {% for c in pending %}
 <div class="token-group" style="margin-bottom:1.5rem">
   <h3 style="margin:0 0 .4rem">Cluster #{{ c.id }} — {{ c.member_count }} face(s){% if c.spread is not none %} · spread {{ "%.2f"|format(c.spread) }}{% endif %}</h3>
+  {% if c.best_person_name %}
+  <p style="margin:0 0 .4rem;font-size:.82rem;color:#94a3b8">Suggested: <strong>{{ c.best_person_name }}</strong> ({{ "%.2f"|format(c.best_similarity) }})</p>
+  {% endif %}
   {% if c.rep_face_region_id %}
   <img src="/api/knowledge/corpus/face-thumbnail/{{ c.rep_face_region_id }}?kb={{ kb }}"
        alt="Face cluster {{ c.id }}"
