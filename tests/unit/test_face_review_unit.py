@@ -1,7 +1,8 @@
-"""Unit tests for face cluster DB helpers and thumbnail crop logic (KB.Q3)."""
+"""Unit tests for face cluster DB helpers and thumbnail crop logic (KB.Q3, KB.AJ1)."""
 import io
 import json
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -13,6 +14,7 @@ from src.db.corpus import (
     open_corpus,
     unassign_face_cluster,
 )
+from src.db.kb import open_kb
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +142,39 @@ def test_assign_face_cluster_nonexistent_is_noop(corpus):
     assert rows == []
 
 
+def test_assign_face_cluster_propagates_person_id_to_regions(corpus):
+    conn, file_id = corpus
+    cluster_id = _insert_cluster(conn)
+    _insert_face_region(conn, file_id, region_index=0)
+    _insert_member(conn, cluster_id, file_id, region_index=0)
+
+    assign_face_cluster(conn, cluster_id, 42, "Alice")
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT person_id FROM file_face_regions WHERE file_id=? AND region_index=0", (file_id,)
+    ).fetchone()
+    assert row["person_id"] == 42
+
+
+def test_assign_face_cluster_does_not_affect_other_clusters(corpus):
+    conn, file_id = corpus
+    cluster1 = _insert_cluster(conn)
+    cluster2 = _insert_cluster(conn)
+    _insert_face_region(conn, file_id, region_index=0)
+    _insert_face_region(conn, file_id, region_index=1)
+    _insert_member(conn, cluster1, file_id, region_index=0)
+    _insert_member(conn, cluster2, file_id, region_index=1)
+
+    assign_face_cluster(conn, cluster1, 42, "Alice")
+    conn.commit()
+
+    other = conn.execute(
+        "SELECT person_id FROM file_face_regions WHERE file_id=? AND region_index=1", (file_id,)
+    ).fetchone()
+    assert other["person_id"] is None
+
+
 # ---------------------------------------------------------------------------
 # unassign_face_cluster
 # ---------------------------------------------------------------------------
@@ -155,6 +190,23 @@ def test_unassign_face_cluster_clears_fields(corpus):
     row = conn.execute("SELECT person_id, label FROM face_clusters WHERE id=?", (cluster_id,)).fetchone()
     assert row["person_id"] is None
     assert row["label"] is None
+
+
+def test_unassign_face_cluster_clears_region_person_ids(corpus):
+    conn, file_id = corpus
+    cluster_id = _insert_cluster(conn)
+    _insert_face_region(conn, file_id, region_index=0)
+    _insert_member(conn, cluster_id, file_id, region_index=0)
+
+    assign_face_cluster(conn, cluster_id, 5, "Charlie")
+    conn.commit()
+    unassign_face_cluster(conn, cluster_id)
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT person_id FROM file_face_regions WHERE file_id=? AND region_index=0", (file_id,)
+    ).fetchone()
+    assert row["person_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -223,3 +275,55 @@ def test_thumbnail_missing_file_returns_grey_jpeg():
     data = buf.getvalue()
     out = Image.open(io.BytesIO(data))
     assert out.size == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# merge_face_centroid (KB.AJ1 — mirrors merge_voice_centroid)
+# ---------------------------------------------------------------------------
+
+def _blob(seed: int = 0, dim: int = 512) -> bytes:
+    rng = np.random.default_rng(seed)
+    v = rng.standard_normal(dim).astype(np.float32)
+    return (v / float(np.linalg.norm(v))).tobytes()
+
+
+@pytest.fixture
+def kb(tmp_path):
+    return open_kb(tmp_path / "knowledge.db")
+
+
+def test_merge_face_centroid_sets_directly_when_no_prior_centroid(kb):
+    from src.db.kb import merge_face_centroid
+    pid = kb.execute("INSERT INTO people(preferred_name) VALUES ('Alice')").lastrowid
+    emb = _blob(1)
+    merge_face_centroid(kb, pid, emb, 3)
+    row = kb.execute("SELECT face_centroid, face_samples FROM people WHERE id=?", (pid,)).fetchone()
+    result = np.frombuffer(bytes(row["face_centroid"]), dtype=np.float32)
+    expected = np.frombuffer(emb, dtype=np.float32)
+    np.testing.assert_allclose(result, expected, atol=1e-5)
+    assert row["face_samples"] == 3
+
+
+def test_merge_face_centroid_weighted_average_is_l2_normalised(kb):
+    from src.db.kb import merge_face_centroid
+    pid = kb.execute("INSERT INTO people(preferred_name) VALUES ('Bob')").lastrowid
+    merge_face_centroid(kb, pid, _blob(0), 2)
+    merge_face_centroid(kb, pid, _blob(1), 2)
+    row = kb.execute("SELECT face_centroid FROM people WHERE id=?", (pid,)).fetchone()
+    result = np.frombuffer(bytes(row["face_centroid"]), dtype=np.float32)
+    norm = float(np.linalg.norm(result))
+    assert abs(norm - 1.0) < 1e-4
+
+
+def test_merge_face_centroid_sample_count_accumulates(kb):
+    from src.db.kb import merge_face_centroid
+    pid = kb.execute("INSERT INTO people(preferred_name) VALUES ('Carol')").lastrowid
+    merge_face_centroid(kb, pid, _blob(0), 3)
+    merge_face_centroid(kb, pid, _blob(1), 5)
+    row = kb.execute("SELECT face_samples FROM people WHERE id=?", (pid,)).fetchone()
+    assert row["face_samples"] == 8
+
+
+def test_merge_face_centroid_noop_for_unknown_person(kb):
+    from src.db.kb import merge_face_centroid
+    merge_face_centroid(kb, 999, _blob(0), 1)

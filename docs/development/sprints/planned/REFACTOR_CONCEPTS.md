@@ -222,6 +222,15 @@ log, done signal. It does not touch the DB or business logic.
 
 ## 4. Cluster Result Typing
 
+**Status:** Partially addressed in `KB.AJ1` (see `docs/development/sprints/complete/KB.AJ1.md`).
+`ClusterAssignment` + `write_cluster_csv` unify the face and voice export
+writers, and the face-cluster assign/centroid-merge asymmetry described below
+was fixed as part of that sprint. GPS clusters were deliberately excluded —
+they have no `person_id`/assignment concept and use `distance_m` (lower is
+better) rather than `similarity` (higher is better), making them a poor fit
+for the same protocol. The review-API shape reconciliation (face review vs.
+the Pattern 2 shape speaker review already follows) remains open.
+
 ### Problem
 
 `face.py`, `voice.py`, and `gps_cluster.py` all produce cluster assignments

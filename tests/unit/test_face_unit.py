@@ -466,8 +466,8 @@ class TestPeopleExportHelpers:
         upsert_face_region(conn, 1, 0, '[0,0,50,50]', _fake_embedding(), 3, 0.9)
         rows = get_face_regions_for_export(conn)
         assert len(rows) == 1
-        assert rows[0]["file_path"] == "photo.jpg"
-        assert rows[0]["person_id"] == 3
+        assert rows[0].file_path == "photo.jpg"
+        assert rows[0].person_id == 3
 
 
 # ---------------------------------------------------------------------------

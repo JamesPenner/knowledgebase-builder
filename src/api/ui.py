@@ -1398,8 +1398,8 @@ async def ui_face_decide(
     new_name: str = Form(""),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.corpus import assign_face_cluster, open_corpus, unassign_face_cluster
-    from src.db.kb import open_kb, upsert_person
+    from src.db.corpus import assign_face_cluster, get_face_clusters, open_corpus, unassign_face_cluster
+    from src.db.kb import merge_face_centroid, open_kb, upsert_person
 
     corpus_path, kb_path = paths
     corpus_conn = open_corpus(corpus_path)
@@ -1421,6 +1421,12 @@ async def ui_face_decide(
             corpus_conn.close()
             kb_conn.close()
             return Response(content="person_id or new_name required", status_code=400)
+
+        clusters = {r["id"]: r for r in get_face_clusters(corpus_conn)}
+        cluster = clusters.get(cluster_id)
+        if cluster is not None and cluster["centroid"] is not None:
+            merge_face_centroid(kb_conn, pid, bytes(cluster["centroid"]), cluster["member_count"])
+        kb_conn.commit()
 
         assign_face_cluster(corpus_conn, cluster_id, pid, label)
         corpus_conn.commit()

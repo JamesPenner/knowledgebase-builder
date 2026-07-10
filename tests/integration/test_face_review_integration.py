@@ -241,6 +241,63 @@ def test_decide_assign_existing_person(tmp_path):
     assert row["label"] == "Alice"
 
 
+def test_decide_assign_updates_face_centroid(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    conn = open_corpus(corpus_path)
+    cluster_id = _seed_cluster(conn, member_count=4)
+    conn.close()
+    kb_conn = open_kb(kb_path)
+    person_id = _seed_person(kb_conn, "Dana")
+    kb_conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post(
+        "/review/faces/decide",
+        params={"kb": "test"},
+        data={"cluster_id": cluster_id, "action": "assign", "person_id": str(person_id)},
+    )
+    assert resp.status_code == 200
+
+    kb_conn = open_kb(kb_path)
+    row = kb_conn.execute(
+        "SELECT face_centroid, face_samples FROM people WHERE id=?", (person_id,)
+    ).fetchone()
+    kb_conn.close()
+    assert row["face_centroid"] is not None
+    assert row["face_samples"] == 4
+
+
+def test_decide_assign_propagates_person_id_to_regions(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    conn = open_corpus(corpus_path)
+    src_id = _seed_source(conn)
+    file_id = _seed_file(conn, src_id, "/src/a.jpg")
+    cluster_id = _seed_cluster(conn)
+    _seed_face_region(conn, file_id)
+    _seed_member(conn, cluster_id, file_id)
+    conn.close()
+    kb_conn = open_kb(kb_path)
+    person_id = _seed_person(kb_conn, "Erin")
+    kb_conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post(
+        "/review/faces/decide",
+        params={"kb": "test"},
+        data={"cluster_id": cluster_id, "action": "assign", "person_id": str(person_id)},
+    )
+    assert resp.status_code == 200
+
+    conn = open_corpus(corpus_path)
+    row = conn.execute(
+        "SELECT person_id FROM file_face_regions WHERE file_id=? AND region_index=0", (file_id,)
+    ).fetchone()
+    conn.close()
+    assert row["person_id"] == person_id
+
+
 def test_decide_assign_new_name_creates_person(tmp_path):
     corpus_path = tmp_path / "corpus.db"
     kb_path = tmp_path / "knowledge.db"
@@ -293,6 +350,38 @@ def test_decide_unassign_clears_person(tmp_path):
     row = conn.execute("SELECT person_id, label FROM face_clusters WHERE id=?", (cluster_id,)).fetchone()
     assert row["person_id"] is None
     assert row["label"] is None
+
+
+def test_decide_unassign_clears_region_person_id(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    conn = open_corpus(corpus_path)
+    src_id = _seed_source(conn)
+    file_id = _seed_file(conn, src_id, "/src/a.jpg")
+    cluster_id = _seed_cluster(conn, person_id=3, label="Charlie")
+    _seed_face_region(conn, file_id)
+    _seed_member(conn, cluster_id, file_id)
+    conn.execute(
+        "UPDATE file_face_regions SET person_id=3 WHERE file_id=? AND region_index=0", (file_id,)
+    )
+    conn.commit()
+    conn.close()
+    open_kb(kb_path).close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.post(
+        "/review/faces/decide",
+        params={"kb": "test"},
+        data={"cluster_id": cluster_id, "action": "unassign"},
+    )
+    assert resp.status_code == 200
+
+    conn = open_corpus(corpus_path)
+    row = conn.execute(
+        "SELECT person_id FROM file_face_regions WHERE file_id=? AND region_index=0", (file_id,)
+    ).fetchone()
+    conn.close()
+    assert row["person_id"] is None
 
 
 # ---------------------------------------------------------------------------

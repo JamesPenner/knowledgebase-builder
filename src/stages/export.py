@@ -434,6 +434,7 @@ def _write_people(export_dir: Path, kb_conn, corpus_conn, export_biometric: bool
         get_people_names_for_export,
         get_people_voice_centroids_for_export,
     )
+    from src.pipeline.clusters import write_cluster_csv
 
     people_dir = export_dir / "people"
     people_dir.mkdir(exist_ok=True)
@@ -465,14 +466,18 @@ def _write_people(export_dir: Path, kb_conn, corpus_conn, export_biometric: bool
         writer.writerows(dict(r) for r in events)
 
     regions = get_face_regions_for_export(corpus_conn)
-    with open(people_dir / "face_regions.csv", "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=["file_path", "region_index", "person_id", "similarity", "bbox"],
-            extrasaction="ignore",
-        )
-        writer.writeheader()
-        writer.writerows(dict(r) for r in regions)
+    write_cluster_csv(
+        people_dir / "face_regions.csv",
+        regions,
+        ["file_path", "region_index", "person_id", "similarity", "bbox"],
+        lambda a: {
+            "file_path": a.file_path,
+            "region_index": a.extra["region_index"],
+            "person_id": a.person_id,
+            "similarity": a.score,
+            "bbox": a.extra["bbox"],
+        },
+    )
 
     if export_biometric:
         import base64
@@ -517,13 +522,20 @@ def _write_people(export_dir: Path, kb_conn, corpus_conn, export_biometric: bool
         writer.writerows(dict(r) for r in voice_rows)
 
     segments = get_voice_segments_for_export(corpus_conn)
-    with open(people_dir / "voice_segments.csv", "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=["path", "start_ms", "end_ms", "speaker_label", "cluster_id", "person_id", "similarity"],
-        )
-        writer.writeheader()
-        writer.writerows(dict(r) for r in segments)
+    write_cluster_csv(
+        people_dir / "voice_segments.csv",
+        segments,
+        ["path", "start_ms", "end_ms", "speaker_label", "cluster_id", "person_id", "similarity"],
+        lambda a: {
+            "path": a.file_path,
+            "start_ms": a.extra["start_ms"],
+            "end_ms": a.extra["end_ms"],
+            "speaker_label": a.extra["speaker_label"],
+            "cluster_id": a.cluster_id,
+            "person_id": a.person_id,
+            "similarity": a.score,
+        },
+    )
 
 
 def run_export(

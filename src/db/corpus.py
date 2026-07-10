@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.db.migrations import apply_migrations
 from src.db.utils import configure_connection as _configure
+from src.pipeline.clusters import ClusterAssignment
 from src.pipeline.filter_spec import CorpusFilterSpec
 
 
@@ -2173,8 +2174,8 @@ def get_face_regions_for_file(conn: sqlite3.Connection, file_id: int) -> list[sq
     ).fetchall()
 
 
-def get_face_regions_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
+def get_face_regions_for_export(conn: sqlite3.Connection) -> list[ClusterAssignment]:
+    rows = conn.execute(
         """
         SELECT f.path AS file_path, ffr.region_index, ffr.person_id,
                ffr.similarity, ffr.bbox
@@ -2183,6 +2184,15 @@ def get_face_regions_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY f.path, ffr.region_index
         """
     ).fetchall()
+    return [
+        ClusterAssignment(
+            file_path=row["file_path"],
+            person_id=row["person_id"],
+            score=row["similarity"],
+            extra={"region_index": row["region_index"], "bbox": row["bbox"]},
+        )
+        for row in rows
+    ]
 
 
 def get_face_embeddings_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -2347,8 +2357,8 @@ def get_voice_segments_for_file(conn: sqlite3.Connection, file_id: int) -> list[
     ).fetchall()
 
 
-def get_voice_segments_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
+def get_voice_segments_for_export(conn: sqlite3.Connection) -> list[ClusterAssignment]:
+    rows = conn.execute(
         """
         SELECT f.path, fvs.start_ms, fvs.end_ms, fvs.speaker_label,
                fvs.cluster_id, fvs.person_id, fvs.similarity
@@ -2357,6 +2367,20 @@ def get_voice_segments_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]
         ORDER BY f.path, fvs.segment_index
         """
     ).fetchall()
+    return [
+        ClusterAssignment(
+            file_path=row["path"],
+            person_id=row["person_id"],
+            score=row["similarity"],
+            cluster_id=row["cluster_id"],
+            extra={
+                "start_ms": row["start_ms"],
+                "end_ms": row["end_ms"],
+                "speaker_label": row["speaker_label"],
+            },
+        )
+        for row in rows
+    ]
 
 
 def reset_voice_segments(conn: sqlite3.Connection) -> int:
@@ -2854,11 +2878,29 @@ def assign_face_cluster(
         "UPDATE face_clusters SET person_id = ?, label = ? WHERE id = ?",
         (person_id, label, cluster_id),
     )
+    conn.execute(
+        """
+        UPDATE file_face_regions SET person_id = ?
+        WHERE (file_id, region_index) IN (
+            SELECT file_id, region_index FROM face_cluster_members WHERE cluster_id = ?
+        )
+        """,
+        (person_id, cluster_id),
+    )
 
 
 def unassign_face_cluster(conn: sqlite3.Connection, cluster_id: int) -> None:
     conn.execute(
         "UPDATE face_clusters SET person_id = NULL, label = NULL WHERE id = ?",
+        (cluster_id,),
+    )
+    conn.execute(
+        """
+        UPDATE file_face_regions SET person_id = NULL
+        WHERE (file_id, region_index) IN (
+            SELECT file_id, region_index FROM face_cluster_members WHERE cluster_id = ?
+        )
+        """,
         (cluster_id,),
     )
 

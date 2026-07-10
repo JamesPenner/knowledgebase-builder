@@ -334,9 +334,9 @@ class TestGetVoiceSegmentsForExport:
         upsert_voice_segment(conn, 1, 0, 1000, 5000, "SPEAKER_00", None, None, 3, 0.88)
         rows = get_voice_segments_for_export(conn)
         assert len(rows) == 1
-        assert rows[0]["path"] == "/audio/clip.wav"
-        assert rows[0]["person_id"] == 3
-        assert rows[0]["similarity"] == pytest.approx(0.88, abs=1e-5)
+        assert rows[0].file_path == "/audio/clip.wav"
+        assert rows[0].person_id == 3
+        assert rows[0].score == pytest.approx(0.88, abs=1e-5)
 
 
 class TestUpsertVoiceSpeakerCluster:

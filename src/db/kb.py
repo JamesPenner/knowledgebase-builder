@@ -1444,6 +1444,44 @@ def merge_voice_centroid(
     )
 
 
+def merge_face_centroid(
+    conn: sqlite3.Connection,
+    person_id: int,
+    cluster_blob: bytes,
+    cluster_count: int,
+) -> None:
+    """Weighted-average a cluster centroid into a person's face_centroid, then L2-normalise."""
+    import numpy as np
+
+    row = conn.execute(
+        "SELECT face_centroid, face_samples FROM people WHERE id = ?", (person_id,)
+    ).fetchone()
+    if row is None:
+        return
+
+    cluster_vec = np.frombuffer(cluster_blob, dtype=np.float32).copy()
+    existing_blob = row["face_centroid"]
+    existing_count = row["face_samples"] or 0
+
+    if existing_blob is None or existing_count == 0:
+        merged = cluster_vec
+        new_count = cluster_count
+    else:
+        existing_vec = np.frombuffer(bytes(existing_blob), dtype=np.float32).copy()
+        total = existing_count + cluster_count
+        merged = (existing_vec * existing_count + cluster_vec * cluster_count) / total
+        new_count = total
+
+    norm = float(np.linalg.norm(merged))
+    if norm > 0:
+        merged = merged / norm
+
+    conn.execute(
+        "UPDATE people SET face_centroid = ?, face_samples = ? WHERE id = ?",
+        (merged.astype(np.float32).tobytes(), new_count, person_id),
+    )
+
+
 def get_people_voice_centroids_for_export(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """

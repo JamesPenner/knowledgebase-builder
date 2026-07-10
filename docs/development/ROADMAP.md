@@ -16,9 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1710 passing, 2 skipped
-- **Last completed sprint:** KB.AI1 (Navigation Restructure — four-section nav: Build/Review/Knowledge/Corpus; Normalise/Suggest/New Terms added to Review section with badge spans; `nav_badges.js` polls all three pending endpoints; `suggest_badge.js` deleted; +19 net tests)
-- **Last hotfix:** Face bbox coordinate fix — `detect_faces` was scaling `buffalo_l det_10g` normalized [0,1] output by `orig_w/640` instead of `orig_w`; also fixes inverted y1/y2 for edge faces; +8 unit tests (1710 total)
+- **Tests:** 1726 passing, 2 skipped
+- **Last completed sprint:** KB.AJ1 (Cluster Result Typing — `ClusterAssignment` dataclass + `write_cluster_csv` helper in new `src/pipeline/clusters.py`; face/voice export writers in `export.py` unified onto typed DB helpers; face-cluster-assign bug fixed — `assign_face_cluster`/`unassign_face_cluster` now cascade `person_id` to `file_face_regions` and `merge_face_centroid` (new) updates `people.face_centroid` on assign, mirroring the existing voice path; +16 net tests)
+- **Last hotfix:** Face bbox coordinate fix — `detect_faces` was scaling `buffalo_l det_10g` normalized [0,1] output by `orig_w/640` instead of `orig_w`; also fixes inverted y1/y2 for edge faces; +8 unit tests
 - **Next planned sprint:** TBD
 
 ---

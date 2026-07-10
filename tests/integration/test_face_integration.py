@@ -202,3 +202,58 @@ class TestRunFaceIntegration:
         config = Config(face_detection_model="", face_embedding_model="")
         with pytest.raises(ModelLoadError):
             run_face(corpus_path, kb_path, config, NullProgressReporter(), make_cancel_event())
+
+
+# ---------------------------------------------------------------------------
+# Export (KB.AJ1)
+# ---------------------------------------------------------------------------
+
+class TestFaceExport:
+    def test_face_regions_csv_written(self, tmp_path):
+        from src.db.corpus import upsert_face_region
+        from src.stages.export import _write_people
+
+        corpus_path = tmp_path / "corpus.db"
+        kb_path = tmp_path / "knowledge.db"
+        corpus_conn = open_corpus(corpus_path)
+        kb_conn = open_kb(kb_path)
+
+        source_id = corpus_conn.execute(
+            "INSERT INTO sources(path, file_type, recursive) VALUES ('/src', 'all', 1)"
+        ).lastrowid
+        corpus_conn.execute(
+            "INSERT INTO files(id, source_id, path, filename, ext, file_type, file_size, mtime) "
+            "VALUES (1, ?, '/photos/party.jpg', 'party.jpg', '.jpg', 'images', 500, 0.0)",
+            (source_id,),
+        )
+        upsert_face_region(corpus_conn, 1, 0, "[10,10,50,50]", _fake_embedding(), 7, 0.93)
+        corpus_conn.commit()
+
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        _write_people(export_dir, kb_conn, corpus_conn, export_biometric=False)
+
+        csv_path = export_dir / "people" / "face_regions.csv"
+        assert csv_path.exists()
+        content = csv_path.read_text(encoding="utf-8")
+        assert content.splitlines()[0] == "file_path,region_index,person_id,similarity,bbox"
+        assert "party.jpg" in content
+        assert "7" in content
+
+    def test_face_regions_csv_empty_when_no_regions(self, tmp_path):
+        from src.stages.export import _write_people
+
+        corpus_path = tmp_path / "corpus.db"
+        kb_path = tmp_path / "knowledge.db"
+        corpus_conn = open_corpus(corpus_path)
+        kb_conn = open_kb(kb_path)
+
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        _write_people(export_dir, kb_conn, corpus_conn, export_biometric=False)
+
+        csv_path = export_dir / "people" / "face_regions.csv"
+        assert csv_path.exists()
+        assert csv_path.read_text(encoding="utf-8").splitlines() == [
+            "file_path,region_index,person_id,similarity,bbox"
+        ]
