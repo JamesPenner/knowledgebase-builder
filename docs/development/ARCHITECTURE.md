@@ -245,6 +245,10 @@ One-way dependency graph only:
 
 `from module import *` is never used. Ruff enforces this as a build failure.
 
+### Extraction-readiness (forward-looking)
+
+Per `VISION.md`'s "Componentized Media Management" section, `db/corpus.py`, `db/kb.py`, `migrations/`, and the file-handling logic in `stages/ingest.py`, `extract_meta.py`, `hash.py`, and `writeback.py` are candidates for future extraction into a shared library that sibling apps (people/face/voice management, location management, duplication management, a file browser) would import directly. The existing "thin edges" and "one-way dependency graph" rules already keep this layer's boundary clean — no restructuring is needed today, and none should be done speculatively. The one discipline worth actively maintaining: keep `knowledge.db`-only functions (vocabulary, synonyms, taxonomy, entity tables) distinguishable from cross-database functions that also touch `corpus.db` (identity/centroid data — `people` joined against `face_clusters`/`voice_speaker_clusters`, which is a deliberate design pairing, not accidental coupling; see `VISION.md`). Keeping that distinction visible in `db/kb.py`'s function names and grouping comments means a future extraction won't need to re-audit every function to figure out which database(s) it actually needs.
+
 ## Frontend
 
 HTMX + vanilla JS + handwritten CSS only. No jQuery, React, Vue, Bootstrap, or Tailwind. Each JS file serves one purpose; CSS is scoped to the component it styles. A new contributor should be able to read any template or script file without framework knowledge.
