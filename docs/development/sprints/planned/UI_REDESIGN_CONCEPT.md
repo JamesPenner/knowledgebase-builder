@@ -164,6 +164,18 @@ centroid, the page shows a clear "Centroids reliable" state.
 
 ## 4. Health Page — System vs Corpus
 
+**Status:** Done — `KB.AL1` (see `docs/development/sprints/complete/KB.AL1.md`).
+Implemented as a mechanical split on `HealthCheck.severity` (`error`/`warning`
+→ System Health, `info` → Corpus Coverage) via a new `split_checks()` helper
+in `src/health.py`, replacing hardcoded check-id membership lists that had
+drifted and were silently dropping over half of the 28 checks from both the
+web page and the CLI. Corpus Coverage links out to `/corpus-stats` and
+`/knowledge/people` rather than duplicating their metrics inline, keeping
+`src/health.py` from depending on those pages' internals (e.g. the
+centroid-quality thresholds `get_centroid_quality()` needs) — ordinary
+separation of concerns between page modules, distinct from the sibling-*app*
+composability question `VISION.md` addresses.
+
 ### Problem
 
 The current health page mixes two fundamentally different categories of

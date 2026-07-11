@@ -75,11 +75,13 @@ def test_kb_health_outputs_all_groups(tmp_path, monkeypatch):
     result = runner.invoke(app, ["kb", "health", "test-kb"])
     # No unhandled Python exception (SystemExit from raise typer.Exit is expected)
     assert result.exception is None or isinstance(result.exception, SystemExit)
-    assert "Environment (Required)" in result.output
-    assert "Optional Tools" in result.output
-    assert "KB State" in result.output
-    assert "KB Scaffold Files" in result.output
+    assert "System Health" in result.output
+    assert "Corpus Coverage" in result.output
     assert "ExifTool present" in result.output
+    # Regression: previously-hardcoded id-set groups dropped checks like
+    # audio_model/geolocate_data that matched no group (KB.AL1 fix)
+    assert "Natural Earth shapefiles" in result.output
+    assert "Whisper audio model" in result.output
 
 
 def test_kb_health_reports_missing_corpus(tmp_path, monkeypatch):

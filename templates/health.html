@@ -3,18 +3,16 @@
 {% block content %}
 <h1 class="page-title">Health Check</h1>
 
-{% for group in groups %}
+<h2 class="section-title">System Health</h2>
+<p class="section-subtitle">Genuine blockers — missing tools, unconfigured models, missing scaffold files. A clean system shows all green.</p>
 <div class="health-group">
-  <div class="health-group-title">{{ group.label }}</div>
-  {% for chk in group.checks %}
+  {% for chk in system_checks %}
   {% if chk.ok %}
     {% set dot = "ok" %}
   {% elif chk.severity == "error" %}
     {% set dot = "fail" %}
-  {% elif chk.severity == "warning" %}
-    {% set dot = "warn" %}
   {% else %}
-    {% set dot = "info" %}
+    {% set dot = "warn" %}
   {% endif %}
   <div class="health-row">
     <span class="health-dot health-dot--{{ dot }}"></span>
@@ -26,5 +24,15 @@
   </div>
   {% endfor %}
 </div>
-{% endfor %}
+
+<h2 class="section-title">Corpus Coverage</h2>
+<p class="section-subtitle">Where you are in building this KB. Gaps here are expected, not failures — see <a href="/corpus-stats?kb={{ kb }}">Corpus Stats</a> for stage-by-stage percentages and <a href="/knowledge/people?kb={{ kb }}">People</a> for face/voice centroid reliability.</p>
+<div class="coverage-dashboard">
+  {% for chk in coverage_checks %}
+  <div class="coverage-row">
+    <span class="coverage-label">{{ chk.label }}</span>
+    <span class="coverage-detail">{{ chk.detail }}</span>
+  </div>
+  {% endfor %}
+</div>
 {% endblock %}

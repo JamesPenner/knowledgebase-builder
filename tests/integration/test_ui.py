@@ -767,15 +767,38 @@ def test_health_api_returns_16_checks(kb_dbs):
     assert resp.status_code == 404
 
 
-def test_health_page_shows_four_groups(kb_dbs):
+def test_health_page_shows_two_sections(kb_dbs):
     client = _make_client(*kb_dbs)
     resp = client.get("/health", params={"kb": "test"})
     assert resp.status_code == 200
     text = resp.text
-    assert "Environment (Required)" in text
-    assert "Optional Tools" in text
-    assert "KB State" in text
-    assert "KB Scaffold Files" in text
+    assert "System Health" in text
+    assert "Corpus Coverage" in text
+
+
+def test_health_page_all_checks_rendered(kb_dbs):
+    """Regression: the old hardcoded id-set groups silently dropped checks
+    (e.g. audio_model, geolocate_data) that matched no group. KB.AL1 groups
+    by severity instead, so every check from run_checks() must appear."""
+    client = _make_client(*kb_dbs)
+    resp = client.get("/health", params={"kb": "test"})
+    assert resp.status_code == 200
+    text = resp.text
+
+    for label in {"Vision model present", "Text model present", "Whisper audio model",
+                  "NIMA aesthetic model present", "reference/field_map.csv",
+                  "Natural Earth shapefiles", "Privacy zones config", "File validation",
+                  "Location register"}:
+        assert label in text, f"{label!r} missing from health page — check silently dropped"
+
+
+def test_health_page_links_to_stats_and_people(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/health", params={"kb": "test"})
+    assert resp.status_code == 200
+    text = resp.text
+    assert "/corpus-stats?kb=test" in text
+    assert "/knowledge/people?kb=test" in text
 
 
 # ---------------------------------------------------------------------------

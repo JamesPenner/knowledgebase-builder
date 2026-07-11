@@ -23,6 +23,7 @@ from src.health import (
     _check_text_model,
     _check_unknown_fields,
     _check_vision_model,
+    split_checks,
 )
 
 
@@ -384,14 +385,14 @@ def test_check_unknown_fields_has_unmapped():
 
 
 # ---------------------------------------------------------------------------
-# Group D — KB scaffold files (info)
+# Group D — KB scaffold files (warning — genuine blocker if missing)
 # ---------------------------------------------------------------------------
 
 def test_check_library_yaml_ok(tmp_path):
     (tmp_path / "library.yaml").write_text("scan:\n  default_file_types: all\n", encoding="utf-8")
     chk = _check_library_yaml(tmp_path)
     assert chk.ok
-    assert chk.severity == "info"
+    assert chk.severity == "warning"
 
 
 def test_check_library_yaml_missing(tmp_path):
@@ -413,7 +414,7 @@ def test_check_exiftool_config_present(tmp_path):
     (ref / "ExifTool_Config").write_text("%Image::ExifTool::UserDefined = ();\n", encoding="utf-8")
     chk = _check_exiftool_config(tmp_path)
     assert chk.ok
-    assert chk.severity == "info"
+    assert chk.severity == "warning"
 
 
 def test_check_exiftool_config_missing(tmp_path):
@@ -586,3 +587,51 @@ def test_check_validation_freshness_missing():
 def _check_vocabulary(conn):
     from src.health import _check_vocabulary as _cv
     return _cv(conn)
+
+
+# ---------------------------------------------------------------------------
+# split_checks — System Health vs Corpus Coverage (KB.AL1)
+# ---------------------------------------------------------------------------
+
+def test_split_checks_buckets_by_severity():
+    checks = [
+        HealthCheck(id="a", label="A", severity="error", ok=False, detail=""),
+        HealthCheck(id="b", label="B", severity="warning", ok=True, detail=""),
+        HealthCheck(id="c", label="C", severity="info", ok=True, detail=""),
+        HealthCheck(id="d", label="D", severity="info", ok=False, detail=""),
+    ]
+    system, coverage = split_checks(checks)
+    assert [c.id for c in system] == ["a", "b"]
+    assert [c.id for c in coverage] == ["c", "d"]
+
+
+def test_split_checks_preserves_order():
+    checks = [
+        HealthCheck(id="info1", label="I1", severity="info", ok=True, detail=""),
+        HealthCheck(id="err1", label="E1", severity="error", ok=False, detail=""),
+        HealthCheck(id="info2", label="I2", severity="info", ok=True, detail=""),
+        HealthCheck(id="warn1", label="W1", severity="warning", ok=True, detail=""),
+    ]
+    system, coverage = split_checks(checks)
+    assert [c.id for c in system] == ["err1", "warn1"]
+    assert [c.id for c in coverage] == ["info1", "info2"]
+
+
+def test_split_checks_empty():
+    system, coverage = split_checks([])
+    assert system == []
+    assert coverage == []
+
+
+def test_split_checks_real_run_checks_all_accounted_for(tmp_path):
+    from src.health import run_checks as _run
+    checks = _run(_cfg(), None, None, tmp_path)
+    system, coverage = split_checks(checks)
+    assert len(system) + len(coverage) == len(checks)
+    # Scaffold-file checks are genuine blockers, not coverage gaps (KB.AL1)
+    system_ids = {c.id for c in system}
+    assert {"library_yaml", "exiftool_config", "dates_yaml",
+            "derive_rules_yaml", "taxonomy_yaml"} <= system_ids
+    # KB-state counts remain informational coverage
+    coverage_ids = {c.id for c in coverage}
+    assert {"sources", "corpus_files", "vocabulary", "focus", "unknown_fields"} <= coverage_ids

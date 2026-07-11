@@ -16,8 +16,8 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1786 passing, 2 skipped
-- **Last completed sprint:** KB.AK1 (Corpus File Browser — paginated/filterable file list at `/corpus-files`; `get_files_for_browser`/`count_files_for_browser` query layer in `src/db/corpus.py`; `GET /api/kb/{name}/files` JSON endpoint; HTMX page + partial reusing `ReviewQueue` for Load More/sort; "Use as scope" pushes the active `CorpusFilterSpec` filter panel into the workbench's scope bar via `localStorage`; row checkboxes / file-ID-list scope deferred — no such mechanism exists in the pipeline scope system; +31 net tests)
+- **Tests:** 1792 passing, 2 skipped
+- **Last completed sprint:** KB.AL1 (Health Page Redesign — split the health page into System Health (`error`/`warning` severity — genuine blockers, pass/fail dots) and Corpus Coverage (`info` severity — plain numbers dashboard, no red/warning framing); new `split_checks()` helper in `src/health.py` buckets by severity, replacing hardcoded check-id membership lists in `src/api/ui.py` and `src/cli/kb.py` that had drifted and were silently dropping over half of the 28 checks from both the web page and CLI output; scaffold-file checks (`library.yaml`, `reference/ExifTool_Config`, `reference/dates.yaml`, `reference/derive_rules.yaml`, `reference/taxonomy.yaml`) bumped from `info` to `warning` severity since a missing scaffold file is a genuine blocker, not a coverage gap; Corpus Coverage links out to `/corpus-stats` and `/knowledge/people` rather than duplicating their metrics inline; +6 net tests)
 - **Last hotfix:** Face bbox coordinate fix — `detect_faces` was scaling `buffalo_l det_10g` normalized [0,1] output by `orig_w/640` instead of `orig_w`; also fixes inverted y1/y2 for edge faces; +8 unit tests
 - **Next planned sprint:** TBD
 
@@ -121,6 +121,7 @@ centroid confidence and sample count. Highest-value clusters surfaced first.
 Good-enough threshold indicator.
 
 ### Health Page Redesign
+**Status:** Done — `KB.AL1` (see `docs/development/sprints/complete/KB.AL1.md`).
 **Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`  
 Split into System Health (genuine problems: missing tools, schema errors) and
 Corpus Coverage (informational: % processed, unassigned clusters). Coverage

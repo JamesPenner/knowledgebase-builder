@@ -1967,21 +1967,40 @@ Highway 1    [Trans-Canada Highway ×]  [TCH ×]  [Trans Canada ×]  [+ Add]   w
 
 **Pipeline card + SSE progress** — `stage_card` macro pattern, SSE progress stream, rate/ETA display, cooperative cancel. Model for every stage in the pipeline.
 
-**Health checker** — expandable component rows with status dots (green/yellow/red) and inline guidance:
+**Health checker** — split into two sections, not one flat list (KB.AL1):
+
+- **System Health** (`error`/`warning` severity) — genuine blockers: tools not
+  found, models not configured, scaffold files missing. Rendered as
+  expandable rows with status dots (green/yellow/red) and inline fix
+  guidance. A clean system shows all green.
+- **Corpus Coverage** (`info` severity) — informational counts: source/file
+  totals, vocabulary size, FOCUS string, unreviewed fields, validation
+  freshness, location register. Rendered as a plain numbers dashboard with
+  no red/warning framing — coverage gaps are expected in a knowledge-building
+  tool, not failures. Links out to `/corpus-stats` (stage-by-stage
+  percentages) and `/knowledge/people` (face/voice centroid reliability)
+  rather than duplicating those pages' metrics inline.
+
+The split is mechanical: `src/health.py`'s `split_checks()` buckets each
+`HealthCheck` by its `severity` field — no separate check-membership list to
+maintain. Scaffold-file checks (`library.yaml`, `reference/ExifTool_Config`,
+`reference/dates.yaml`, `reference/derive_rules.yaml`,
+`reference/taxonomy.yaml`) are `warning` severity, not `info`, since a
+missing scaffold file is a genuine blocker for write-back/catalogue
+compatibility, not a coverage gap.
+
+The full, current list of checks (grows as stages are added) lives in
+`src/health.py::run_checks()` — treat that as the source of truth rather
+than enumerating every check here. Representative examples, one per
+severity:
 
 | Check | Severity | Condition | Fix action |
 |---|---|---|---|
 | ExifTool present | Error | Not found in `tools/exiftool/` or PATH | "Place exiftool.exe in tools/exiftool/" |
-| ffmpeg present | Error | Not found in `tools/ffmpeg/` or PATH | "Place ffmpeg.exe in tools/ffmpeg/" |
 | Vision model present | Warning | No GGUF in `tools/models/vision/` | "Place a vision GGUF in tools/models/vision/" |
-| Text model present | Warning | No GGUF in `tools/models/text/` | "Place a text GGUF in tools/models/text/" |
-| spaCy en_core_web_sm | Warning | Not importable | One-click: `python -m spacy download en_core_web_sm` |
+| library.yaml | Warning | Missing from KB folder | "Re-run `enrich kb create`" |
 | Source directories | Info | `sources` empty for this KB | "Add a source folder to start ingesting" |
-| Corpus non-empty | Info | `files` table empty | "Run Ingest to add files" |
 | Vocabulary non-empty | Info | `vocabulary` table empty | "Run Suggest and review candidates to build vocabulary" |
-| FOCUS string set | Info | `focus` absent in per-KB config | "Recommended — improves description quality for your domain" |
-| Unknown fields pending | Info | Scanner has unreviewed fields | "N unrecognised fields found — [Review in Field Scanner]" |
-| Capture rules set | Info | No capture rules; corpus has date/serial tokens | "N filename tokens look like dates — set up a capture rule" |
 
 **Pipeline status dots per KB** — on the KB list page, each KB shows a dot row covering all pipeline stages. Users see at a glance which KBs have completed which stages.
 

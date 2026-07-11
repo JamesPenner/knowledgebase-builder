@@ -1153,7 +1153,7 @@ def health_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)
     from src.db.corpus import open_corpus
     from src.db.kb import open_kb
     from src.db.registry import get_kb_path, open_registry
-    from src.health import run_checks
+    from src.health import run_checks, split_checks
 
     reg = open_registry(Path("."))
     try:
@@ -1176,16 +1176,12 @@ def health_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)
     if kb_conn:
         kb_conn.close()
 
-    groups = [
-        {"label": "Environment (Required)", "checks": [c for c in checks if c.severity == "error"]},
-        {"label": "Optional Tools", "checks": [c for c in checks if c.id in {"vision_model", "text_model", "spacy_model", "field_map"}]},
-        {"label": "KB State", "checks": [c for c in checks if c.id in {"sources", "corpus_files", "vocabulary", "focus", "unknown_fields"}]},
-        {"label": "KB Scaffold Files", "checks": [c for c in checks if c.id in {"library_yaml", "exiftool_config", "dates_yaml", "derive_rules_yaml", "taxonomy_yaml"}]},
-    ]
+    system_checks, coverage_checks = split_checks(checks)
 
     return templates.TemplateResponse(request, "health.html", {
         "kb": kb_name,
-        "groups": groups,
+        "system_checks": system_checks,
+        "coverage_checks": coverage_checks,
     })
 
 

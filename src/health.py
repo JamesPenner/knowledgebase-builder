@@ -56,6 +56,20 @@ def run_checks(
     ]
 
 
+def split_checks(checks: list[HealthCheck]) -> tuple[list[HealthCheck], list[HealthCheck]]:
+    """Split checks into (system_health, corpus_coverage) by severity.
+
+    error/warning checks are genuine blockers (tool missing, model not
+    configured, scaffold file missing) — shown as pass/fail System Health.
+    info checks are expected-to-vary corpus state (file counts, vocabulary
+    size, coverage gaps) — shown as a plain Corpus Coverage dashboard with
+    no red/warning framing, per UI_REDESIGN_CONCEPT.md §4.
+    """
+    system = [c for c in checks if c.severity in ("error", "warning")]
+    coverage = [c for c in checks if c.severity == "info"]
+    return system, coverage
+
+
 # ---------------------------------------------------------------------------
 # Group A — Environment (error)
 # ---------------------------------------------------------------------------
@@ -474,19 +488,20 @@ def _check_unknown_fields(corpus_conn: sqlite3.Connection | None) -> HealthCheck
 
 
 # ---------------------------------------------------------------------------
-# Group D — KB scaffold files (info)
+# Group D — KB scaffold files (warning — missing scaffold is a genuine blocker
+# for write-back / catalogue compatibility, not a coverage gap)
 # ---------------------------------------------------------------------------
 
 def _check_yaml_file(check_id: str, label: str, path: Path) -> HealthCheck:
     if not path.exists():
-        return HealthCheck(id=check_id, label=label, severity="info", ok=False,
+        return HealthCheck(id=check_id, label=label, severity="warning", ok=False,
                            detail="missing — re-run 'enrich kb create'",
                            fix="enrich kb create --name <name>")
     try:
         yaml.safe_load(path.read_text(encoding="utf-8"))
-        return HealthCheck(id=check_id, label=label, severity="info", ok=True, detail="present")
+        return HealthCheck(id=check_id, label=label, severity="warning", ok=True, detail="present")
     except Exception as exc:
-        return HealthCheck(id=check_id, label=label, severity="info", ok=False,
+        return HealthCheck(id=check_id, label=label, severity="warning", ok=False,
                            detail=f"parse error: {exc}")
 
 
@@ -500,7 +515,7 @@ def _check_exiftool_config(kb_folder: Path) -> HealthCheck:
     return HealthCheck(
         id="exiftool_config",
         label="reference/ExifTool_Config",
-        severity="info",
+        severity="warning",
         ok=exists,
         detail="present" if exists else "missing — custom XMP namespaces (FamilyArchive) will not be read",
         fix="" if exists else "Re-run 'enrich kb create' or copy ExifTool_Config from catalogue",

@@ -439,7 +439,7 @@ def kb_health(
     from pathlib import Path
     from src.config import load_config
     from src.db.registry import get_kb_path, open_registry
-    from src.health import run_checks
+    from src.health import run_checks, split_checks
 
     reg = open_registry(Path("."))
     try:
@@ -466,39 +466,30 @@ def kb_health(
     if kb_conn:
         kb_conn.close()
 
-    _GROUPS = [
-        ("Environment (Required)", "error"),
-        ("Optional Tools", "warning"),
-        ("KB State", "info"),
-        ("KB Scaffold Files", "info"),
-    ]
-    _GROUP_IDS = [
-        {"exiftool", "ffmpeg"},
-        {"vision_model", "text_model", "spacy_model", "field_map"},
-        {"sources", "corpus_files", "vocabulary", "focus", "unknown_fields"},
-        {"library_yaml", "exiftool_config", "dates_yaml", "derive_rules_yaml", "taxonomy_yaml"},
-    ]
+    system_checks, coverage_checks = split_checks(checks)
 
     typer.echo(f"\nKB health: {name}  ({kb_folder})\n")
     has_error = False
-    for (group_label, _), id_set in zip(_GROUPS, _GROUP_IDS):
-        typer.echo(f"  {group_label}")
-        for chk in checks:
-            if chk.id not in id_set:
-                continue
-            if chk.ok:
-                prefix = "OK  "
-            elif chk.severity == "error":
-                prefix = "FAIL"
-                has_error = True
-            elif chk.severity == "warning":
-                prefix = "WARN"
-            else:
-                prefix = "INFO"
-            suffix = f"  ({chk.detail})" if chk.detail else ""
-            fix = f"  → {chk.fix}" if chk.fix and not chk.ok else ""
-            typer.echo(f"    [{prefix}] {chk.label}{suffix}{fix}")
-        typer.echo("")
+
+    typer.echo("  System Health")
+    for chk in system_checks:
+        if chk.ok:
+            prefix = "OK  "
+        elif chk.severity == "error":
+            prefix = "FAIL"
+            has_error = True
+        else:
+            prefix = "WARN"
+        suffix = f"  ({chk.detail})" if chk.detail else ""
+        fix = f"  → {chk.fix}" if chk.fix and not chk.ok else ""
+        typer.echo(f"    [{prefix}] {chk.label}{suffix}{fix}")
+    typer.echo("")
+
+    typer.echo("  Corpus Coverage")
+    for chk in coverage_checks:
+        suffix = f"  ({chk.detail})" if chk.detail else ""
+        typer.echo(f"    [INFO] {chk.label}{suffix}")
+    typer.echo("")
 
     if has_error:
         raise typer.Exit(1)

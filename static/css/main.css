@@ -483,18 +483,24 @@ body {
 
 
 /* Health checker */
+.section-subtitle { color: #64748b; font-size: 0.875em; margin: -0.25rem 0 0.75rem; }
 .health-group { margin-bottom: 1.5rem; }
-.health-group-title { font-size: 0.8em; font-weight: 600; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
 .health-row { display: flex; align-items: baseline; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid #f1f5f9; }
 .health-row:last-child { border-bottom: none; }
 .health-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; flex-shrink: 0; margin-top: 0.25rem; }
 .health-dot--ok   { background: #22c55e; }
 .health-dot--fail { background: #ef4444; }
 .health-dot--warn { background: #f59e0b; }
-.health-dot--info { background: #cbd5e1; }
 .health-label { font-weight: 500; min-width: 14rem; }
 .health-detail { color: #64748b; font-size: 0.875em; }
 .health-fix { color: #7c3aed; font-size: 0.8em; font-family: ui-monospace, monospace; margin-left: 0.25rem; }
+
+/* Corpus coverage dashboard — plain numbers, no pass/fail framing */
+.coverage-dashboard { margin-bottom: 1.5rem; }
+.coverage-row { display: flex; align-items: baseline; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid #f1f5f9; }
+.coverage-row:last-child { border-bottom: none; }
+.coverage-label { font-weight: 500; min-width: 14rem; }
+.coverage-detail { color: #475569; font-size: 0.875em; }
 
 /* Source management panel */
 .sources-panel { padding: 0.75rem 0; }
