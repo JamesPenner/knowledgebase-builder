@@ -230,6 +230,46 @@ def kb_folders(name: str, source_id: int | None = None) -> dict[str, Any]:
         conn.close()
 
 
+@router.get("/{name}/files", tags=["kb"])
+def kb_files(
+    name: str,
+    source_id: int | None = None,
+    folder_prefix: str | None = None,
+    file_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    name_pattern: str | None = None,
+    state: str | None = None,
+    sort_by: str = "path",
+    sort_order: str = "asc",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    from src.db.corpus import count_files_for_browser, get_files_for_browser, open_corpus
+    from src.pipeline.filter_spec import CorpusFilterSpec
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    spec = CorpusFilterSpec(
+        source_id=source_id,
+        folder_prefix=folder_prefix,
+        file_type=file_type,
+        date_from=date_from,
+        date_to=date_to,
+        name_pattern=name_pattern,
+    )
+    try:
+        items = [
+            dict(r) for r in get_files_for_browser(
+                conn, spec, state=state, sort_by=sort_by, sort_order=sort_order,
+                limit=limit, offset=offset,
+            )
+        ]
+        total = count_files_for_browser(conn, spec, state=state)
+        return {"items": items, "total": total}
+    finally:
+        conn.close()
+
+
 @router.get("/{name}/sets/preview", tags=["kb"])
 def kb_sets_preview(
     name: str,

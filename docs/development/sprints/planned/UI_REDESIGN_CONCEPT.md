@@ -195,6 +195,18 @@ to be done."
 
 ## 5. Corpus File Browser
 
+**Status:** Done — `KB.AK1` (see `docs/development/sprints/complete/KB.AK1.md`).
+Implemented as a filter-based browser, not selection-based: row checkboxes /
+arbitrary multi-select were dropped from scope, since the pipeline's scope
+system has no file-ID-list dimension (removed in migration `0024` in favor of
+pure criteria-based sets). "Use as scope" instead pushes the browser's active
+`CorpusFilterSpec` filter panel into the workbench's scope bar via the same
+`localStorage` key the workbench already reads. The backend corrections below
+were confirmed during implementation: the table is `files` (not
+`corpus_files`), and per-file state comes from `LEFT JOIN`s against each
+stage's own table (`pipeline_checkpoints` is stage-aggregate only, not
+per-file).
+
 ### Purpose
 
 Enables the "select specific files for a focused pipeline run" workflow that

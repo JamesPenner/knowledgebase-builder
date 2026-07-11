@@ -1,0 +1,104 @@
+<div class="wb-scope-bar" id="cf-filter-bar">
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="cf-source">Source</label>
+    <select id="cf-source" class="wb-scope-bar-select" onchange="CF.onFilterChange()">
+      <option value="">All sources</option>
+      {% for s in sources %}
+      <option value="{{ s.id }}" {% if filters.source_id == s.id %}selected{% endif %}>{{ s.path }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="cf-folder">Folder</label>
+    <input type="text" id="cf-folder" class="wb-scope-bar-text" placeholder="e.g. /photos/2023"
+           value="{{ filters.folder_prefix or '' }}" oninput="CF.onFilterChange()">
+  </div>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="cf-type">Type</label>
+    <select id="cf-type" class="wb-scope-bar-select" onchange="CF.onFilterChange()">
+      <option value="" {% if not filters.file_type %}selected{% endif %}>All</option>
+      <option value="images" {% if filters.file_type == 'images' %}selected{% endif %}>Images</option>
+      <option value="video" {% if filters.file_type == 'video' %}selected{% endif %}>Video</option>
+      <option value="audio" {% if filters.file_type == 'audio' %}selected{% endif %}>Audio</option>
+    </select>
+  </div>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="cf-date-from">From</label>
+    <input type="date" id="cf-date-from" class="wb-scope-bar-date" value="{{ filters.date_from or '' }}" onchange="CF.onFilterChange()">
+  </div>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="cf-date-to">To</label>
+    <input type="date" id="cf-date-to" class="wb-scope-bar-date" value="{{ filters.date_to or '' }}" onchange="CF.onFilterChange()">
+  </div>
+  <div class="wb-scope-bar-item wb-scope-bar-item--wide">
+    <label class="wb-scope-bar-label" for="cf-name-pattern">Name</label>
+    <input type="text" id="cf-name-pattern" class="wb-scope-bar-text" placeholder="e.g. IMG_*"
+           value="{{ filters.name_pattern or '' }}" oninput="CF.onFilterChange()">
+  </div>
+  <div class="wb-scope-bar-item">
+    <label class="wb-scope-bar-label" for="cf-state">State</label>
+    <select id="cf-state" class="wb-scope-bar-select" onchange="CF.onFilterChange()">
+      <option value="" {% if not state %}selected{% endif %}>All</option>
+      <option value="described" {% if state == 'described' %}selected{% endif %}>Described</option>
+      <option value="not_described" {% if state == 'not_described' %}selected{% endif %}>Not Described</option>
+      <option value="transcribed" {% if state == 'transcribed' %}selected{% endif %}>Transcribed</option>
+      <option value="not_transcribed" {% if state == 'not_transcribed' %}selected{% endif %}>Not Transcribed</option>
+      <option value="hashed" {% if state == 'hashed' %}selected{% endif %}>Hashed</option>
+      <option value="not_hashed" {% if state == 'not_hashed' %}selected{% endif %}>Not Hashed</option>
+    </select>
+  </div>
+  <div class="wb-scope-bar-count">
+    <span id="cf-total-count">{{ total }}</span> files
+  </div>
+  <div class="wb-scope-bar-actions">
+    <button class="btn btn--sm" onclick="CF.useAsScope()">Use as scope</button>
+  </div>
+</div>
+
+{% if files|length == 0 %}
+<p class="empty-state">No files match the current filters.</p>
+{% else %}
+<table class="stage-table">
+  <thead>
+    <tr>
+      <th data-sort-by="path">Filename</th>
+      <th data-sort-by="file_type">Type</th>
+      <th>Source</th>
+      <th data-sort-by="file_size">Size</th>
+      <th>Captured Date</th>
+      <th>Described</th>
+      <th>Transcribed</th>
+      <th>Hashed</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in files %}
+    <tr class="stage-row">
+      <td class="stage-name" title="{{ f.path }}">{{ f.filename }}</td>
+      <td class="stage-files">{{ f.file_type }}</td>
+      <td class="stage-files">{{ f.source_path }}</td>
+      <td class="stage-files">{{ f.file_size }}</td>
+      <td class="stage-files">{{ f.captured_date or '—' }}</td>
+      <td class="stage-files">
+        <span class="badge {% if f.has_description %}badge--accept{% else %}badge-pending{% endif %}">
+          {{ 'Yes' if f.has_description else 'No' }}
+        </span>
+      </td>
+      <td class="stage-files">
+        <span class="badge {% if f.has_transcript %}badge--accept{% else %}badge-pending{% endif %}">
+          {{ 'Yes' if f.has_transcript else 'No' }}
+        </span>
+      </td>
+      <td class="stage-files">
+        <span class="badge {% if f.hashed %}badge--accept{% else %}badge-pending{% endif %}">
+          {{ 'Yes' if f.hashed else 'No' }}
+        </span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if has_more %}
+<button class="btn btn--sm" data-load-more>Load More</button>
+{% endif %}
+{% endif %}

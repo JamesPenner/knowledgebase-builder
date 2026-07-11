@@ -2579,6 +2579,95 @@ def get_coverage_per_file(conn: sqlite3.Connection, scope_where: str = "") -> li
 
 
 # ---------------------------------------------------------------------------
+# Corpus file browser (KB.AK1)
+# ---------------------------------------------------------------------------
+
+_BROWSER_SORT_COLS = {
+    "path": "f.path",
+    "file_type": "f.file_type",
+    "file_size": "f.file_size",
+    "mtime": "f.mtime",
+}
+
+_BROWSER_STATE_CLAUSES = {
+    "described": "d.pass1_status = 'done'",
+    "not_described": "(d.pass1_status IS NULL OR d.pass1_status != 'done')",
+    "transcribed": "t.transcribe_status = 'done'",
+    "not_transcribed": "(t.transcribe_status IS NULL OR t.transcribe_status != 'done')",
+    "hashed": "f.sha256 IS NOT NULL",
+    "not_hashed": "f.sha256 IS NULL",
+}
+
+
+def _browser_where(spec: CorpusFilterSpec, state: str | None) -> tuple[str, list]:
+    frag, params = spec.to_sql_fragment()
+    clauses = ["f.canonical_id IS NULL"]
+    state_clause = _BROWSER_STATE_CLAUSES.get(state) if state else None
+    if state_clause:
+        clauses.append(state_clause)
+    return "WHERE " + " AND ".join(clauses) + frag, params
+
+
+def get_files_for_browser(
+    conn: sqlite3.Connection,
+    spec: CorpusFilterSpec,
+    *,
+    state: str | None = None,
+    sort_by: str = "path",
+    sort_order: str = "asc",
+    limit: int = 50,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """Paginated, filtered file listing for the Corpus Files browser."""
+    where, params = _browser_where(spec, state)
+    col = _BROWSER_SORT_COLS.get(sort_by, "f.path")
+    direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+    return conn.execute(
+        f"""
+        SELECT
+            f.id, f.path, f.filename, f.file_type, f.file_size, f.mtime, f.source_id,
+            s.path AS source_path,
+            CASE WHEN d.pass1_status = 'done'      THEN 1 ELSE 0 END AS has_description,
+            CASE WHEN t.transcribe_status = 'done'  THEN 1 ELSE 0 END AS has_transcript,
+            CASE WHEN f.sha256 IS NOT NULL           THEN 1 ELSE 0 END AS hashed,
+            cap.value AS captured_date
+        FROM files f
+        JOIN sources s ON s.id = f.source_id
+        LEFT JOIN descriptions d ON d.file_id = f.id
+        LEFT JOIN transcriptions t ON t.file_id = f.id
+        LEFT JOIN (
+            SELECT file_id, MIN(value) AS value FROM file_metadata_fields
+            WHERE canonical_name = 'captured_date'
+            GROUP BY file_id
+        ) cap ON cap.file_id = f.id
+        {where}
+        ORDER BY {col} {direction}
+        LIMIT ? OFFSET ?
+        """,
+        (*params, limit, offset),
+    ).fetchall()
+
+
+def count_files_for_browser(
+    conn: sqlite3.Connection,
+    spec: CorpusFilterSpec,
+    *,
+    state: str | None = None,
+) -> int:
+    where, params = _browser_where(spec, state)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) FROM files f
+        LEFT JOIN descriptions d ON d.file_id = f.id
+        LEFT JOIN transcriptions t ON t.file_id = f.id
+        {where}
+        """,
+        params,
+    ).fetchone()
+    return row[0]
+
+
+# ---------------------------------------------------------------------------
 # Geolabels
 # ---------------------------------------------------------------------------
 

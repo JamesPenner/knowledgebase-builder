@@ -314,6 +314,73 @@ def corpus_stats_page(request: Request, paths: tuple[Path, Path] = Depends(resol
     })
 
 
+@router.get("/corpus-files", include_in_schema=False)
+def corpus_files_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, _ = paths
+    kb_name = request.query_params.get("kb", "")
+    from src.db.corpus import get_sources, open_corpus
+    conn = open_corpus(corpus_path)
+    try:
+        sources = [{"id": r["id"], "path": r["path"]} for r in get_sources(conn)]
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "corpus_files.html", {
+        "kb": kb_name,
+        "sources": sources,
+    })
+
+
+@router.get("/corpus-files/partials/list", include_in_schema=False)
+def corpus_files_list_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, _ = paths
+    kb_name = request.query_params.get("kb", "")
+    qp = request.query_params
+    from src.db.corpus import count_files_for_browser, get_files_for_browser, get_sources, open_corpus
+    from src.pipeline.filter_spec import CorpusFilterSpec
+
+    spec = CorpusFilterSpec(
+        source_id=int(qp["source_id"]) if qp.get("source_id") else None,
+        folder_prefix=qp.get("folder_prefix") or None,
+        file_type=qp.get("file_type") or None,
+        date_from=qp.get("date_from") or None,
+        date_to=qp.get("date_to") or None,
+        name_pattern=qp.get("name_pattern") or None,
+    )
+    state = qp.get("state") or None
+    sort_by = qp.get("sort_by", "path")
+    sort_order = qp.get("sort_order", "asc")
+    try:
+        limit = int(qp.get("limit", "50"))
+    except ValueError:
+        limit = 50
+
+    conn = open_corpus(corpus_path)
+    try:
+        items = [
+            dict(r) for r in get_files_for_browser(
+                conn, spec, state=state, sort_by=sort_by, sort_order=sort_order,
+                limit=limit, offset=0,
+            )
+        ]
+        total = count_files_for_browser(conn, spec, state=state)
+        sources = [{"id": r["id"], "path": r["path"]} for r in get_sources(conn)]
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(request, "partials/file_browser_list.html", {
+        "kb": kb_name,
+        "files": items,
+        "total": total,
+        "has_more": len(items) < total,
+        "limit": limit,
+        "sort_by": sort_by,
+        "sort_order": sort_order,
+        "filters": spec.to_dict(),
+        "state": state or "",
+        "sources": sources,
+    })
+
+
 @router.get("/knowledge/locations", include_in_schema=False)
 def knowledge_locations_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, _ = paths

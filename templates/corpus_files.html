@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Corpus Files — {{ kb }}{% endblock %}
+{% block head %}
+<script>
+  window.KB_NAME = {{ kb | tojson }};
+  window.KB_SOURCES = {{ sources | tojson }};
+</script>
+{% endblock %}
+{% block content %}
+<h1 class="page-title">Corpus Files</h1>
+
+<div id="corpus-files-queue"
+     hx-get="/corpus-files/partials/list?kb={{ kb }}"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <span class="sources-panel-loading">Loading files…</span>
+</div>
+
+<script src="/static/js/review.js"></script>
+<script src="/static/js/corpus_files.js"></script>
+{% endblock %}

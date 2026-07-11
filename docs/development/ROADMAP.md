@@ -16,8 +16,8 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1755 passing, 2 skipped
-- **Last completed sprint:** KB.AJ2 (Face/Voice Review: Centroid Quality Focus — per-person reliable/needs-more-samples/too-few-samples status computed live from assigned embeddings; pending clusters ranked by similarity to known people instead of file order; "Centroids reliable" stopping-point banner; People Registry badge unified with the same status for both face and voice; `merge_people()` face-centroid gap fixed; +29 net tests)
+- **Tests:** 1786 passing, 2 skipped
+- **Last completed sprint:** KB.AK1 (Corpus File Browser — paginated/filterable file list at `/corpus-files`; `get_files_for_browser`/`count_files_for_browser` query layer in `src/db/corpus.py`; `GET /api/kb/{name}/files` JSON endpoint; HTMX page + partial reusing `ReviewQueue` for Load More/sort; "Use as scope" pushes the active `CorpusFilterSpec` filter panel into the workbench's scope bar via `localStorage`; row checkboxes / file-ID-list scope deferred — no such mechanism exists in the pipeline scope system; +31 net tests)
 - **Last hotfix:** Face bbox coordinate fix — `detect_faces` was scaling `buffalo_l det_10g` normalized [0,1] output by `orig_w/640` instead of `orig_w`; also fixes inverted y1/y2 for edge faces; +8 unit tests
 - **Next planned sprint:** TBD
 
@@ -131,10 +131,13 @@ gaps are expected and should not look like failures.
 Consolidate nav into: Build / Review / Knowledge / Corpus.
 
 ### Corpus File Browser
+**Status:** Done — `KB.AK1` (see `docs/development/sprints/complete/KB.AK1.md`).
 **Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`  
 Text-only first (filename, type, source, processing state). Enables
 "select specific files for focused pipeline run" workflow. Thumbnails deferred
-until opportunistic frame cache (below) is evaluated.
+until opportunistic frame cache (below) is evaluated. Implemented as
+filter-based scope handoff, not row-selection — see §5 of the concept doc for
+why arbitrary multi-select was dropped from scope this sprint.
 
 ---
 

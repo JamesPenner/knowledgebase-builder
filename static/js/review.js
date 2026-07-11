@@ -122,6 +122,7 @@ const ReviewQueue = (() => {
     const kb        = opts.kb;
     const step      = opts.step || opts.limit || 50;
     const hasSort   = opts.hasSort !== false;
+    const getExtraParams = opts.getExtraParams || function () { return {}; };
 
     const state = {
       limit:     opts.limit     || 50,
@@ -130,10 +131,18 @@ const ReviewQueue = (() => {
     };
 
     function _url() {
-      return partialUrl + '?kb=' + encodeURIComponent(kb)
+      let url = partialUrl + '?kb=' + encodeURIComponent(kb)
         + '&limit='      + state.limit
         + '&sort_by='    + encodeURIComponent(state.sortBy)
         + '&sort_order=' + encodeURIComponent(state.sortOrder);
+      const extra = getExtraParams() || {};
+      Object.keys(extra).forEach(function (key) {
+        const val = extra[key];
+        if (val !== null && val !== undefined && val !== '') {
+          url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(val);
+        }
+      });
+      return url;
     }
 
     function _reload() {
@@ -206,6 +215,8 @@ const ReviewQueue = (() => {
     document.addEventListener('DOMContentLoaded', function () {
       _updateSortIndicators();
     });
+
+    return { reload: _reload };
   }
 
   return { init };
