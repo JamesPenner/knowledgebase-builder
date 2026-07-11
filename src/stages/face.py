@@ -211,6 +211,14 @@ def run_face(
         open_kb,
         update_person_centroid,
     )
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
+
+    kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    if not stage_is_enabled("face", enabled_categories):
+        result = report_stage_skipped(progress, "face", enabled_categories)
+        kb_conn.close()
+        return result
 
     if not config.face_detection_model:
         raise ModelLoadError("face_detection_model is not configured")
@@ -218,7 +226,6 @@ def run_face(
         raise ModelLoadError("face_embedding_model is not configured")
 
     corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
 
     files_processed = 0
     faces_detected = 0

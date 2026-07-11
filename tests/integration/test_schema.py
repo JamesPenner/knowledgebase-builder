@@ -33,7 +33,7 @@ _KB_TABLES = {
     "entity_table_registry", "entity_table_links",
     "classify_rules", "people", "people_names", "life_events",
     "stage_prompts", "token_rejections", "vocab_proposals",
-    "taxonomy_proposals",
+    "taxonomy_proposals", "knowledge_settings",
 }
 
 

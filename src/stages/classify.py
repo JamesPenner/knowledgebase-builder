@@ -18,6 +18,7 @@ from src.db.corpus import (
     upsert_derived_tag,
 )
 from src.db.kb import get_classify_rules, open_kb
+from src.pipeline.knowledge_gates import get_enabled_categories, tag_category_is_enabled
 from src.pipeline.progress import ProgressReporter
 from src.stages.classify_rules import evaluate_rule
 
@@ -113,11 +114,18 @@ def run_classify(
     corpus_conn = open_corpus(corpus_path)
     try:
         kb_conn = open_kb(kb_path)
-        rules = [dict(r) for r in get_classify_rules(kb_conn, enabled_only=True)]
-        all_life_events = kb_conn.execute(
-            "SELECT le.*, p.preferred_name FROM life_events le"
-            " JOIN people p ON p.id = le.person_id"
-        ).fetchall()
+        enabled_categories = get_enabled_categories(kb_conn)
+        rules = [
+            dict(r) for r in get_classify_rules(kb_conn, enabled_only=True)
+            if tag_category_is_enabled(r["category"], enabled_categories)
+        ]
+        if {"people", "dates"}.issubset(enabled_categories):
+            all_life_events = kb_conn.execute(
+                "SELECT le.*, p.preferred_name FROM life_events le"
+                " JOIN people p ON p.id = le.person_id"
+            ).fetchall()
+        else:
+            all_life_events = []
         kb_conn.close()
 
         files = get_files_for_classify(corpus_conn, scope=scope)

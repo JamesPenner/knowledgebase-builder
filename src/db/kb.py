@@ -2009,3 +2009,20 @@ def seed_people_register(conn: sqlite3.Connection, csv_path) -> int:
     conn.commit()
     return len(nameid_to_pid)
 
+
+def get_knowledge_settings(conn: sqlite3.Connection) -> dict[str, bool]:
+    """Return {'people': bool, 'places': bool, 'dates': bool} from knowledge_settings."""
+    rows = conn.execute("SELECT category, enabled FROM knowledge_settings").fetchall()
+    return {r["category"]: bool(r["enabled"]) for r in rows}
+
+
+def set_knowledge_category_enabled(conn: sqlite3.Connection, category: str, enabled: bool) -> None:
+    """Enable/disable a knowledge-domain category ('people' | 'places' | 'dates')."""
+    if category not in ("people", "places", "dates"):
+        raise ValueError(f"Unknown knowledge category: {category!r}")
+    conn.execute(
+        "UPDATE knowledge_settings SET enabled = ? WHERE category = ?",
+        (1 if enabled else 0, category),
+    )
+    conn.commit()
+

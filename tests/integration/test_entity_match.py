@@ -169,6 +169,81 @@ def test_people_name_match(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# KB.AM1 — Knowledge Settings domain filtering
+# ---------------------------------------------------------------------------
+
+def test_people_disabled_skips_people_name_match(tmp_path):
+    from src.db.kb import add_person_name, set_knowledge_category_enabled, upsert_person
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+
+    corpus_conn = open_corpus(corpus_path)
+    corpus_conn.execute(
+        "INSERT INTO sources (path, file_type, recursive) VALUES ('/', 'images', 1)"
+    )
+    corpus_conn.execute(
+        "INSERT INTO files (source_id, path, filename, ext, file_type, file_size, mtime)"
+        " VALUES (1, '/img.jpg', 'img.jpg', '.jpg', 'image', 1, 0.0)"
+    )
+    corpus_conn.execute(
+        "INSERT INTO file_metadata_fields (file_id, canonical_name, value, value_type)"
+        " VALUES (1, 'xmp_description', 'Photo with Alice Johnson at the park', 'str')"
+    )
+    corpus_conn.commit()
+    corpus_conn.close()
+
+    kb_conn = open_kb(kb_path)
+    pid = upsert_person(kb_conn, "Alice Johnson", first_name="Alice", last_name="Johnson")
+    add_person_name(kb_conn, pid, "Alice Johnson", is_metadata_form=True)
+    set_knowledge_category_enabled(kb_conn, "people", False)
+    kb_conn.close()
+
+    run_entity_match(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    corpus_conn = open_corpus(corpus_path)
+    matches = corpus_conn.execute(
+        "SELECT * FROM file_entity_matches WHERE file_id = 1 AND table_name = 'people'"
+    ).fetchall()
+    corpus_conn.close()
+    assert len(matches) == 0
+
+
+def test_places_disabled_skips_locations_but_not_custom_gps_tables(tmp_path):
+    from src.db.kb import set_knowledge_category_enabled
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+
+    corpus_conn = open_corpus(corpus_path)
+    _seed_file_with_gps(corpus_conn, 49.2827, -123.1207)
+    corpus_conn.close()
+
+    kb_conn = open_kb(kb_path)
+    _setup_location_table(kb_conn, "Test Location", 49.2827, -123.1207, 500)
+    # A custom GPS entity table is unaffected by the Places toggle.
+    create_entity_table(kb_conn, "bridges", ["location", "latitude", "longitude", "threshold_m"], "location")
+    register_entity_table(kb_conn, "bridges", "Bridges", "", "[]", "location", "gps", "")
+    upsert_entity_row(kb_conn, "bridges", {
+        "location": "Lions Gate Bridge",
+        "latitude": "49.2827",
+        "longitude": "-123.1207",
+        "threshold_m": "500",
+    })
+    set_knowledge_category_enabled(kb_conn, "places", False)
+    kb_conn.close()
+
+    run_entity_match(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    corpus_conn = open_corpus(corpus_path)
+    matches = corpus_conn.execute("SELECT table_name FROM file_entity_matches WHERE file_id = 1").fetchall()
+    corpus_conn.close()
+    table_names = {m["table_name"] for m in matches}
+    assert "locations" not in table_names
+    assert "bridges" in table_names
+
+
+# ---------------------------------------------------------------------------
 # KB.P8 — linked table traversal tests
 # ---------------------------------------------------------------------------
 

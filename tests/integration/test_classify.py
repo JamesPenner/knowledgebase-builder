@@ -1,4 +1,5 @@
 """Integration tests for Stage 1.8 (Classify)."""
+import json
 import threading
 
 
@@ -127,6 +128,118 @@ def test_classify_skips_low_precision_for_fixed_event(tmp_path):
     tags = _get_tags(corpus_conn)
     corpus_conn.close()
     assert "Christmas Day" not in tags
+
+
+# ---------------------------------------------------------------------------
+# KB.AM1 — Knowledge Settings domain filtering
+# ---------------------------------------------------------------------------
+
+def test_classify_dates_disabled_suppresses_calendar_tag_not_technical(tmp_path):
+    from src.db.kb import set_knowledge_category_enabled
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+
+    corpus_conn = open_corpus(corpus_path)
+    _seed_file(
+        corpus_conn,
+        captured={"file_date": "2023-12-25", "file_date_precision": "full"},
+        metadata={"exif_width": "4000", "exif_height": "2000"},
+    )
+    corpus_conn.close()
+
+    kb_conn = open_kb(kb_path)
+    set_knowledge_category_enabled(kb_conn, "dates", False)
+    kb_conn.close()
+
+    run_classify(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    corpus_conn = open_corpus(corpus_path)
+    tags = _get_tags(corpus_conn)
+    corpus_conn.close()
+    assert "Christmas Day" not in tags
+    assert "Landscape" in tags
+
+
+def _seed_person_with_birthday(kb_conn, corpus_conn, *, birth_date="2023-12-25", file_id=1):
+    from src.db.corpus import upsert_entity_match
+    from src.db.kb import add_life_event, add_person_name, upsert_person
+
+    pid = upsert_person(kb_conn, "Alice Johnson", first_name="Alice", last_name="Johnson")
+    add_person_name(kb_conn, pid, "Alice Johnson", is_metadata_form=True)
+    add_life_event(kb_conn, pid, "birth", birth_date)
+    kb_conn.commit()
+
+    upsert_entity_match(
+        corpus_conn, file_id, "people", "alice johnson", "text", json.dumps({"person_id": pid})
+    )
+    corpus_conn.commit()
+    return pid
+
+
+def test_classify_life_event_requires_both_people_and_dates(tmp_path):
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+
+    corpus_conn = open_corpus(corpus_path)
+    _seed_file(corpus_conn, captured={"file_date": "2023-12-25", "file_date_precision": "full"})
+    kb_conn = open_kb(kb_path)
+    _seed_person_with_birthday(kb_conn, corpus_conn)
+    kb_conn.close()
+    corpus_conn.close()
+
+    run_classify(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    corpus_conn = open_corpus(corpus_path)
+    tags = _get_tags(corpus_conn)
+    corpus_conn.close()
+    assert "Alice Johnson's Birthday" in tags
+
+
+def test_classify_life_event_suppressed_when_people_disabled(tmp_path):
+    from src.db.kb import set_knowledge_category_enabled
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+
+    corpus_conn = open_corpus(corpus_path)
+    _seed_file(corpus_conn, captured={"file_date": "2023-12-25", "file_date_precision": "full"})
+    kb_conn = open_kb(kb_path)
+    _seed_person_with_birthday(kb_conn, corpus_conn)
+    set_knowledge_category_enabled(kb_conn, "people", False)
+    kb_conn.close()
+    corpus_conn.close()
+
+    run_classify(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    corpus_conn = open_corpus(corpus_path)
+    tags = _get_tags(corpus_conn)
+    corpus_conn.close()
+    assert "Alice Johnson's Birthday" not in tags
+    # Calendar tags for this date are unaffected by the People toggle.
+    assert "Christmas Day" in tags
+
+
+def test_classify_life_event_suppressed_when_dates_disabled(tmp_path):
+    from src.db.kb import set_knowledge_category_enabled
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+
+    corpus_conn = open_corpus(corpus_path)
+    _seed_file(corpus_conn, captured={"file_date": "2023-12-25", "file_date_precision": "full"})
+    kb_conn = open_kb(kb_path)
+    _seed_person_with_birthday(kb_conn, corpus_conn)
+    set_knowledge_category_enabled(kb_conn, "dates", False)
+    kb_conn.close()
+    corpus_conn.close()
+
+    run_classify(corpus_path, kb_path, Config(), NullProgressReporter(), threading.Event())
+
+    corpus_conn = open_corpus(corpus_path)
+    tags = _get_tags(corpus_conn)
+    corpus_conn.close()
+    assert "Alice Johnson's Birthday" not in tags
 
 
 def test_classify_decade_tag(tmp_path):

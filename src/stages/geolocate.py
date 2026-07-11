@@ -24,8 +24,17 @@ def run_geolocate(
         update_pipeline_checkpoint,
         upsert_geolabel,
     )
+    from src.db.kb import open_kb
     from src.geo.loader import load_all_regions
     from src.geo.resolver import resolve_point
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
+
+    kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    kb_conn.close()
+    if not stage_is_enabled("geolocate", enabled_categories):
+        report_stage_skipped(progress, "geolocate", enabled_categories)
+        return
 
     kb_folder = kb_path.parent
     regions = load_all_regions(kb_folder)

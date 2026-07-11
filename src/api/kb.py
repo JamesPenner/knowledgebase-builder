@@ -340,6 +340,11 @@ class SetCreateRequest(BaseModel):
     name_pattern: str | None = None
 
 
+class KnowledgeSettingsUpdate(BaseModel):
+    category: str
+    enabled: bool
+
+
 @router.get("/{name}/sets", tags=["kb"])
 def kb_list_sets(name: str) -> list[dict[str, Any]]:
     from src.db.corpus import get_file_sets, open_corpus
@@ -457,3 +462,29 @@ def kb_health(name: str) -> dict[str, Any]:
             corpus_conn.close()
         if kb_conn:
             kb_conn.close()
+
+
+@router.get("/{name}/settings", tags=["kb"])
+def kb_get_settings(name: str) -> dict[str, bool]:
+    from src.db.kb import get_knowledge_settings, open_kb
+    folder = _get_kb_folder(name)
+    conn = open_kb(folder / "knowledge.db")
+    try:
+        return get_knowledge_settings(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/{name}/settings", tags=["kb"])
+def kb_set_settings(name: str, req: KnowledgeSettingsUpdate) -> dict[str, bool]:
+    from src.db.kb import get_knowledge_settings, open_kb, set_knowledge_category_enabled
+    folder = _get_kb_folder(name)
+    conn = open_kb(folder / "knowledge.db")
+    try:
+        try:
+            set_knowledge_category_enabled(conn, req.category, req.enabled)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return get_knowledge_settings(conn)
+    finally:
+        conn.close()

@@ -16,10 +16,10 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1792 passing, 2 skipped
-- **Last completed sprint:** KB.AL1 (Health Page Redesign — split the health page into System Health (`error`/`warning` severity — genuine blockers, pass/fail dots) and Corpus Coverage (`info` severity — plain numbers dashboard, no red/warning framing); new `split_checks()` helper in `src/health.py` buckets by severity, replacing hardcoded check-id membership lists in `src/api/ui.py` and `src/cli/kb.py` that had drifted and were silently dropping over half of the 28 checks from both the web page and CLI output; scaffold-file checks (`library.yaml`, `reference/ExifTool_Config`, `reference/dates.yaml`, `reference/derive_rules.yaml`, `reference/taxonomy.yaml`) bumped from `info` to `warning` severity since a missing scaffold file is a genuine blocker, not a coverage gap; Corpus Coverage links out to `/corpus-stats` and `/knowledge/people` rather than duplicating their metrics inline; +6 net tests)
-- **Last hotfix:** Face bbox coordinate fix — `detect_faces` was scaling `buffalo_l det_10g` normalized [0,1] output by `orig_w/640` instead of `orig_w`; also fixes inverted y1/y2 for edge faces; +8 unit tests
-- **Next planned sprint:** TBD
+- **Tests:** 1832 passing, 2 skipped
+- **Last completed sprint:** KB.AM1 (Knowledge Settings: Schema & Gating Engine — `knowledge_settings` table (migration 0010) gating People/Places/Dates domains; `src/pipeline/knowledge_gates.py` with `STAGE_REQUIRES`/`TAG_CATEGORY_REQUIRES`/`report_stage_skipped`; early-skip gating placed before config/model validation in all 8 gated stages (`face`, `face_meta`, `voice`, `voice_diarize`, `attribute_speakers`, `geolocate`, `geo_meta`, `temporal`); `entity_match`/`classify` in-stage filtering; settings API + CLI; `SPEC.md` updated with the new table and a disambiguating note vs. the pre-existing "Settings panel for config.yaml" concept; fixed a pre-existing `MagicMock` iteration brittleness in `test_geo_meta_unit.py` surfaced by the new gating check; +35 net tests)
+- **Last hotfix:** Describe/Transcribe stage badges made scope-aware (+5 tests, 1797 total)
+- **Next planned sprint:** KB.AM2 — Knowledge Settings: Context & Export Filtering (see below)
 
 ---
 
@@ -101,6 +101,46 @@ template and test URLs updated accordingly. Schema test updated for
 
 ---
 
+## Planned Sprints — Knowledge Settings (AM-series)
+
+**Concept doc:** `sprints/planned/KNOWLEDGE_SETTINGS_CONCEPT.md` — People/
+Places/Dates domain toggles that gate which pipeline functions run and which
+already-derived content surfaces downstream, without any structural schema
+change. Design session (2026-07-11) surveyed the codebase for cross-domain
+entwinement (e.g. life events = People × Dates) and found two chokepoints —
+`build_file_context()` and `export.py::_write_search_text` — that mix all
+three domains with no filtering today; these are the highest-risk part of
+the feature and get their own isolated sprint.
+
+### KB.AM1 — Schema & Gating Engine ✓
+**Status:** Complete
+**Document:** `sprints/complete/KB.AM1.md`
+**Scope:** `knowledge_settings` table (migration 0010), `src/pipeline/knowledge_gates.py`
+(`STAGE_REQUIRES`, `TAG_CATEGORY_REQUIRES`, `report_stage_skipped`), early-skip
+gating placed before config/model validation in all 8 gated stages, in-stage
+filtering for `entity_match` and `classify`, settings API + CLI. No UI.
+**Result:** 1832 tests (+35 net)
+
+### KB.AM2 — Context & Export Filtering
+**Status:** Planned
+**Document:** `sprints/planned/KB.AM2.md`
+**Scope:** `build_file_context()` gains `enabled_categories`; filters
+`entity_names` (by table), `metadata_location`, transcript speaker labels,
+and `derived_tags` (by category). `metadata_date` is deliberately **not**
+suppressed regardless of the Dates toggle. `export.py::_write_search_text`
+consolidated onto the same shared filter helper instead of its own bespoke
+query. Isolated from `KB.AM1` — touches four existing LLM-stage call sites.
+
+### KB.AM3 — Settings UI
+**Status:** Planned
+**Document:** `sprints/planned/KB.AM3.md`
+**Scope:** Collapsible Settings panel on `/pipeline` (People/Places/Dates
+toggles, Dates & Events expansion into calendar classify rules), cascading
+"Skipped — {Category} disabled" / "Partial — Dates disabled" badges on
+gated stage rows.
+
+---
+
 ## Planned Concepts — UI/UX Redesign (T-series, not yet sprint-planned)
 
 These require a design session before sprint planning. Concept documents
@@ -171,3 +211,4 @@ deferral noted.
 | `PROMPT_LIBRARY_CONCEPT.md` | Per-KB named prompt variants in knowledge.db; requires KB.S4 |
 | `UI_REDESIGN_CONCEPT.md` | Pipeline workbench, review redesign, health page, nav, file browser |
 | `CULLING_APP_CONCEPT.md` | Separate culling application consuming KB Builder exports |
+| `KNOWLEDGE_SETTINGS_CONCEPT.md` | People/Places/Dates domain toggles; entwinement survey; `KB.AM1`–`KB.AM3` |

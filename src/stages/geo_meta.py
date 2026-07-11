@@ -27,10 +27,17 @@ def run_geo_meta(
         upsert_location_label,
     )
     from src.db.kb import get_entity_table_rows, get_gps_entity_tables, open_kb
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
     from src.stages.classify_rules import _haversine_m
 
-    corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    if not stage_is_enabled("geo_meta", enabled_categories):
+        result = report_stage_skipped(progress, "geo_meta", enabled_categories)
+        kb_conn.close()
+        return result
+
+    corpus_conn = open_corpus(corpus_path)
 
     files_processed = 0
     files_matched = 0

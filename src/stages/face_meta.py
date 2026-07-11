@@ -188,8 +188,16 @@ def run_face_meta(
         embed_face,
     )
 
-    corpus_conn = open_corpus(corpus_path)
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
+
     kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    if not stage_is_enabled("face_meta", enabled_categories):
+        result = report_stage_skipped(progress, "face_meta", enabled_categories)
+        kb_conn.close()
+        return result
+
+    corpus_conn = open_corpus(corpus_path)
 
     files_processed = 0
     regions_found = 0

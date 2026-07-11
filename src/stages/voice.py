@@ -77,9 +77,16 @@ def run_voice(
         update_person_centroid as _db_update_person_centroid,
     )
     from src.media.audiotrack import prepare_audio
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
+
+    kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    if not stage_is_enabled("voice", enabled_categories):
+        result = report_stage_skipped(progress, "voice", enabled_categories)
+        kb_conn.close()
+        return result
 
     corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
 
     files_processed = 0
     files_matched = 0
@@ -341,9 +348,16 @@ def run_voice_diarize(
         update_person_centroid as _db_update_person_centroid,
     )
     from src.media.audiotrack import prepare_audio
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
+
+    kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    if not stage_is_enabled("voice_diarize", enabled_categories):
+        result = report_stage_skipped(progress, "voice_diarize", enabled_categories)
+        kb_conn.close()
+        return result
 
     corpus_conn = open_corpus(corpus_path)
-    kb_conn = open_kb(kb_path)
 
     files_processed = 0
     segments_found = 0

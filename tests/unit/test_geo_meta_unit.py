@@ -112,7 +112,10 @@ _PATCHES = {
     "get_gps_files": "src.db.corpus.get_gps_files_without_location_label",
     "upsert_label": "src.db.corpus.upsert_location_label",
     "update_checkpoint": "src.db.corpus.update_pipeline_checkpoint",
+    "get_enabled_categories": "src.pipeline.knowledge_gates.get_enabled_categories",
 }
+
+_ALL_CATEGORIES_ENABLED = frozenset({"people", "places", "dates"})
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +128,7 @@ def test_within_threshold_writes_label(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=500.0)]),
         patch(_PATCHES["get_gps_files"], return_value=[_file_row(lat=51.5001, lon=-0.1001)]),
@@ -151,6 +155,7 @@ def test_outside_threshold_no_label(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         # London entity, Paris file (~340 km away, threshold 500m)
         patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5074, lon=-0.1278, threshold_m=500.0)]),
@@ -178,6 +183,7 @@ def test_no_gps_tables_returns_early(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[]),
         patch(_PATCHES["upsert_label"]) as mock_upsert,
     ):
@@ -210,6 +216,7 @@ def test_multiple_tables_best_match_selected(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl("far_tbl"), _make_tbl("close_tbl")]),
         patch(_PATCHES["get_entity_table_rows"], side_effect=fake_rows),
         patch(_PATCHES["get_gps_files"], return_value=[_file_row(lat=51.5, lon=-0.1)]),
@@ -234,6 +241,7 @@ def test_missing_threshold_m_uses_config_default(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         # No threshold_m in row; file is ~111m away; config default 1000m → match
         patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1)]),
@@ -260,6 +268,7 @@ def test_empty_entity_table_no_match(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         patch(_PATCHES["get_entity_table_rows"], return_value=[]),
         patch(_PATCHES["get_gps_files"], return_value=[_file_row()]),
@@ -286,6 +295,7 @@ def test_config_threshold_is_minimum_floor(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         # Entry threshold 50m, file is 200m away → previously no match, now matches at 500m floor
         patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=50.0)]),
@@ -309,6 +319,7 @@ def test_per_entry_threshold_above_config_wins(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         # Entry 2000m, config 500m → effective 2000m; file 800m away → match
         patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=2000.0)]),
@@ -335,6 +346,7 @@ def test_dms_format_file_matches_entity(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[_make_tbl()]),
         patch(_PATCHES["get_entity_table_rows"], return_value=[_entity_row(lat=51.5, lon=-0.1, threshold_m=500.0)]),
         # DMS strings — without the parser, CAST gives 51.0 and 0.0 (wrong)
@@ -361,6 +373,7 @@ def test_stats_dict_keys(tmp_path):
     with (
         patch(_PATCHES["open_corpus"], return_value=MagicMock()),
         patch(_PATCHES["open_kb"], return_value=MagicMock()),
+        patch(_PATCHES["get_enabled_categories"], return_value=_ALL_CATEGORIES_ENABLED),
         patch(_PATCHES["get_gps_entity_tables"], return_value=[]),
     ):
         result = run_geo_meta(

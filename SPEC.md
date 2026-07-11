@@ -77,6 +77,14 @@ classify_rules             -- rule-based derivation: structured field value → 
   --   exact:        {"value": 1}                                 exact field value
   --   computed:     {"algorithm": "easter"}                      variable-date algorithm
 
+knowledge_settings         -- domain toggles: gates which functions run and which
+                            -- already-derived content surfaces downstream (no structural
+                            -- schema impact — see KB.AM1-AM3, KNOWLEDGE_SETTINGS_CONCEPT.md)
+  category TEXT PRIMARY KEY,  -- 'people' | 'places' | 'dates'
+  enabled INTEGER NOT NULL DEFAULT 1
+  -- Sub-toggles for 'dates' (e.g. Christmas on, Halloween off) reuse the existing
+  -- classify_rules.enabled column filtered to category='calendar' — no separate mechanism.
+
 kb_version
   id INTEGER PRIMARY KEY,   -- increments on every KB-mutating operation
   changed_at DATETIME,
@@ -1895,7 +1903,9 @@ The web UI is a **persistent server** covering all tool functions — not just t
 - Pipeline dashboard: per-stage status (complete / pending / running / never run), file counts
 - Per-stage cards with Run / Cancel / progress bars
 - All three review interfaces as integrated tabs
-- Settings panel for config.yaml fields
+- Settings panel for config.yaml fields (distinct from the "Knowledge Settings"
+  panel — People/Places/Dates domain toggles backed by `knowledge_settings`,
+  see KB.AM1-AM3)
 - KB sync panel
 - Documentation tab explaining CLI equivalents and when to prefer them
 

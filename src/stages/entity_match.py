@@ -26,6 +26,7 @@ from src.db.kb import (
     get_people_names,
     open_kb,
 )
+from src.pipeline.knowledge_gates import get_enabled_categories
 from src.pipeline.progress import ProgressReporter
 from src.stages.classify_rules import _haversine_m
 
@@ -77,6 +78,7 @@ def run_entity_match(
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
 
+    enabled_categories = get_enabled_categories(kb_conn)
     entity_tables = get_entity_tables(kb_conn)
     links_by_parent = get_entity_links_by_parent(kb_conn)
 
@@ -93,8 +95,18 @@ def run_entity_match(
     people_names = get_people_names(kb_conn)
     kb_conn.close()
 
-    gps_tables = [t for t in entity_tables if t["match_type"] == "gps"]
-    text_tables = [t for t in entity_tables if t["match_type"] == "text"]
+    # "locations" is the one built-in table wired to the Places toggle; custom
+    # GPS/text entity tables (e.g. a user-registered "bridges" table) are
+    # unaffected — see KNOWLEDGE_SETTINGS_CONCEPT.md.
+    places_enabled = "places" in enabled_categories
+    gps_tables = [
+        t for t in entity_tables
+        if t["match_type"] == "gps" and (places_enabled or t["table_name"] != "locations")
+    ]
+    text_tables = [
+        t for t in entity_tables
+        if t["match_type"] == "text" and (places_enabled or t["table_name"] != "locations")
+    ]
 
     start = time.monotonic()
     total_files = 0
@@ -167,8 +179,9 @@ def run_entity_match(
     # -----------------------------------------------------------------------
     # Build name → person_id lookup for people matching
     name_to_person: dict[str, int] = {}
-    for pn in people_names:
-        name_to_person[pn["name"].lower()] = pn["person_id"]
+    if "people" in enabled_categories:
+        for pn in people_names:
+            name_to_person[pn["name"].lower()] = pn["person_id"]
 
     # Build trigger regex and key-value list for each text entity table
     text_table_data: list[dict] = []

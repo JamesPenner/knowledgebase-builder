@@ -583,3 +583,60 @@ def generate_taxonomy(
     typer.echo(
         f"Taxonomy written: {tag_count} tags, {kw_count} keywords  →  {taxonomy_path}"
     )
+
+
+@app.command("settings")
+def kb_settings(
+    name: str = typer.Argument(..., help="KB name"),
+) -> None:
+    """Show Knowledge Settings (People/Places/Dates domain toggles)."""
+    from src.db.kb import get_knowledge_settings, open_kb
+    from src.db.registry import get_kb_path, open_registry
+
+    reg = open_registry(Path("."))
+    try:
+        kb_folder = get_kb_path(reg, name)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    kb_conn = open_kb(kb_folder / "knowledge.db")
+    settings = get_knowledge_settings(kb_conn)
+    kb_conn.close()
+
+    for category in ("people", "places", "dates"):
+        state = "on" if settings.get(category) else "off"
+        typer.echo(f"{category:10s} {state}")
+
+
+@app.command("set-setting")
+def kb_set_setting(
+    name: str = typer.Argument(..., help="KB name"),
+    category: str = typer.Argument(..., help="people | places | dates"),
+    state: str = typer.Argument(..., help="on | off"),
+) -> None:
+    """Enable or disable a Knowledge Settings domain toggle."""
+    from src.db.kb import open_kb, set_knowledge_category_enabled
+    from src.db.registry import get_kb_path, open_registry
+
+    if state not in ("on", "off"):
+        typer.echo("Error: state must be 'on' or 'off'", err=True)
+        raise typer.Exit(1)
+
+    reg = open_registry(Path("."))
+    try:
+        kb_folder = get_kb_path(reg, name)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    kb_conn = open_kb(kb_folder / "knowledge.db")
+    try:
+        set_knowledge_category_enabled(kb_conn, category, state == "on")
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    finally:
+        kb_conn.close()
+
+    typer.echo(f"{category} set to {state}")

@@ -152,8 +152,17 @@ def run_temporal(
     scope=None,
 ) -> None:
     from src.db.corpus import open_corpus, update_pipeline_checkpoint, upsert_temporal_fields
+    from src.db.kb import open_kb
     from src.pipeline.filter_spec import CorpusFilterSpec
+    from src.pipeline.knowledge_gates import get_enabled_categories, report_stage_skipped, stage_is_enabled
     from src.pipeline.stage_runner import run_stage_loop
+
+    kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
+    kb_conn.close()
+    if not stage_is_enabled("temporal", enabled_categories):
+        report_stage_skipped(progress, "temporal", enabled_categories)
+        return
 
     conn = open_corpus(corpus_path)
     spec = scope or CorpusFilterSpec()
