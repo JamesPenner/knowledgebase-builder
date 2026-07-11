@@ -153,7 +153,35 @@ const WB = (() => {
 
   function _scheduleLiveCount() {
     clearTimeout(_liveCountTimer);
-    _liveCountTimer = setTimeout(_fetchLiveCount, 300);
+    _liveCountTimer = setTimeout(() => { _fetchLiveCount(); _fetchStageCounts(); }, 300);
+  }
+
+  function _renderStageCount(sc) {
+    if (!sc || sc.total === 0) return '—';
+    let html = `${sc.done} / ${sc.total}`;
+    if (sc.failed) html += ` <span class="count-failed">· ${sc.failed} failed</span>`;
+    return html;
+  }
+
+  function _fetchStageCounts() {
+    const kb = window.KB_NAME || '';
+    const scope = getScope();
+    const params = new URLSearchParams();
+    if (scope.source_id) params.set('source_id', scope.source_id);
+    if (scope.folder_prefix) params.set('folder_prefix', scope.folder_prefix);
+    if (scope.file_type) params.set('file_type', scope.file_type);
+    if (scope.date_from) params.set('date_from', scope.date_from);
+    if (scope.date_to) params.set('date_to', scope.date_to);
+    if (scope.name_pattern) params.set('name_pattern', scope.name_pattern);
+    fetch('/api/kb/' + kb + '/stage-counts?' + params.toString())
+      .then(r => r.json())
+      .then(d => {
+        Object.keys(d).forEach(stage => {
+          const cell = document.getElementById('stage-files-' + stage);
+          if (cell) cell.innerHTML = _renderStageCount(d[stage]);
+        });
+      })
+      .catch(() => {});
   }
 
   function _fetchLiveCount() {

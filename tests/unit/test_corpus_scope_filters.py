@@ -2,12 +2,14 @@
 import pytest
 
 from src.db.corpus import (
+    get_describe_counts,
     get_pending_aesthetic_files,
     get_pending_describe_files,
     get_pending_quality_files,
     get_pending_retag_files,
     get_pending_summarize_files,
     get_pending_transcribe_files,
+    get_transcribe_counts,
     open_corpus,
 )
 from src.pipeline.filter_spec import CorpusFilterSpec
@@ -103,6 +105,30 @@ def test_pending_describe_excludes_done(scoped_corpus):
 
 
 # ---------------------------------------------------------------------------
+# describe counts (stage-status badge) filters
+# ---------------------------------------------------------------------------
+
+def test_describe_counts_no_scope_covers_whole_corpus(scoped_corpus):
+    conn, src1, src2, img1, img2, vid1, img3 = scoped_corpus
+    _mark_description_done(conn, img1)
+    counts = get_describe_counts(conn)
+    assert counts["total"] == 4
+    assert counts["done"] == 1
+
+
+def test_describe_counts_scoped_by_file_type_matches_pending(scoped_corpus):
+    conn, src1, src2, img1, img2, vid1, img3 = scoped_corpus
+    _mark_description_done(conn, img1)
+    # Whole-corpus counts must not be used to judge a scoped "pending" run:
+    # scoping to video should show a much smaller total than the unscoped badge.
+    counts = get_describe_counts(conn, scope=CorpusFilterSpec(file_type="video"))
+    assert counts["total"] == 1
+    assert counts["done"] == 0
+    pending = get_pending_describe_files(conn, scope=CorpusFilterSpec(file_type="video"))
+    assert len(pending) == counts["total"] - counts["done"] - counts["failed"]
+
+
+# ---------------------------------------------------------------------------
 # transcribe filters
 # ---------------------------------------------------------------------------
 
@@ -124,6 +150,14 @@ def test_pending_transcribe_filter_by_type(scoped_corpus):
     assert len(rows) == 1
     rows_audio = get_pending_transcribe_files(conn, scope=CorpusFilterSpec(file_type="audio"))
     assert len(rows_audio) == 0
+
+
+def test_transcribe_counts_scoped_by_source(scoped_corpus):
+    conn, src1, src2, img1, img2, vid1, img3 = scoped_corpus
+    counts_all = get_transcribe_counts(conn)
+    assert counts_all["total"] == 1  # only vid1 is audio/video
+    counts_src2 = get_transcribe_counts(conn, scope=CorpusFilterSpec(source_id=src2))
+    assert counts_src2["total"] == 0
 
 
 # ---------------------------------------------------------------------------

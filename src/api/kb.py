@@ -298,6 +298,37 @@ def kb_sets_preview(
         conn.close()
 
 
+@router.get("/{name}/stage-counts", tags=["kb"])
+def kb_stage_counts(
+    name: str,
+    source_id: int | None = None,
+    folder_prefix: str | None = None,
+    file_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    name_pattern: str | None = None,
+) -> dict[str, Any]:
+    from src.db.corpus import get_describe_counts, get_transcribe_counts, open_corpus
+    from src.pipeline.filter_spec import CorpusFilterSpec
+    folder = _get_kb_folder(name)
+    conn = open_corpus(folder / "corpus.db")
+    spec = CorpusFilterSpec(
+        source_id=source_id,
+        folder_prefix=folder_prefix,
+        file_type=file_type,
+        date_from=date_from,
+        date_to=date_to,
+        name_pattern=name_pattern,
+    )
+    try:
+        return {
+            "describe": get_describe_counts(conn, scope=spec),
+            "transcribe": get_transcribe_counts(conn, scope=spec),
+        }
+    finally:
+        conn.close()
+
+
 class SetCreateRequest(BaseModel):
     name: str
     description: str = ""

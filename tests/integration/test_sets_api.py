@@ -126,6 +126,59 @@ def test_folders_endpoint(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/kb/{name}/stage-counts
+# ---------------------------------------------------------------------------
+
+def test_stage_counts_scoped_by_file_type(tmp_path, monkeypatch):
+    from src.db.corpus import upsert_description
+
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    conn = open_corpus(corpus_path)
+    src_id = add_source(conn, "/mixed")
+    img_id = upsert_file(conn, src_id, "/mixed/a.jpg", "a.jpg", ".jpg", "images", 1000, 0)
+    vid_done = upsert_file(conn, src_id, "/mixed/b.mp4", "b.mp4", ".mp4", "video", 1001, 0)
+    vid_failed = upsert_file(conn, src_id, "/mixed/c.mp4", "c.mp4", ".mp4", "video", 1002, 0)
+    upsert_file(conn, src_id, "/mixed/d.mp4", "d.mp4", ".mp4", "video", 1003, 0)  # vid_pending: no row
+    upsert_description(conn, img_id, "desc", "desc", "model", "done")
+    upsert_description(conn, vid_done, "desc", "desc", "model", "done")
+    upsert_description(conn, vid_failed, None, None, "model", "failed")
+    conn.commit()
+    conn.close()
+    _patch_registry(monkeypatch, tmp_path)
+    client = _make_client(corpus_path, kb_path)
+
+    resp_all = client.get("/api/kb/test/stage-counts")
+    assert resp_all.status_code == 200
+    d = resp_all.json()["describe"]
+    assert d["total"] == 4
+    assert d["done"] == 2
+    assert d["failed"] == 1
+
+    resp_video = client.get("/api/kb/test/stage-counts?file_type=video")
+    dv = resp_video.json()["describe"]
+    assert dv["total"] == 3
+    assert dv["done"] == 1
+    assert dv["failed"] == 1
+
+
+def test_stage_counts_includes_transcribe(tmp_path, monkeypatch):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    conn = open_corpus(corpus_path)
+    src_id = add_source(conn, "/av")
+    upsert_file(conn, src_id, "/av/a.mp3", "a.mp3", ".mp3", "audio", 1000, 0)
+    conn.commit()
+    conn.close()
+    _patch_registry(monkeypatch, tmp_path)
+    client = _make_client(corpus_path, kb_path)
+
+    resp = client.get("/api/kb/test/stage-counts")
+    assert resp.status_code == 200
+    t = resp.json()["transcribe"]
+    assert t["total"] == 1
+    assert t["done"] == 0
+
+
+# ---------------------------------------------------------------------------
 # POST /api/kb/{name}/sets
 # ---------------------------------------------------------------------------
 

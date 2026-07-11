@@ -220,7 +220,7 @@
           <td class="stage-date">
             {{ stage.checkpoint.last_run_at if stage.checkpoint else '—' }}
           </td>
-          <td class="stage-files">
+          <td class="stage-files" id="stage-files-{{ stage.name }}">
             {% if stage.stage_counts %}
               {% set sc = stage.stage_counts %}
               {% if sc.total == 0 %}—{% else %}
