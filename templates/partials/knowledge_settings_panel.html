@@ -1,0 +1,58 @@
+<div class="ksettings-panel" id="ksettings-panel">
+  <div class="ksettings-row">
+    <label class="ksettings-toggle">
+      <input type="checkbox" {% if settings.people %}checked{% endif %}
+             onchange="WB.toggleKnowledgeCategory('{{ kb }}', 'people', this.checked)">
+      <strong>People</strong>
+    </label>
+    <span class="ksettings-desc">Disables face/voice detection, speaker attribution, and
+      birthday/anniversary tagging. People's names are also excluded from generated
+      descriptions and summaries.</span>
+  </div>
+
+  <div class="ksettings-row">
+    <label class="ksettings-toggle">
+      <input type="checkbox" {% if settings.places %}checked{% endif %}
+             onchange="WB.toggleKnowledgeCategory('{{ kb }}', 'places', this.checked)">
+      <strong>Places</strong>
+    </label>
+    <span class="ksettings-desc">Disables GPS geocoding and location-register matching.
+      Location names are excluded from generated descriptions, summaries, and search
+      text export.</span>
+  </div>
+
+  <div class="ksettings-row">
+    <div class="ksettings-row-main">
+      <label class="ksettings-toggle">
+        <input type="checkbox" {% if settings.dates %}checked{% endif %}
+               onchange="WB.toggleKnowledgeCategory('{{ kb }}', 'dates', this.checked)">
+        <strong>Dates &amp; Events</strong>
+      </label>
+      <span class="ksettings-desc">Disables temporal tagging (season, time-of-day, holiday)
+        and birthday/anniversary life events. Classify's technical/quality rules still run.</span>
+    </div>
+    <details class="ksettings-calendar">
+      <summary>Calendar rules ({{ calendar_rules | length }})</summary>
+      {% if calendar_rules %}
+        <table class="ksettings-calendar-table">
+          <tbody>
+          {% for rule in calendar_rules %}
+            <tr id="crule-row-{{ rule.id }}">
+              <td>
+                <label class="ksettings-toggle">
+                  <input type="checkbox" {% if rule.enabled %}checked{% endif %}
+                         onchange="WB.toggleClassifyRule('{{ kb }}', {{ rule.id }}, this.checked)">
+                  {{ rule.label }}
+                </label>
+              </td>
+              <td class="ksettings-calendar-tag">{{ rule.result_tag }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="ksettings-desc">No calendar rules found.</p>
+      {% endif %}
+    </details>
+  </div>
+</div>

@@ -345,6 +345,10 @@ class KnowledgeSettingsUpdate(BaseModel):
     enabled: bool
 
 
+class ClassifyRuleUpdate(BaseModel):
+    enabled: bool
+
+
 @router.get("/{name}/sets", tags=["kb"])
 def kb_list_sets(name: str) -> list[dict[str, Any]]:
     from src.db.corpus import get_file_sets, open_corpus
@@ -486,5 +490,42 @@ def kb_set_settings(name: str, req: KnowledgeSettingsUpdate) -> dict[str, bool]:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return get_knowledge_settings(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/{name}/settings/panel", include_in_schema=False)
+def kb_settings_panel(name: str, request: Request):
+    from fastapi.templating import Jinja2Templates
+    from src.db.kb import get_classify_rules, get_knowledge_settings, open_kb
+    folder = _get_kb_folder(name)
+    conn = open_kb(folder / "knowledge.db")
+    try:
+        settings = get_knowledge_settings(conn)
+        calendar_rules = [dict(r) for r in get_classify_rules(conn, enabled_only=False, category="calendar")]
+    finally:
+        conn.close()
+    tpl_dir = Path(__file__).parent.parent.parent / "templates"
+    tpl = Jinja2Templates(directory=str(tpl_dir))
+    return tpl.TemplateResponse(request, "partials/knowledge_settings_panel.html", {
+        "kb": name,
+        "settings": settings,
+        "calendar_rules": calendar_rules,
+    })
+
+
+@router.patch("/{name}/classify-rules/{rule_id}", tags=["kb"])
+def kb_patch_classify_rule(name: str, rule_id: int, req: ClassifyRuleUpdate) -> dict[str, Any]:
+    from src.db.kb import open_kb, set_classify_rule_enabled
+    folder = _get_kb_folder(name)
+    conn = open_kb(folder / "knowledge.db")
+    try:
+        try:
+            row = set_classify_rule_enabled(conn, rule_id, req.enabled)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(row)
     finally:
         conn.close()

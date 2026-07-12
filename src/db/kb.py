@@ -581,12 +581,37 @@ def find_location_near_duplicates(
 # ---------------------------------------------------------------------------
 
 def get_classify_rules(
-    conn: sqlite3.Connection, enabled_only: bool = True
+    conn: sqlite3.Connection, enabled_only: bool = True, category: str | None = None
 ) -> list[sqlite3.Row]:
-    where = "WHERE enabled = 1" if enabled_only else ""
+    conditions = []
+    params: list = []
+    if enabled_only:
+        conditions.append("enabled = 1")
+    if category is not None:
+        conditions.append("category = ?")
+        params.append(category)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return conn.execute(
-        f"SELECT * FROM classify_rules {where} ORDER BY id"
+        f"SELECT * FROM classify_rules {where} ORDER BY id", params
     ).fetchall()
+
+
+def set_classify_rule_enabled(
+    conn: sqlite3.Connection, rule_id: int, enabled: bool
+) -> sqlite3.Row:
+    """Toggle a single classify rule's `enabled` flag. Restricted to calendar-category
+    rules — the only rules exposed by the Knowledge Settings Dates & Events toggle list."""
+    row = conn.execute("SELECT * FROM classify_rules WHERE id = ?", (rule_id,)).fetchone()
+    if row is None:
+        raise LookupError(f"No classify rule with id {rule_id}")
+    if row["category"] != "calendar":
+        raise ValueError(f"Classify rule {rule_id} is not a calendar-category rule")
+    conn.execute(
+        "UPDATE classify_rules SET enabled = ? WHERE id = ?",
+        (1 if enabled else 0, rule_id),
+    )
+    conn.commit()
+    return conn.execute("SELECT * FROM classify_rules WHERE id = ?", (rule_id,)).fetchone()
 
 
 # ---------------------------------------------------------------------------

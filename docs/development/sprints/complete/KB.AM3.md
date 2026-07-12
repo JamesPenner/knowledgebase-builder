@@ -1,8 +1,41 @@
 # KB.AM3 — Knowledge Settings: UI
 
-**Status:** Planned
+**Status:** Complete
 **Preceding sprint:** KB.AM2 (Knowledge Settings: Context & Export Filtering, 1853 tests)
 **Concept doc:** `sprints/planned/KNOWLEDGE_SETTINGS_CONCEPT.md`
+**Result:** 1865 tests passing, 2 skipped (+12 net)
+
+## Implementation Notes
+
+- **Panel + gating are two separate HTMX partials**, both hosted under
+  `/api/kb/{name}/...` (kb.py) and `/pipeline/groups` (ui.py):
+  `GET /{name}/settings/panel` renders the toggle rows + Dates & Events
+  calendar list; `GET /pipeline/groups` renders the full stage-groups
+  block (extracted from `pipeline.html` into `partials/pipeline_groups.html`,
+  now `{% include %}`-ed by the full page too). Toggling a domain fires both
+  via `htmx.ajax(...)` — panel content and every stage row are recomputed,
+  not just the ones that changed, since the two live in different template
+  files and there's no cheap way to diff which rows actually need it. Simpler
+  than per-row OOB swaps and still no full-page reload.
+- **`_stage_state()` checks `checkpoint` before gating.** A stage that
+  already ran stays "done" even if its domain is later disabled — gating
+  stops *future* runs, it doesn't hide already-generated data (matches the
+  concept doc's framing). Confirmed against the real `test-run` KB during
+  manual verification: all 8 gated stages had prior checkpoints and stayed
+  "done" with People disabled; only a fresh KB with no checkpoints showed
+  the "skipped" state.
+- **`classify`'s "Partial — Dates disabled" note is unconditional on People.**
+  Per the acceptance criteria it fires only off the `dates` toggle, even
+  though `life_event` tags also require `people`. Deliberately not extended
+  — out of scope per the sprint doc, and adding it would be scope creep
+  beyond what was asked.
+- **New DB helper `set_classify_rule_enabled`** raises `LookupError` for an
+  unknown rule id (→ 404) vs. `ValueError` for a non-calendar rule (→ 400) —
+  distinct exception types so the API layer doesn't need to re-query to
+  tell the two failure modes apart.
+- **`get_classify_rules` gained an optional `category` filter** (backward
+  compatible — its one existing caller, `classify.py`, passes neither new
+  kwarg).
 
 ## Pre-Sprint Review Findings (confirmed against current code before implementation)
 

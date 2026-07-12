@@ -16,9 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1853 passing, 2 skipped
-- **Last completed sprint:** KB.AM2 (Knowledge Settings: Context & Export Filtering — `build_file_context()` gains keyword-only `enabled_categories` filtering `entity_names` by table, `metadata_location`, transcript speaker labels (via a new `_generic_speaker_labels` re-derivation reusing `attribute_speakers.py::_resolve_label`), and `derived_tags` by category, with `metadata_date` deliberately left unfiltered; `export.py::_write_search_text` consolidated onto the same `excluded_tag_categories`/`excluded_entity_tables` helpers in `knowledge_gates.py`; five LLM-stage call sites wired (`describe.py`, `summarize.py`, `retag.py`, `suggest.py` ×2); +21 net tests)
-- **Next planned sprint:** KB.AM3 — Knowledge Settings UI panel + cascading gate badges (see below)
+- **Tests:** 1865 passing, 2 skipped
+- **Last completed sprint:** KB.AM3 (Knowledge Settings: UI — collapsible Knowledge Settings panel on `/pipeline` with People/Places/Dates toggles and a Dates & Events calendar-rule enable-list; `pipeline_page()`'s per-stage state gains a gating-aware `skipped`/`partial_note` layer sitting alongside the existing done/ready/blocked dependency state, rendering "Skipped — {Category} disabled" badges and a "Partial — Dates disabled" note on `classify`; new `GET /api/kb/{name}/settings/panel` and `PATCH /api/kb/{name}/classify-rules/{id}` endpoints, plus `GET /pipeline/groups` for reload-free re-rendering after a toggle; +12 net tests)
+- **Next planned sprint:** none queued — see Planned Concepts below for unscheduled UI/UX work
 
 ---
 
@@ -131,13 +131,15 @@ consolidated onto the same shared filter helper instead of its own bespoke
 query. Isolated from `KB.AM1` — touches five existing LLM-stage call sites.
 **Result:** 1853 tests (+21 net)
 
-### KB.AM3 — Settings UI
-**Status:** Planned
-**Document:** `sprints/planned/KB.AM3.md`
-**Scope:** Collapsible Settings panel on `/pipeline` (People/Places/Dates
-toggles, Dates & Events expansion into calendar classify rules), cascading
+### KB.AM3 — Settings UI ✓
+**Status:** Complete
+**Document:** `sprints/complete/KB.AM3.md`
+**Scope:** Collapsible Knowledge Settings panel on `/pipeline` (People/Places/Dates
+toggles, Dates & Events expansion into a minimal calendar-rule enable-list —
+no full Classify Rules manager, per the pre-sprint review finding), cascading
 "Skipped — {Category} disabled" / "Partial — Dates disabled" badges on
 gated stage rows.
+**Result:** 1865 tests (+12 net)
 
 ---
 

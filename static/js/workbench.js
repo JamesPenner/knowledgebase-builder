@@ -72,15 +72,47 @@ const WB = (() => {
   const _kb = window.KB_NAME || '';
   const _collapsibleSources = _makeCollapsible('wb-sources-body', 'wb-sources-arrow', 'kb-sources-open-' + _kb, false);
   const _collapsibleSets = _makeCollapsible('wb-sets-body', 'wb-sets-arrow', 'kb-sets-open-' + _kb, false);
+  const _collapsibleKSettings = _makeCollapsible('wb-ksettings-body', 'wb-ksettings-arrow', 'kb-ksettings-open-' + _kb, false);
 
   function toggleSources() { _collapsibleSources.toggle(); }
   function toggleSets() { _collapsibleSets.toggle(); }
+  function toggleKnowledgeSettings() { _collapsibleKSettings.toggle(); }
 
   function _initSources() {
     const noSources = (window.KB_SOURCES || []).length === 0;
     _collapsibleSources.init(noSources);
   }
   function _initSets() { _collapsibleSets.init(false); }
+  function _initKnowledgeSettings() { _collapsibleKSettings.init(false); }
+
+  // ---------------------------------------------------------------------------
+  // Knowledge Settings toggles
+  // ---------------------------------------------------------------------------
+
+  function toggleKnowledgeCategory(kb, category, enabled) {
+    fetch('/api/kb/' + kb + '/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({category, enabled}),
+    })
+      .then(r => r.json())
+      .then(() => {
+        htmx.ajax('GET', '/api/kb/' + kb + '/settings/panel', {target: '#ksettings-panel', swap: 'outerHTML'});
+        htmx.ajax('GET', '/pipeline/groups?kb=' + kb, {target: '#wb-stage-groups', swap: 'innerHTML'});
+      })
+      .catch(err => console.error('toggleKnowledgeCategory failed', err));
+  }
+
+  function toggleClassifyRule(kb, ruleId, enabled) {
+    fetch('/api/kb/' + kb + '/classify-rules/' + ruleId, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled}),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.detail) console.error('toggleClassifyRule failed', d.detail); })
+      .catch(err => console.error('toggleClassifyRule error', err));
+  }
 
   // ---------------------------------------------------------------------------
   // Scope bar
@@ -612,13 +644,15 @@ const WB = (() => {
   document.addEventListener('DOMContentLoaded', function () {
     _initSources();
     _initSets();
+    _initKnowledgeSettings();
     _initScopeBar();
   });
 
   return {
     runSelected, runGroup, runAll, toggleHelp, onCheckChange, onScopeChange, onSetChange, getScope,
-    toggleSources, toggleSets, setAllModes, toggleStageMode, getStageMode,
+    toggleSources, toggleSets, toggleKnowledgeSettings, setAllModes, toggleStageMode, getStageMode,
     loadSet, deleteSet, clearScope, promptSaveSet, confirmSaveSet, cancelSaveSet,
     syncSources, cancelSync,
+    toggleKnowledgeCategory, toggleClassifyRule,
   };
 })();

@@ -352,6 +352,24 @@ body {
 .wb-sets-criteria { font-size: 0.8em; color: #64748b; max-width: 260px; }
 .wb-sets-actions { white-space: nowrap; display: flex; gap: 0.4rem; }
 
+/* Knowledge Settings panel */
+.ksettings-panel { padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.ksettings-row { display: flex; flex-direction: column; gap: 0.15rem; }
+.ksettings-row-main { display: flex; flex-direction: column; gap: 0.15rem; }
+.ksettings-toggle { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.9em; }
+.ksettings-desc { font-size: 0.78em; color: #64748b; }
+.ksettings-calendar { margin-top: 0.3rem; margin-left: 1.6rem; }
+.ksettings-calendar summary { font-size: 0.8em; color: #475569; cursor: pointer; }
+.ksettings-calendar-table { margin-top: 0.3rem; font-size: 0.85em; border-collapse: collapse; }
+.ksettings-calendar-table td { padding: 0.15rem 0.5rem 0.15rem 0; }
+.ksettings-calendar-tag { color: #94a3b8; font-family: monospace; font-size: 0.9em; }
+
+/* Gated-stage skip/partial notes */
+.wb-skip-note { font-size: 0.8em; color: #94a3b8; font-style: italic; }
+.wb-partial-note { display: block; font-size: 0.75em; color: #b45309; margin-top: 0.15rem; }
+.stage-row--skipped td { opacity: 0.55; }
+.stage-row--skipped .stage-name { color: #94a3b8; }
+
 /* Scope badge on group cards */
 .wb-scope-badge { display: inline-block; font-size: 0.7em; padding: 0.1rem 0.45rem; border-radius: 9999px; margin-right: 0.5rem; }
 .wb-scope-badge--ignored { background: #f1f5f9; color: #94a3b8; border: 1px solid #e2e8f0; }

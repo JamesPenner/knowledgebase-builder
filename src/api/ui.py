@@ -41,10 +41,10 @@ def index():
     return RedirectResponse("/pipeline")
 
 
-@router.get("/pipeline", include_in_schema=False)
-def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
-    corpus_path, kb_path = paths
-    kb_name = request.query_params.get("kb", "")
+_CATEGORY_LABELS = {"people": "People", "places": "Places", "dates": "Dates"}
+
+
+def _build_pipeline_context(corpus_path: Path, kb_path: Path, kb_name: str) -> dict:
     from src.db.corpus import (
         get_analyse_token_counts,
         get_candidate_counts,
@@ -57,10 +57,12 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         open_corpus,
     )
     from src.db.kb import open_kb
+    from src.pipeline.knowledge_gates import STAGE_REQUIRES, get_enabled_categories, stage_is_enabled
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
     try:
+        enabled_categories = get_enabled_categories(kb_conn)
         checkpoint_rows = get_pipeline_checkpoints(corpus_conn)
         checkpoints: dict[str, dict] = {r["stage"]: dict(r) for r in checkpoint_rows}
         stage_counts = {
@@ -129,10 +131,12 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         },
     }
 
-    # Per-stage dependency state
+    # Per-stage dependency + gating state
     def _stage_state(stage: str) -> str:
         if stage in checkpoints:
             return "done"
+        if not stage_is_enabled(stage, enabled_categories):
+            return "skipped"
         deps = DEPENDENCIES.get(stage, [])
         if all(d in checkpoints for d in deps):
             return "ready"
@@ -141,6 +145,12 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
     def _blocking_dep(stage: str) -> str | None:
         return next((d for d in DEPENDENCIES.get(stage, []) if d not in checkpoints), None)
 
+    def _skip_category(stage: str) -> str | None:
+        missing = STAGE_REQUIRES.get(stage, frozenset()) - enabled_categories
+        if not missing:
+            return None
+        return _CATEGORY_LABELS.get(sorted(missing)[0], sorted(missing)[0])
+
     # Enrich groups with per-stage info
     groups = []
     for grp in STAGE_GROUPS:
@@ -148,11 +158,12 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         for name in grp["stages"]:
             cp = checkpoints.get(name)
             sc = stage_counts.get(name)
+            state = _stage_state(name)
             stages.append({
                 "name": name,
                 "description": STAGE_DESCRIPTIONS.get(name, ""),
                 "deps": DEPENDENCIES.get(name, []),
-                "state": _stage_state(name),
+                "state": state,
                 "blocking_dep": _blocking_dep(name),
                 "checkpoint": cp,
                 "stage_counts": sc,
@@ -160,10 +171,16 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
                 "touchpoint_before": TOUCHPOINT_BEFORE.get(name),
                 "manage_url": f"/knowledge/pattern-rules?kb={kb_name}" if name == "normalize" else None,
                 "gate_warning": gate_warnings.get(name),
+                "skip_category": _skip_category(name) if state == "skipped" else None,
+                "partial_note": (
+                    "Partial — Dates disabled"
+                    if name == "classify" and "dates" not in enabled_categories
+                    else None
+                ),
             })
         groups.append({**grp, "stages": stages, "visible": grp.get("visible", True)})
 
-    return templates.TemplateResponse(request, "pipeline.html", {
+    return {
         "kb": kb_name,
         "groups": groups,
         "touchpoints": touchpoints,
@@ -176,7 +193,23 @@ def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_k
         "checkpoints": checkpoints,
         "all_stages": list(DEPENDENCIES.keys()),
         "stage_counts": stage_counts,
-    })
+    }
+
+
+@router.get("/pipeline", include_in_schema=False)
+def pipeline_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    ctx = _build_pipeline_context(corpus_path, kb_path, kb_name)
+    return templates.TemplateResponse(request, "pipeline.html", ctx)
+
+
+@router.get("/pipeline/groups", include_in_schema=False)
+def pipeline_groups_partial(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
+    corpus_path, kb_path = paths
+    kb_name = request.query_params.get("kb", "")
+    ctx = _build_pipeline_context(corpus_path, kb_path, kb_name)
+    return templates.TemplateResponse(request, "partials/pipeline_groups.html", ctx)
 
 
 @router.get("/review/normalise", include_in_schema=False)
