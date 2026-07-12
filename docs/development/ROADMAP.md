@@ -150,17 +150,23 @@ capture decisions made; sprint plans will be written immediately before
 implementation.
 
 ### Pipeline Workbench Redesign
-**Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`  
-Stage grouping by dependency, file scope selector (Resume / Re-run / New files
-/ By source / By type), multi-stage selection with auto-resolved dependencies,
-inline help per stage, review touchpoints shown as gates not run buttons,
-browser-side scheduling.
+**Status:** Done — `KB.T1`, `KB.T2`, `KB.U1`, `KB.V1`, `KB.AC1` cumulatively
+delivered everything this concept described: stage grouping by dependency
+(`KB.T1`), file scope selector incl. Resume/Re-run and By source/By type/date
+(`KB.T2`, `KB.V1`, `KB.AC1`), multi-stage selection with auto-resolved
+dependencies via `resolve-plan` (`KB.T1`), inline help per stage (`KB.T1`),
+review touchpoints rendered as gates not run buttons (`KB.T1`). Only
+"browser-side scheduling" (running stages on a timer/schedule from the UI)
+was never built — if that's still wanted, it needs its own scoped sprint,
+not a continuation of this concept.
+**Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`
 
 ### Review UI Redesign — Face and Voice
-**Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`  
-Shift from "assign all clusters" to "build a reliable centroid." Per-person
-centroid confidence and sample count. Highest-value clusters surfaced first.
-Good-enough threshold indicator.
+**Status:** Done — `KB.AJ2`. Centroid confidence/sample-count status
+(reliable/needs_more_samples/too_few_samples), ranked pending queues
+(highest-value clusters first), and a stopping-point banner (good-enough
+threshold indicator) all shipped.
+**Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`
 
 ### Health Page Redesign
 **Status:** Done — `KB.AL1` (see `docs/development/sprints/complete/KB.AL1.md`).
@@ -170,8 +176,9 @@ Corpus Coverage (informational: % processed, unassigned clusters). Coverage
 gaps are expected and should not look like failures.
 
 ### Navigation Restructure
-**Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`  
-Consolidate nav into: Build / Review / Knowledge / Corpus.
+**Status:** Done — `KB.AI1`. Four-section nav (Build / Review / Knowledge /
+Corpus) shipped.
+**Document:** `sprints/planned/UI_REDESIGN_CONCEPT.md`
 
 ### Corpus File Browser
 **Status:** Done — `KB.AK1` (see `docs/development/sprints/complete/KB.AK1.md`).
@@ -191,15 +198,15 @@ deferral noted.
 
 | Item | Document | Deferred Until |
 |---|---|---|
-| Opportunistic frame cache (Option B) | `FRAMESET_CONCEPT.md` | Text-only file browser built and thumbnail need validated |
-| `prepare_file()` combined entry point | `FRAMESET_CONCEPT.md` | After S2 + S3 stable |
-| Combined audio stage (transcribe + voice + diarize) | `FRAMESET_CONCEPT.md` | Only if ffmpeg cost proves significant |
+| Opportunistic frame cache (Option B) | `FRAMESET_CONCEPT.md` | File browser is built (`KB.AK1`); thumbnail need still not validated with the user — ask before scoping |
+| `prepare_file()` combined entry point | `FRAMESET_CONCEPT.md` | Condition met (S2+S3 stable since `KB.S3`) but no signal it's actually needed — low priority, revisit only if a concrete pain point shows up |
+| Combined audio stage (transcribe + voice + diarize) | `FRAMESET_CONCEPT.md` | Only if ffmpeg cost proves significant — unmeasured |
 | ~~Prompt Library~~ | ~~`PROMPT_LIBRARY_CONCEPT.md`~~ | **Done — KB.S5** |
-| Stage Loop Runner | `REFACTOR_CONCEPTS.md` | No KB quality impact; low priority |
+| ~~Stage Loop Runner~~ | ~~`REFACTOR_CONCEPTS.md`~~ | **Done — KB.AH1** |
 | Area hash (spatial crop detection) | — | Removed from `hash` stage (64 pHash calls per image, high cost, edge-case use). If spatial near-duplicate detection becomes a real need, consider `imagehash.crop_resistant_hash()` or a coarser 3×3 grid as a separate opt-in stage. DB column `file_hashes.area_hash` still exists from migration 0007. |
-| ClusterAssignment typing | `REFACTOR_CONCEPTS.md` | Defer until fourth cluster type added |
-| Vocabulary review improvements | `UI_REDESIGN_CONCEPT.md` | After pipeline workbench |
-| Export page framing | `UI_REDESIGN_CONCEPT.md` | After pipeline workbench |
+| ~~ClusterAssignment typing~~ | ~~`REFACTOR_CONCEPTS.md`~~ | **Done — KB.AJ1** |
+| **Vocabulary review improvements** | `UI_REDESIGN_CONCEPT.md` | Was "after pipeline workbench" — that condition is now met (see above). **Ripe to scope next.** |
+| **Export page framing** | `UI_REDESIGN_CONCEPT.md` | Was "after pipeline workbench" — that condition is now met (see above). **Ripe to scope next.** |
 | Smart Culling App | `CULLING_APP_CONCEPT.md` | Separate downstream tool |
 
 ---
