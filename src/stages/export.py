@@ -248,7 +248,35 @@ def _write_temporal_fields(export_dir: Path, corpus_conn, scope_where: str = "")
             writer.writerow({f: r[f] for f in fields})
 
 
-def _write_search_text(export_dir: Path, corpus_conn, scope_where: str = "") -> None:
+def _write_search_text(
+    export_dir: Path,
+    corpus_conn,
+    scope_where: str = "",
+    enabled_categories: frozenset[str] | None = None,
+) -> None:
+    from src.pipeline.knowledge_gates import (
+        ALL_CATEGORIES,
+        excluded_entity_tables,
+        excluded_tag_categories,
+    )
+
+    if enabled_categories is None:
+        enabled_categories = ALL_CATEGORIES
+
+    tag_filter = ""
+    tag_params: list[str] = []
+    excl_cats = excluded_tag_categories(enabled_categories)
+    if excl_cats:
+        tag_filter = f" AND fdt.category NOT IN ({','.join('?' * len(excl_cats))})"
+        tag_params = excl_cats
+
+    entity_filter = ""
+    entity_params: list[str] = []
+    excl_tables = excluded_entity_tables(enabled_categories)
+    if excl_tables:
+        entity_filter = f" AND fem.table_name NOT IN ({','.join('?' * len(excl_tables))})"
+        entity_params = excl_tables
+
     rows = corpus_conn.execute(
         f"""
         SELECT
@@ -258,13 +286,14 @@ def _write_search_text(export_dir: Path, corpus_conn, scope_where: str = "") -> 
             GROUP_CONCAT(DISTINCT fem.matched_value) AS entities,
             d.description_normalized             AS description
         FROM files f
-        LEFT JOIN file_derived_tags fdt ON fdt.file_id = f.id
-        LEFT JOIN file_entity_matches fem ON fem.file_id = f.id AND fem.stale = 0
+        LEFT JOIN file_derived_tags fdt ON fdt.file_id = f.id{tag_filter}
+        LEFT JOIN file_entity_matches fem ON fem.file_id = f.id AND fem.stale = 0{entity_filter}
         LEFT JOIN descriptions d ON d.file_id = f.id
         WHERE 1=1 {scope_where}
         GROUP BY f.id
         ORDER BY f.path
-        """
+        """,
+        tag_params + entity_params,
     ).fetchall()
     with open(export_dir / "search_text.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=["path", "search_text"])
@@ -550,6 +579,7 @@ def run_export(
 ) -> None:
     from src.db.corpus import open_corpus, update_pipeline_checkpoint
     from src.db.kb import open_kb
+    from src.pipeline.knowledge_gates import get_enabled_categories
 
     if section is not None and section not in _VALID_SECTIONS:
         logger.error("Unknown export section: %r. Valid: %s", section, ", ".join(sorted(_VALID_SECTIONS)))
@@ -557,6 +587,7 @@ def run_export(
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
 
     # Build a temp table of matching file IDs when a non-empty scope is active.
     # All scoped _write_* functions reference this table via scope_where.
@@ -606,7 +637,7 @@ def run_export(
             _write_tags(export_dir, corpus_conn, scope_where)
             _write_hashes(export_dir, corpus_conn, scope_where)
             _write_aesthetic_scores(export_dir, corpus_conn, scope_where)
-            _write_search_text(export_dir, corpus_conn, scope_where)
+            _write_search_text(export_dir, corpus_conn, scope_where, enabled_categories)
             _write_temporal_fields(export_dir, corpus_conn, scope_where)
             _write_transcripts(export_dir, corpus_conn)
             _write_summaries(export_dir, corpus_conn, scope_where)

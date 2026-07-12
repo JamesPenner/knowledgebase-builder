@@ -130,6 +130,7 @@ def run_summarize(
     )
     from src.db.kb import load_stage_prompt, open_kb
     from src.llm.session import ModelLoadError, TextSession
+    from src.pipeline.knowledge_gates import get_enabled_categories
     from src.text.context import build_file_context
 
     if not config.text_model:
@@ -138,6 +139,7 @@ def run_summarize(
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
 
     try:
         base_system = load_stage_prompt(kb_conn, "summarize", "system", default=_SUMMARIZE_BASE)
@@ -161,7 +163,9 @@ def run_summarize(
                     file_id = row["id"]
                     progress.update(i, total, f"Summarize: {i + 1}/{total}")
 
-                    ctx = build_file_context(corpus_conn, kb_conn, file_id)
+                    ctx = build_file_context(
+                        corpus_conn, kb_conn, file_id, enabled_categories=enabled_categories
+                    )
 
                     if not ctx.description and not ctx.transcript:
                         upsert_file_summary(

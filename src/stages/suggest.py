@@ -97,7 +97,10 @@ def _run_level_a(
     import spacy
     from src.db.corpus import delete_pending_candidates, upsert_candidate
     from src.db.kb import get_pattern_rules, get_stoplist_terms, get_vocabulary_terms
+    from src.pipeline.knowledge_gates import get_enabled_categories
     from src.text.context import build_file_context
+
+    enabled_categories = get_enabled_categories(kb_conn)
 
     delete_pending_candidates(corpus_conn, "level_a")
     corpus_conn.commit()
@@ -128,7 +131,9 @@ def _run_level_a(
         progress.update(i, total, f"Level A: processing file {i + 1}/{total}")
 
         file_id = row["id"]
-        ctx = build_file_context(corpus_conn, None, file_id)
+        ctx = build_file_context(
+            corpus_conn, None, file_id, enabled_categories=enabled_categories
+        )
 
         def _extract_tokens(text, pos_tags, extract_chunks=False, extract_ngrams=False):
             if not text.strip():
@@ -275,6 +280,9 @@ def _run_level_c(
 
     from src.db.corpus import delete_pending_candidates, upsert_candidate
     from src.db.kb import get_vocabulary_terms
+    from src.pipeline.knowledge_gates import get_enabled_categories
+
+    enabled_categories = get_enabled_categories(kb_conn)
 
     cluster_rows = corpus_conn.execute(
         "SELECT DISTINCT cluster_id FROM candidates WHERE source='level_b' AND status='pending'"
@@ -333,7 +341,9 @@ def _run_level_c(
         file_texts: list[str] = []
         for frow in file_id_rows:
             fid = frow["file_id"]
-            ctx = build_file_context(corpus_conn, None, fid)
+            ctx = build_file_context(
+                corpus_conn, None, fid, enabled_categories=enabled_categories
+            )
             text = " ".join(p for p in [ctx.enrichment_text, ctx.description or ""] if p).strip()
             if text:
                 file_texts.append(text)

@@ -1,7 +1,10 @@
 """Unit tests for src/pipeline/knowledge_gates.py — pure logic, no DB."""
 from src.pipeline.knowledge_gates import (
+    ALL_CATEGORIES,
     STAGE_REQUIRES,
     TAG_CATEGORY_REQUIRES,
+    excluded_entity_tables,
+    excluded_tag_categories,
     report_stage_skipped,
     stage_is_enabled,
     tag_category_is_enabled,
@@ -84,3 +87,40 @@ def test_report_stage_skipped_signals_progress_and_returns_dict():
     assert progress.done_called
     assert len(progress.updates) == 1
     assert "Skipped" in progress.updates[0][2]
+
+
+# ---------------------------------------------------------------------------
+# excluded_tag_categories / excluded_entity_tables (KB.AM2)
+# ---------------------------------------------------------------------------
+
+def test_excluded_tag_categories_empty_when_all_enabled():
+    assert excluded_tag_categories(ALL_CATEGORIES) == []
+
+
+def test_excluded_tag_categories_dates_off():
+    assert excluded_tag_categories(frozenset({"people", "places"})) == ["calendar", "life_event", "temporal"]
+
+
+def test_excluded_tag_categories_people_off_keeps_calendar_and_temporal():
+    excluded = excluded_tag_categories(frozenset({"places", "dates"}))
+    assert excluded == ["life_event"]
+
+
+def test_excluded_tag_categories_nothing_enabled():
+    assert excluded_tag_categories(frozenset()) == ["calendar", "life_event", "temporal"]
+
+
+def test_excluded_entity_tables_empty_when_all_enabled():
+    assert excluded_entity_tables(ALL_CATEGORIES) == []
+
+
+def test_excluded_entity_tables_people_off():
+    assert excluded_entity_tables(frozenset({"places", "dates"})) == ["people"]
+
+
+def test_excluded_entity_tables_places_off():
+    assert excluded_entity_tables(frozenset({"people", "dates"})) == ["locations"]
+
+
+def test_excluded_entity_tables_both_off():
+    assert excluded_entity_tables(frozenset({"dates"})) == ["people", "locations"]

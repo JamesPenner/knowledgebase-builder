@@ -44,6 +44,25 @@ def tag_category_is_enabled(category: str, enabled_categories: frozenset[str]) -
     return required.issubset(enabled_categories)
 
 
+def excluded_tag_categories(enabled_categories: frozenset[str]) -> list[str]:
+    """Derived-tag categories that must NOT surface given the enabled domains."""
+    return sorted(
+        category
+        for category, required in TAG_CATEGORY_REQUIRES.items()
+        if not required.issubset(enabled_categories)
+    )
+
+
+def excluded_entity_tables(enabled_categories: frozenset[str]) -> list[str]:
+    """Built-in entity tables (people/locations) that must NOT surface given the enabled domains."""
+    excluded = []
+    if "people" not in enabled_categories:
+        excluded.append("people")
+    if "places" not in enabled_categories:
+        excluded.append("locations")
+    return excluded
+
+
 def report_stage_skipped(progress, stage: str, enabled_categories: frozenset[str]) -> dict:
     """Signal a gated stage was skipped and return its standard skip result dict.
 

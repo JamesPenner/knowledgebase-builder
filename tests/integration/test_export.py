@@ -476,6 +476,63 @@ def test_export_search_text_csv_present(tmp_path):
     assert "bridge" in search_text.lower()  # description
 
 
+def test_export_search_text_csv_excludes_calendar_tag_when_dates_disabled(tmp_path):
+    from src.db.kb import set_knowledge_category_enabled
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    _seed_with_hashes(corpus_conn, kb_conn)
+    set_knowledge_category_enabled(kb_conn, "dates", False)
+    kb_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+
+    _run(corpus_path, kb_path)
+
+    st_file = tmp_path / "export" / "search_text.csv"
+    with open(st_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    search_text = rows[0]["search_text"]
+    assert "Summer" not in search_text
+    assert "bridge" in search_text.lower()
+
+
+def test_export_search_text_csv_excludes_entity_tables_by_domain(tmp_path):
+    from src.db.kb import set_knowledge_category_enabled
+
+    corpus_path = tmp_path / "corpus.db"
+    kb_path = tmp_path / "knowledge.db"
+    corpus_conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
+    _seed_with_hashes(corpus_conn, kb_conn)
+    corpus_conn.execute(
+        "INSERT INTO file_entity_matches"
+        " (file_id, table_name, matched_value, match_source, payload_json, stale)"
+        " VALUES (1, 'people', 'Alice Smith', 'text', '{}', 0)"
+    )
+    corpus_conn.execute(
+        "INSERT INTO file_entity_matches"
+        " (file_id, table_name, matched_value, match_source, payload_json, stale)"
+        " VALUES (1, 'locations', 'Vancouver', 'text', '{}', 0)"
+    )
+    corpus_conn.commit()
+    set_knowledge_category_enabled(kb_conn, "people", False)
+    kb_conn.commit()
+    corpus_conn.close()
+    kb_conn.close()
+
+    _run(corpus_path, kb_path)
+
+    st_file = tmp_path / "export" / "search_text.csv"
+    with open(st_file, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    search_text = rows[0]["search_text"]
+    assert "Alice Smith" not in search_text
+    assert "Vancouver" in search_text
+
+
 # ---------------------------------------------------------------------------
 # Export scope via CorpusFilterSpec
 # ---------------------------------------------------------------------------

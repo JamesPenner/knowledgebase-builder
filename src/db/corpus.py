@@ -3142,7 +3142,7 @@ def get_description_for_file(conn: sqlite3.Connection, file_id: int) -> sqlite3.
 
 def get_file_transcript_segments(conn: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT start_ms, speaker_label, text FROM transcript_segments"
+        "SELECT start_ms, end_ms, speaker_label, text FROM transcript_segments"
         " WHERE file_id=? ORDER BY start_ms",
         (file_id,),
     ).fetchall()
@@ -3156,11 +3156,10 @@ def get_file_transcription(conn: sqlite3.Connection, file_id: int) -> sqlite3.Ro
     ).fetchone()
 
 
-def get_file_derived_tags(conn: sqlite3.Connection, file_id: int) -> list[str]:
-    rows = conn.execute(
-        "SELECT tag FROM file_derived_tags WHERE file_id=?", (file_id,)
+def get_file_derived_tags(conn: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT tag, category FROM file_derived_tags WHERE file_id=?", (file_id,)
     ).fetchall()
-    return [r["tag"] for r in rows]
 
 
 def get_file_captured_fields(conn: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:

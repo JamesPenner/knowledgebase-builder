@@ -16,10 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1832 passing, 2 skipped
-- **Last completed sprint:** KB.AM1 (Knowledge Settings: Schema & Gating Engine — `knowledge_settings` table (migration 0010) gating People/Places/Dates domains; `src/pipeline/knowledge_gates.py` with `STAGE_REQUIRES`/`TAG_CATEGORY_REQUIRES`/`report_stage_skipped`; early-skip gating placed before config/model validation in all 8 gated stages (`face`, `face_meta`, `voice`, `voice_diarize`, `attribute_speakers`, `geolocate`, `geo_meta`, `temporal`); `entity_match`/`classify` in-stage filtering; settings API + CLI; `SPEC.md` updated with the new table and a disambiguating note vs. the pre-existing "Settings panel for config.yaml" concept; fixed a pre-existing `MagicMock` iteration brittleness in `test_geo_meta_unit.py` surfaced by the new gating check; +35 net tests)
-- **Last hotfix:** Describe/Transcribe stage badges made scope-aware (+5 tests, 1797 total)
-- **Next planned sprint:** KB.AM2 — Knowledge Settings: Context & Export Filtering (see below)
+- **Tests:** 1853 passing, 2 skipped
+- **Last completed sprint:** KB.AM2 (Knowledge Settings: Context & Export Filtering — `build_file_context()` gains keyword-only `enabled_categories` filtering `entity_names` by table, `metadata_location`, transcript speaker labels (via a new `_generic_speaker_labels` re-derivation reusing `attribute_speakers.py::_resolve_label`), and `derived_tags` by category, with `metadata_date` deliberately left unfiltered; `export.py::_write_search_text` consolidated onto the same `excluded_tag_categories`/`excluded_entity_tables` helpers in `knowledge_gates.py`; five LLM-stage call sites wired (`describe.py`, `summarize.py`, `retag.py`, `suggest.py` ×2); +21 net tests)
+- **Next planned sprint:** KB.AM3 — Knowledge Settings UI panel + cascading gate badges (see below)
 
 ---
 
@@ -121,15 +120,16 @@ gating placed before config/model validation in all 8 gated stages, in-stage
 filtering for `entity_match` and `classify`, settings API + CLI. No UI.
 **Result:** 1832 tests (+35 net)
 
-### KB.AM2 — Context & Export Filtering
-**Status:** Planned
-**Document:** `sprints/planned/KB.AM2.md`
+### KB.AM2 — Context & Export Filtering ✓
+**Status:** Complete
+**Document:** `sprints/complete/KB.AM2.md`
 **Scope:** `build_file_context()` gains `enabled_categories`; filters
 `entity_names` (by table), `metadata_location`, transcript speaker labels,
 and `derived_tags` (by category). `metadata_date` is deliberately **not**
 suppressed regardless of the Dates toggle. `export.py::_write_search_text`
 consolidated onto the same shared filter helper instead of its own bespoke
-query. Isolated from `KB.AM1` — touches four existing LLM-stage call sites.
+query. Isolated from `KB.AM1` — touches five existing LLM-stage call sites.
+**Result:** 1853 tests (+21 net)
 
 ### KB.AM3 — Settings UI
 **Status:** Planned

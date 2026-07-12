@@ -65,6 +65,7 @@ def run_retag(
     )
     from src.db.kb import load_stage_prompt, open_kb
     from src.llm.session import ModelLoadError, TextSession
+    from src.pipeline.knowledge_gates import get_enabled_categories
     from src.text.context import build_file_context
 
     if not config.text_model:
@@ -73,6 +74,7 @@ def run_retag(
 
     corpus_conn = open_corpus(corpus_path)
     kb_conn = open_kb(kb_path)
+    enabled_categories = get_enabled_categories(kb_conn)
 
     try:
         system_prompt = load_stage_prompt(kb_conn, "retag", "system", default=_SYSTEM_PROMPT)
@@ -103,7 +105,9 @@ def run_retag(
                     progress.update(i, total, f"Retag: {i + 1}/{total}")
 
                     file_id = row["id"]
-                    ctx = build_file_context(corpus_conn, kb_conn, file_id)
+                    ctx = build_file_context(
+                        corpus_conn, kb_conn, file_id, enabled_categories=enabled_categories
+                    )
 
                     if not ctx.description or not ctx.description.strip():
                         upsert_retag_output(corpus_conn, file_id, "[]", None, "[]", config.text_model, "skipped")
