@@ -219,6 +219,7 @@ def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(r
     from src.db.corpus import (
         get_analyse_token_counts,
         get_grouped_analyse_tokens,
+        is_pattern_rules_stale,
         open_corpus,
     )
     from src.db.kb import get_decisions, open_kb
@@ -227,6 +228,7 @@ def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(r
     groups, total_groups = get_grouped_analyse_tokens(conn, limit=10)
     counts = get_analyse_token_counts(conn)
     decisions = get_decisions(kb_conn)
+    stale = is_pattern_rules_stale(conn, kb_conn, "normalize")
     conn.close()
     kb_conn.close()
     return templates.TemplateResponse(request, "normalise_review.html", {
@@ -237,6 +239,7 @@ def normalise_review_page(request: Request, paths: tuple[Path, Path] = Depends(r
         "limit": 10,
         "has_more": len(groups) < total_groups,
         "total_groups": total_groups,
+        "stale": stale,
     })
 
 
@@ -733,12 +736,22 @@ def _build_decisions_context(corpus_path: Path, kb_path: Path) -> dict:
 def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(resolve_kb)):
     corpus_path, kb_path = paths
     kb_name = request.query_params.get("kb", "")
-    from src.db.corpus import get_candidate_counts, get_pending_candidates, has_level_b_clusters, open_corpus
+    from src.db.corpus import (
+        get_candidate_counts,
+        get_pending_candidates,
+        has_level_b_clusters,
+        is_pattern_rules_stale,
+        open_corpus,
+    )
+    from src.db.kb import open_kb
 
     conn = open_corpus(corpus_path)
+    kb_conn = open_kb(kb_path)
     candidates = get_pending_candidates(conn, limit=50, offset=0, sort_by="file_count", sort_order="desc")
     counts = get_candidate_counts(conn)
     level_b_exists = has_level_b_clusters(conn)
+    stale = is_pattern_rules_stale(conn, kb_conn, "suggest")
+    kb_conn.close()
     conn.close()
     return templates.TemplateResponse(request, "suggest_review.html", {
         "kb": kb_name,
@@ -749,6 +762,7 @@ def suggest_review_page(request: Request, paths: tuple[Path, Path] = Depends(res
         "limit": 50,
         "has_more": len(candidates) < counts["pending"],
         "has_level_b_clusters": level_b_exists,
+        "stale": stale,
         **_build_decisions_context(corpus_path, kb_path),
     })
 
@@ -1923,7 +1937,7 @@ async def ui_pattern_rule_add(
     scope: str = Form("both"),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.kb import add_pattern_rule, open_kb
+    from src.db.kb import add_pattern_rule, bump_kb_version, open_kb
     _, kb_path = paths
     if action == "capture" and not extract_as.strip():
         return Response(
@@ -1960,6 +1974,7 @@ async def ui_pattern_rule_add(
             date_precision=date_precision or None,
             scope=scope,
         )
+        bump_kb_version(kb_conn, "pattern_rule_added")
     finally:
         kb_conn.close()
     return Response(
@@ -1986,7 +2001,7 @@ async def ui_pattern_rule_edit(
     scope: str = Form("both"),
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.kb import open_kb, update_pattern_rule
+    from src.db.kb import bump_kb_version, open_kb, update_pattern_rule
     _, kb_path = paths
     if action == "capture" and not extract_as.strip():
         return Response(
@@ -2022,6 +2037,7 @@ async def ui_pattern_rule_edit(
             date_precision=date_precision or None,
             scope=scope,
         )
+        bump_kb_version(kb_conn, "pattern_rule_updated")
     finally:
         kb_conn.close()
     return Response(
@@ -2036,7 +2052,7 @@ async def ui_pattern_rule_delete(
     rule_id: int,
     paths: tuple[Path, Path] = Depends(resolve_kb),
 ) -> Response:
-    from src.db.kb import delete_pattern_rule, open_kb
+    from src.db.kb import bump_kb_version, delete_pattern_rule, open_kb
     _, kb_path = paths
     kb_conn = open_kb(kb_path)
     try:
@@ -2048,6 +2064,7 @@ async def ui_pattern_rule_delete(
             return Response(content="<p style='color:#dc2626'>Rule not found.</p>",
                             media_type="text/html", status_code=404)
         delete_pattern_rule(kb_conn, rule_id)
+        bump_kb_version(kb_conn, "pattern_rule_deleted")
     finally:
         kb_conn.close()
     return Response(

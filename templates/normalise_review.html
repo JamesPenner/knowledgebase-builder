@@ -18,6 +18,21 @@
 {% block pending_tab_count %}{{ counts.total - counts.reviewed }}{% endblock %}
 {% block decided_tab_count %}{{ counts.reviewed }}{% endblock %}
 
+{% block review_extra %}
+{% if stale %}
+<div class="stale-banner" id="stale-banner-normalize">
+  <span>Pattern rules changed since this queue was generated.</span>
+  <button class="btn btn--run" id="btn-run-normalize"
+          onclick="runStage('normalize', '{{ kb }}')">Re-run Normalize</button>
+  <button class="btn btn--cancel" id="btn-cancel-normalize"
+          style="display:none"
+          onclick="cancelStage('normalize', '{{ kb }}')">Cancel</button>
+  <span id="progress-normalize" class="stage-progress"></span>
+  <button class="stale-banner-dismiss" onclick="this.closest('.stale-banner').remove()" aria-label="Dismiss">&times;</button>
+</div>
+{% endif %}
+{% endblock %}
+
 {% block pending_content %}
 <div id="pending-groups"
      hx-get="/review/normalise/partials/pending?kb={{ kb }}"
@@ -48,6 +63,7 @@
 {% endblock %}
 
 {% block page_scripts %}
+<script src="/static/js/pipeline.js"></script>
 <script>
 ReviewQueue.init({
   queueId:    'pending-groups',

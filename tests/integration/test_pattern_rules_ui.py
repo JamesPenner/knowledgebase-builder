@@ -330,3 +330,49 @@ def test_delete_rule_removes_from_db(tmp_path):
     row = conn.execute("SELECT id FROM pattern_rules WHERE id=?", (rule_id,)).fetchone()
     conn.close()
     assert row is None
+
+
+# ---------------------------------------------------------------------------
+# kb_version tracking (drives staleness banners on review pages)
+# ---------------------------------------------------------------------------
+
+def test_add_rule_bumps_kb_version(tmp_path):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    client = _make_client(corpus_path, kb_path)
+    client.post("/knowledge/pattern-rules/add?kb=test", data={
+        "pattern": r"^\d{10}$", "action": "reject", "label": "GUID", "is_regex": "true",
+    })
+    conn = open_kb(kb_path)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM kb_version WHERE change_type='pattern_rule_added'"
+    ).fetchone()
+    conn.close()
+    assert row[0] == 1
+
+
+def test_edit_rule_bumps_kb_version(tmp_path):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    rule_id = _seed_capture(kb_path)
+    client = _make_client(corpus_path, kb_path)
+    client.post(f"/knowledge/pattern-rules/{rule_id}/edit?kb=test", data={
+        "pattern": r"^\d{8}$", "action": "reject", "label": "Now reject", "is_regex": "true",
+    })
+    conn = open_kb(kb_path)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM kb_version WHERE change_type='pattern_rule_updated'"
+    ).fetchone()
+    conn.close()
+    assert row[0] == 1
+
+
+def test_delete_rule_bumps_kb_version(tmp_path):
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    rule_id = _seed_capture(kb_path)
+    client = _make_client(corpus_path, kb_path)
+    client.post(f"/knowledge/pattern-rules/{rule_id}/delete?kb=test")
+    conn = open_kb(kb_path)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM kb_version WHERE change_type='pattern_rule_deleted'"
+    ).fetchone()
+    conn.close()
+    assert row[0] == 1

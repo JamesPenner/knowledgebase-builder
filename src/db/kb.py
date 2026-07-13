@@ -278,6 +278,14 @@ def bump_kb_version(conn: sqlite3.Connection, change_type: str) -> None:
     conn.commit()
 
 
+def get_pattern_rules_changed_at(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute(
+        "SELECT MAX(changed_at) AS t FROM kb_version"
+        " WHERE change_type IN ('pattern_rule_added', 'pattern_rule_updated', 'pattern_rule_deleted')"
+    ).fetchone()
+    return row["t"] if row else None
+
+
 # ---------------------------------------------------------------------------
 # Normalize rule readers
 # ---------------------------------------------------------------------------

@@ -525,6 +525,26 @@ def get_pipeline_checkpoints(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def is_pattern_rules_stale(conn: sqlite3.Connection, kb_conn: sqlite3.Connection, stage: str) -> bool:
+    """True if pattern_rules changed at or after `stage`'s last recorded pipeline run.
+
+    SQLite `datetime('now')` has 1-second resolution, so a rule change and a stage
+    run can land in the same timestamp — ties are treated as stale rather than
+    risking a silently-missed staleness warning.
+    """
+    from src.db.kb import get_pattern_rules_changed_at
+
+    changed_at = get_pattern_rules_changed_at(kb_conn)
+    if not changed_at:
+        return False
+    row = conn.execute(
+        "SELECT last_run_at FROM pipeline_checkpoints WHERE stage=?", (stage,)
+    ).fetchone()
+    if not row or not row["last_run_at"]:
+        return False
+    return changed_at >= row["last_run_at"]
+
+
 _STAGE_COUNT_QUERIES: dict[str, str] = {
     "extract_meta":      "SELECT COUNT(*) FROM file_exif",
     "extract_fields":    "SELECT COUNT(DISTINCT file_id) FROM file_metadata_fields",

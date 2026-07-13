@@ -17,6 +17,14 @@
 {% block decided_tab_count %}{{ counts.total - counts.pending }}{% endblock %}
 
 {% block review_extra %}
+{% if stale %}
+<div class="stale-banner" id="stale-banner-suggest">
+  <span>Pattern rules changed since this queue was generated.</span>
+  <button class="btn btn--run" id="btn-run-suggest-stale"
+          onclick="runStage('suggest', '{{ kb }}')">Re-run Suggest</button>
+  <button class="stale-banner-dismiss" onclick="this.closest('.stale-banner').remove()" aria-label="Dismiss">&times;</button>
+</div>
+{% endif %}
 <div class="level-c-controls">
   {% if has_level_b_clusters %}
   <button id="btn-run-suggest" class="btn btn--run"
@@ -51,6 +59,7 @@
 {% endblock %}
 
 {% block page_scripts %}
+<script src="/static/js/pipeline.js"></script>
 <script>
 ReviewQueue.init({
   queueId:    'candidates-queue',

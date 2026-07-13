@@ -352,6 +352,81 @@ def test_suggest_review_shows_disabled_when_no_clusters(kb_dbs):
     assert 'id="btn-run-suggest"' not in resp.text
 
 
+# ---------------------------------------------------------------------------
+# Pattern rule staleness banners (Normalise + Suggestion review)
+# ---------------------------------------------------------------------------
+
+def test_normalise_review_no_banner_when_rules_never_changed(kb_dbs):
+    client = _make_client(*kb_dbs)
+    resp = client.get("/review/normalise", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "stale-banner" not in resp.text
+
+
+def test_normalise_review_shows_banner_when_rules_changed_after_run(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    from src.db.corpus import update_pipeline_checkpoint
+
+    conn = open_corpus(corpus_path)
+    update_pipeline_checkpoint(conn, "normalize", files_processed=1)
+    conn.close()
+    kb_conn = open_kb(kb_path)
+    kb_conn.execute(
+        "INSERT INTO kb_version (change_type, changed_at) VALUES ('pattern_rule_added', datetime('now', '+1 hour'))"
+    )
+    kb_conn.commit()
+    kb_conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/review/normalise", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "stale-banner" in resp.text
+    assert "Re-run Normalize" in resp.text
+
+
+def test_suggest_review_shows_banner_when_rules_changed_after_run(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    from src.db.corpus import update_pipeline_checkpoint
+
+    conn = open_corpus(corpus_path)
+    update_pipeline_checkpoint(conn, "suggest", files_processed=1)
+    conn.close()
+    kb_conn = open_kb(kb_path)
+    kb_conn.execute(
+        "INSERT INTO kb_version (change_type, changed_at) VALUES ('pattern_rule_added', datetime('now', '+1 hour'))"
+    )
+    kb_conn.commit()
+    kb_conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    resp = client.get("/review/suggest", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "stale-banner" in resp.text
+    assert "Re-run Suggest" in resp.text
+
+
+def test_adding_pattern_rule_via_ui_marks_normalise_review_stale(kb_dbs):
+    corpus_path, kb_path = kb_dbs
+    from src.db.corpus import update_pipeline_checkpoint
+
+    conn = open_corpus(corpus_path)
+    update_pipeline_checkpoint(conn, "normalize", files_processed=1)
+    conn.close()
+
+    client = _make_client(corpus_path, kb_path)
+    add_resp = client.post("/knowledge/pattern-rules/add?kb=test", data={
+        "pattern": r"\d{10}$",
+        "action": "reject",
+        "label": "GUID",
+        "is_regex": "true",
+    })
+    assert add_resp.status_code == 200
+
+    resp = client.get("/review/normalise", params={"kb": "test"})
+    assert resp.status_code == 200
+    assert "stale-banner" in resp.text
+
+
 def test_pipeline_page_includes_quality_stage(kb_dbs):
     client = _make_client(*kb_dbs)
     resp = client.get("/pipeline", params={"kb": "test"})
