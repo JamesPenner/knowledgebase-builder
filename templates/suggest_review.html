@@ -23,7 +23,7 @@
           onclick="runStage('suggest', '{{ kb }}')">Run Level C</button>
   <button id="btn-cancel-suggest" class="btn btn--cancel"
           style="display:none"
-          onclick="cancelStage('suggest')">Cancel</button>
+          onclick="cancelStage('suggest', '{{ kb }}')">Cancel</button>
   <span id="progress-suggest" class="stage-progress"></span>
   {% else %}
   <button class="btn" disabled title="Run Level B (Suggest) first">Run Level C — run Level B first</button>

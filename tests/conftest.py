@@ -10,6 +10,20 @@ from src.db.kb import open_kb
 from src.pipeline.progress import NullProgressReporter
 
 
+@pytest.fixture(autouse=True)
+def _reset_stage_progress_state():
+    """`_progress` is keyed by (kb, stage) and is process-global (KB.AN1's
+    reentrancy guard reads it before allowing a new /run). Without resetting
+    it, a stubbed stage runner in one test that never calls progress.done()
+    leaves a stale 'running' entry that spuriously 409s an unrelated test
+    reusing the same kb/stage name.
+    """
+    import src.pipeline.progress as _progress_mod
+    _progress_mod._progress.clear()
+    yield
+    _progress_mod._progress.clear()
+
+
 @pytest.fixture
 def corpus_db(tmp_path):
     return open_corpus(tmp_path / "corpus.db")

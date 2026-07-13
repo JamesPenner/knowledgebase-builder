@@ -2287,10 +2287,19 @@ def get_files_without_voice_embedding(conn: sqlite3.Connection) -> list[sqlite3.
         """
         SELECT id, path FROM files
         WHERE file_type IN ('audio', 'video')
-          AND id NOT IN (SELECT file_id FROM file_voice_embeddings)
+          AND voice_checked_at IS NULL
         ORDER BY path
         """
     ).fetchall()
+
+
+def set_voice_checked(conn: sqlite3.Connection, file_id: int) -> None:
+    """Mark a file as having been checked by the voice stage, regardless of outcome.
+
+    Without this, a file that's silent, too short, or errors out never gets a
+    row in `file_voice_embeddings` and would be re-selected as pending forever.
+    """
+    conn.execute("UPDATE files SET voice_checked_at = datetime('now') WHERE id = ?", (file_id,))
 
 
 def upsert_voice_embedding(
@@ -2323,6 +2332,7 @@ def get_voice_embeddings_for_export(conn: sqlite3.Connection) -> list[sqlite3.Ro
 
 def reset_voice_embeddings(conn: sqlite3.Connection) -> int:
     cur = conn.execute("DELETE FROM file_voice_embeddings")
+    conn.execute("UPDATE files SET voice_checked_at = NULL")
     conn.commit()
     return cur.rowcount
 
@@ -2336,10 +2346,19 @@ def get_files_without_voice_segments(conn: sqlite3.Connection) -> list[sqlite3.R
         """
         SELECT id, path FROM files
         WHERE file_type IN ('audio', 'video')
-          AND id NOT IN (SELECT DISTINCT file_id FROM file_voice_segments)
+          AND voice_diarize_checked_at IS NULL
         ORDER BY path
         """
     ).fetchall()
+
+
+def set_voice_diarize_checked(conn: sqlite3.Connection, file_id: int) -> None:
+    """Mark a file as having been checked by the voice_diarize stage, regardless of outcome.
+
+    Without this, a file that's silent, too short, or errors out never gets a
+    row in `file_voice_segments` and would be re-selected as pending forever.
+    """
+    conn.execute("UPDATE files SET voice_diarize_checked_at = datetime('now') WHERE id = ?", (file_id,))
 
 
 def upsert_voice_segment(
@@ -2401,6 +2420,7 @@ def get_voice_segments_for_export(conn: sqlite3.Connection) -> list[ClusterAssig
 
 def reset_voice_segments(conn: sqlite3.Connection) -> int:
     cur = conn.execute("DELETE FROM file_voice_segments")
+    conn.execute("UPDATE files SET voice_diarize_checked_at = NULL")
     conn.commit()
     return cur.rowcount
 

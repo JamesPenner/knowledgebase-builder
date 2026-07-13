@@ -191,13 +191,13 @@ def test_summarize_run_returns_job_id(tmp_path, monkeypatch):
 
 
 def test_summarize_cancel_returns_cancelled():
-    resp = client.post("/api/stages/summarize/cancel")
+    resp = client.post("/api/stages/summarize/cancel", params={"kb": "testdb"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
 
 
 def test_summarize_status_endpoint():
-    resp = client.get("/api/stages/summarize/status")
+    resp = client.get("/api/stages/summarize/status", params={"kb": "testdb"})
     assert resp.status_code == 200
     data = resp.json()
     assert "status" in data

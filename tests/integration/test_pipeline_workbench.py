@@ -56,7 +56,7 @@ def test_validate_run_endpoint(tmp_path, monkeypatch):
 def test_validate_cancel_endpoint(tmp_path):
     corpus_path, kb_path = _open_dbs(tmp_path)
     client = _make_client(corpus_path, kb_path)
-    resp = client.post("/api/stages/validate/cancel")
+    resp = client.post("/api/stages/validate/cancel", params={"kb": "test"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
 
@@ -64,10 +64,68 @@ def test_validate_cancel_endpoint(tmp_path):
 def test_validate_status_endpoint(tmp_path):
     corpus_path, kb_path = _open_dbs(tmp_path)
     client = _make_client(corpus_path, kb_path)
-    resp = client.get("/api/stages/validate/status")
+    resp = client.get("/api/stages/validate/status", params={"kb": "test"})
     assert resp.status_code == 200
     data = resp.json()
     assert "status" in data
+
+
+# ---------------------------------------------------------------------------
+# Stage concurrency guard — (kb, stage) scoping (KB.AN1)
+# ---------------------------------------------------------------------------
+
+def test_run_rejected_with_409_when_already_running(tmp_path, monkeypatch):
+    import src.api.pipeline as _pipeline_mod
+    import src.pipeline.progress as _prog
+    monkeypatch.setattr(_pipeline_mod, "_get_kb_folder", lambda _kb: tmp_path)
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    client = _make_client(corpus_path, kb_path)
+
+    _prog.init_progress("test", "validate")
+    try:
+        resp = client.post("/api/stages/validate/run", json={"kb": "test"})
+        assert resp.status_code == 409
+    finally:
+        _prog._progress.pop(("test", "validate"), None)
+
+
+def test_run_not_blocked_by_a_different_kb_running(tmp_path, monkeypatch):
+    """Same stage 'running' for kb-a must not block a run for kb-b."""
+    import src.api.pipeline as _pipeline_mod
+    import src.pipeline.progress as _prog
+    monkeypatch.setattr(_pipeline_mod, "_get_kb_folder", lambda _kb: tmp_path)
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    client = _make_client(corpus_path, kb_path)
+
+    _prog.init_progress("kb-a", "validate")
+    try:
+        resp = client.post("/api/stages/validate/run", json={"kb": "kb-b"})
+        assert resp.status_code == 200
+    finally:
+        _prog._progress.pop(("kb-a", "validate"), None)
+        _prog._progress.pop(("kb-b", "validate"), None)
+
+
+def test_cancel_only_affects_targeted_kb(tmp_path, monkeypatch):
+    import threading
+
+    import src.api.pipeline as _pipeline_mod
+    monkeypatch.setattr(_pipeline_mod, "_get_kb_folder", lambda _kb: tmp_path)
+    corpus_path, kb_path = _open_dbs(tmp_path)
+    client = _make_client(corpus_path, kb_path)
+
+    ev_a = threading.Event()
+    ev_b = threading.Event()
+    _pipeline_mod._active_cancels[("kb-a", "validate")] = ev_a
+    _pipeline_mod._active_cancels[("kb-b", "validate")] = ev_b
+    try:
+        resp = client.post("/api/stages/validate/cancel", params={"kb": "kb-a"})
+        assert resp.status_code == 200
+        assert ev_a.is_set()
+        assert not ev_b.is_set()
+    finally:
+        _pipeline_mod._active_cancels.pop(("kb-a", "validate"), None)
+        _pipeline_mod._active_cancels.pop(("kb-b", "validate"), None)
 
 
 # ---------------------------------------------------------------------------

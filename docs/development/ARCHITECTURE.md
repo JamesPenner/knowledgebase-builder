@@ -142,15 +142,20 @@ All endpoints follow one of three shapes. New endpoints instantiate a pattern �
 ### Pattern 1 — Stage control
 
 ```
-POST   /api/stages/{stage}/run       → {"job_id": str, "status": "started"}
-POST   /api/stages/{stage}/cancel    → {"status": "cancelled"}
-GET    /api/stages/{stage}/status    → {"status": str, "current": int, "total": int,
-                                        "rate": float, "eta": int}
-GET    /api/stages/{stage}/stream    → text/event-stream; emits status objects;
-                                        sends current state immediately on connect
+POST   /api/stages/{stage}/run?kb={kb}       → {"job_id": str, "status": "started"}
+                                                 409 if this (kb, stage) is already running
+POST   /api/stages/{stage}/cancel?kb={kb}    → {"status": "cancelled"}
+GET    /api/stages/{stage}/status?kb={kb}    → {"status": str, "current": int, "total": int,
+                                                "rate": float, "eta": int}
+GET    /api/stages/{stage}/stream?kb={kb}    → text/event-stream; emits status objects;
+                                                sends current state immediately on connect
 ```
 
-`{stage}` is the DAG key (e.g. `ingest`, `describe`, `suggest`).
+`{stage}` is the DAG key (e.g. `ingest`, `describe`, `suggest`). Execution
+state is scoped by `(kb, stage)`, not `stage` alone — two different KBs can
+run the same stage concurrently without colliding, and starting a stage that
+is already running for that KB is rejected rather than silently spawning a
+second worker (`KB.AN1`).
 
 ### Pattern 2 — Review queue
 

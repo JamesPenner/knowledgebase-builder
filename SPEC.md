@@ -1624,14 +1624,18 @@ ExifTool lifecycle in `run_writeback()`:
 Progress indicators must never touch corpus.db or knowledge.db. Because the FastAPI server and all worker threads run in the same process, in-memory state is the natural solution.
 
 ```python
-_progress = {}          # { stage_name: {current, total, rate, eta, status} }
+_progress = {}          # { (kb, stage_name): {current, total, rate, eta, status} }
 _progress_lock = threading.Lock()
 ```
 
-The preferred transport is **Server-Sent Events** rather than client-side polling. The worker emits an event whenever meaningful progress occurs (every N files); the client receives updates instantly. The endpoint emits the current `_progress` state immediately on connect so a client that reconnects receives the current state instantly.
+Keyed by `(kb, stage_name)`, not `stage_name` alone — the same stage running
+against two different KBs (e.g. two browser tabs) tracks independent state
+instead of colliding (`KB.AN1`).
+
+The preferred transport is **Server-Sent Events** rather than client-side polling. The worker emits an event whenever meaningful progress occurs (every N files); the client receives updates instantly. The endpoint emits the current `_progress` state immediately on connect so a client that reconnects receives the current state instantly. `kb` is required to select which KB's job to observe.
 
 ```
-GET /api/stages/{stage}/stream  →  text/event-stream
+GET /api/stages/{stage}/stream?kb={kb}  →  text/event-stream
 
 data: {"current": 431, "total": 1847, "rate": 2.3, "eta": 617, "status": "running"}
 data: {"current": 1847, "total": 1847, "rate": 2.4, "eta": 0, "status": "done"}

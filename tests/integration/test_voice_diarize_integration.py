@@ -152,6 +152,7 @@ class TestRunVoiceDiarizeIntegration:
 
     def test_no_segments_no_error(self, diarize_dbs):
         """Silent file: diarize returns [], file is still marked as processed."""
+        from src.db.corpus import get_files_without_voice_segments, open_corpus
         from src.pipeline.cancel import make_cancel_event
         from src.pipeline.progress import NullProgressReporter
         from src.stages.voice import run_voice_diarize
@@ -167,6 +168,13 @@ class TestRunVoiceDiarizeIntegration:
 
         assert result["files_processed"] == 1
         assert result["segments_found"] == 0
+
+        # KB.AN1: a file that legitimately produces zero segments must not be
+        # re-selected as pending forever just because it has no segment rows.
+        corpus_conn2 = open_corpus(corpus_path)
+        pending = get_files_without_voice_segments(corpus_conn2)
+        corpus_conn2.close()
+        assert pending == []
 
     def test_segment_matches_known_person(self, diarize_dbs):
         from src.pipeline.cancel import make_cancel_event
@@ -297,7 +305,7 @@ class TestRunVoiceDiarizeIntegration:
         assert result["files_processed"] == 0
 
     def test_force_resets_segments(self, diarize_dbs):
-        from src.db.corpus import upsert_voice_segment
+        from src.db.corpus import set_voice_diarize_checked, upsert_voice_segment
         from src.pipeline.cancel import make_cancel_event
         from src.pipeline.progress import NullProgressReporter
         from src.stages.voice import run_voice_diarize
@@ -305,6 +313,9 @@ class TestRunVoiceDiarizeIntegration:
         corpus_conn, kb_conn, corpus_path, kb_path, tmp_path = diarize_dbs
         _ingest(corpus_conn, 1, "/clip.wav")
         upsert_voice_segment(corpus_conn, 1, 0, 0, 1000, "SPEAKER_00", None, None, None, None)
+        # A real prior run_voice_diarize call always sets this marker alongside
+        # writing segment rows (KB.AN1) — simulate that here, not just the rows.
+        set_voice_diarize_checked(corpus_conn, 1)
         corpus_conn.commit()
         corpus_conn.close()
         kb_conn.close()

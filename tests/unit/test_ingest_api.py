@@ -87,14 +87,14 @@ class TestIngestRunEndpoint:
         assert call_order == ["reset", "ingest"]
 
     def test_cancel_returns_cancelled(self):
-        resp = client.post("/api/stages/ingest/cancel")
+        resp = client.post("/api/stages/ingest/cancel", params={"kb": "test"})
         assert resp.status_code == 200
         assert resp.json()["status"] == "cancelled"
 
     def test_status_returns_idle_when_no_job(self):
         import src.pipeline.progress as _prog
-        _prog._progress.pop("ingest", None)
-        resp = client.get("/api/stages/ingest/status")
+        _prog._progress.pop(("test", "ingest"), None)
+        resp = client.get("/api/stages/ingest/status", params={"kb": "test"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "idle"

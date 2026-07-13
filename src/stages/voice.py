@@ -68,6 +68,7 @@ def run_voice(
         get_has_speech,
         open_corpus,
         set_has_speech,
+        set_voice_checked,
         update_pipeline_checkpoint,
         upsert_voice_embedding,
     )
@@ -118,6 +119,8 @@ def run_voice(
             # Skip files already known to be silent
             if get_has_speech(corpus_conn, file_id) is False:
                 files_skipped += 1
+                set_voice_checked(corpus_conn, file_id)
+                corpus_conn.commit()
                 progress.update(i + 1, total)
                 continue
 
@@ -125,6 +128,8 @@ def run_voice(
                 with prepare_audio(file_path, config) as track:
                     if track is None:
                         files_skipped += 1
+                        set_voice_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
@@ -137,6 +142,8 @@ def run_voice(
 
                     if track.has_speech is False:
                         files_skipped += 1
+                        set_voice_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
@@ -147,11 +154,15 @@ def run_voice(
                     except Exception as exc:
                         logger.warning("Voice embedding failed for %s: %s", file_path, exc)
                         error_count += 1
+                        set_voice_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
                     if embedding_bytes is None:
                         files_skipped += 1
+                        set_voice_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
@@ -173,6 +184,7 @@ def run_voice(
                         centroids[best_person_id] = {"blob": new_blob, "count": new_count}
                         _db_update_person_centroid(kb_conn, best_person_id, new_blob, new_count, kind="voice")
 
+                    set_voice_checked(corpus_conn, file_id)
                     corpus_conn.commit()
                     kb_conn.commit()
                     files_processed += 1
@@ -182,6 +194,8 @@ def run_voice(
             except Exception as exc:
                 logger.warning("Voice: error processing %s: %s", file_path, exc)
                 error_count += 1
+                set_voice_checked(corpus_conn, file_id)
+                corpus_conn.commit()
 
             progress.update(i + 1, total)
 
@@ -338,6 +352,7 @@ def run_voice_diarize(
         get_voice_speaker_clusters,
         open_corpus,
         set_has_speech,
+        set_voice_diarize_checked,
         update_pipeline_checkpoint,
         upsert_voice_segment,
         upsert_voice_speaker_cluster,
@@ -394,12 +409,16 @@ def run_voice_diarize(
 
             # Skip files already known to be silent
             if get_has_speech(corpus_conn, file_id) is False:
+                set_voice_diarize_checked(corpus_conn, file_id)
+                corpus_conn.commit()
                 progress.update(i + 1, total)
                 continue
 
             try:
                 with prepare_audio(file_path, config) as track:
                     if track is None:
+                        set_voice_diarize_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
@@ -411,6 +430,8 @@ def run_voice_diarize(
                         logger.warning("diarize: clipping detected in %s", file_path)
 
                     if track.has_speech is False:
+                        set_voice_diarize_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
@@ -421,6 +442,8 @@ def run_voice_diarize(
                     except Exception as exc:
                         logger.warning("Diarization error for %s: %s", file_path, exc)
                         error_count += 1
+                        set_voice_diarize_checked(corpus_conn, file_id)
+                        corpus_conn.commit()
                         progress.update(i + 1, total)
                         continue
 
@@ -499,6 +522,7 @@ def run_voice_diarize(
                             embedding, matched_cluster_id, matched_person_id, matched_similarity,
                         )
 
+                    set_voice_diarize_checked(corpus_conn, file_id)
                     corpus_conn.commit()
                     kb_conn.commit()
                     files_processed += 1
@@ -508,6 +532,8 @@ def run_voice_diarize(
             except Exception as exc:
                 logger.warning("Diarize: error processing %s: %s", file_path, exc)
                 error_count += 1
+                set_voice_diarize_checked(corpus_conn, file_id)
+                corpus_conn.commit()
 
             progress.update(i + 1, total)
 

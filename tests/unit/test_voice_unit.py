@@ -29,9 +29,10 @@ def _make_corpus_db() -> sqlite3.Connection:
     conn.executescript("""
         PRAGMA foreign_keys = OFF;
         CREATE TABLE files (
-            id        INTEGER PRIMARY KEY,
-            path      TEXT    NOT NULL,
-            file_type TEXT    NOT NULL DEFAULT 'audio'
+            id                INTEGER PRIMARY KEY,
+            path              TEXT    NOT NULL,
+            file_type         TEXT    NOT NULL DEFAULT 'audio',
+            voice_checked_at  DATETIME
         );
         CREATE TABLE file_voice_embeddings (
             file_id      INTEGER PRIMARY KEY,
@@ -198,15 +199,33 @@ class TestGetFilesWithoutVoiceEmbedding:
         ids = {row["id"] for row in rows}
         assert ids == {1, 2}
 
-    def test_excludes_already_embedded_files(self):
-        from src.db.corpus import get_files_without_voice_embedding, upsert_voice_embedding
+    def test_excludes_checked_files(self):
+        from src.db.corpus import get_files_without_voice_embedding, set_voice_checked, upsert_voice_embedding
         conn = _make_corpus_db()
         conn.execute("INSERT INTO files(id, path, file_type) VALUES (1, '/a.wav', 'audio')")
         conn.execute("INSERT INTO files(id, path, file_type) VALUES (2, '/b.wav', 'audio')")
         upsert_voice_embedding(conn, 1, _blob(256, 0), "resemblyzer", 2000)
+        set_voice_checked(conn, 1)
         rows = get_files_without_voice_embedding(conn)
         assert len(rows) == 1
         assert rows[0]["id"] == 2
+
+    def test_checked_file_with_zero_embeddings_stays_excluded(self):
+        """A silent/too-short/errored file is marked checked with no embedding row —
+        it must not be perpetually re-selected as pending (KB.AN1)."""
+        from src.db.corpus import get_files_without_voice_embedding, set_voice_checked
+        conn = _make_corpus_db()
+        conn.execute("INSERT INTO files(id, path, file_type) VALUES (1, '/silent.wav', 'audio')")
+        set_voice_checked(conn, 1)
+        assert get_files_without_voice_embedding(conn) == []
+
+    def test_unchecked_file_with_no_embedding_stays_pending(self):
+        from src.db.corpus import get_files_without_voice_embedding
+        conn = _make_corpus_db()
+        conn.execute("INSERT INTO files(id, path, file_type) VALUES (1, '/a.wav', 'audio')")
+        rows = get_files_without_voice_embedding(conn)
+        assert len(rows) == 1
+        assert rows[0]["id"] == 1
 
     def test_empty_corpus_returns_empty(self):
         from src.db.corpus import get_files_without_voice_embedding

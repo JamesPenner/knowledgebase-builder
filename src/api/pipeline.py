@@ -4,10 +4,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
-from src.pipeline.progress import SseProgressReporter, get_progress, init_progress
+from src.pipeline.progress import SseProgressReporter, get_progress, init_progress, is_running
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -36,9 +36,12 @@ def _get_kb_folder(kb: str) -> Path:
 def _make_stage_routes(stage: str, runner_fn):
     @router.post(f"/{stage}/run", tags=["pipeline"])
     def _run(req: RunRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        if is_running(req.kb, stage):
+            raise HTTPException(status_code=409, detail=f"{stage} is already running for {req.kb}")
+
         job_id = str(uuid.uuid4())
         cancel = threading.Event()
-        _active_cancels[stage] = cancel
+        _active_cancels[(req.kb, stage)] = cancel
 
         folder = _get_kb_folder(req.kb)
         corpus_path = folder / "corpus.db"
@@ -47,8 +50,8 @@ def _make_stage_routes(stage: str, runner_fn):
         from pathlib import Path as P
         from src.config import load_config
         config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
-        progress = SseProgressReporter(stage)
-        init_progress(stage)
+        progress = SseProgressReporter(req.kb, stage)
+        init_progress(req.kb, stage)
 
         from src.pipeline.filter_spec import CorpusFilterSpec
         scope = CorpusFilterSpec(
@@ -72,28 +75,28 @@ def _make_stage_routes(stage: str, runner_fn):
         return {"job_id": job_id, "status": "started"}
 
     @router.post(f"/{stage}/cancel", tags=["pipeline"])
-    def _cancel() -> dict[str, str]:
-        ev = _active_cancels.get(stage)
+    def _cancel(kb: str = Query(...)) -> dict[str, str]:
+        ev = _active_cancels.get((kb, stage))
         if ev:
             ev.set()
         return {"status": "cancelled"}
 
     @router.get(f"/{stage}/status", tags=["pipeline"])
-    def _status() -> dict[str, Any]:
-        return get_progress(stage) or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
+    def _status(kb: str = Query(...)) -> dict[str, Any]:
+        return get_progress(kb, stage) or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
 
     @router.get(f"/{stage}/stream", tags=["pipeline"])
-    async def _stream():
+    async def _stream(kb: str = Query(...)):
         import asyncio
         from fastapi.responses import StreamingResponse
 
         async def _gen():
             import json
-            state = get_progress(stage) or {"status": "idle"}
+            state = get_progress(kb, stage) or {"status": "idle"}
             yield f"data: {json.dumps(state)}\n\n"
             while state.get("status") == "running":
                 await asyncio.sleep(0.5)
-                state = get_progress(stage) or {}
+                state = get_progress(kb, stage) or {}
                 yield f"data: {json.dumps(state)}\n\n"
 
         return StreamingResponse(_gen(), media_type="text/event-stream")
@@ -257,8 +260,11 @@ class ExportRunRequest(BaseModel):
 
 @router.post("/export/run", tags=["pipeline"])
 def export_run(req: ExportRunRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    if is_running(req.kb, "export"):
+        raise HTTPException(status_code=409, detail=f"export is already running for {req.kb}")
+
     cancel = threading.Event()
-    _active_cancels["export"] = cancel
+    _active_cancels[(req.kb, "export")] = cancel
 
     folder = _get_kb_folder(req.kb)
     corpus_path = folder / "corpus.db"
@@ -269,8 +275,8 @@ def export_run(req: ExportRunRequest, background_tasks: BackgroundTasks) -> dict
     from src.pipeline.filter_spec import CorpusFilterSpec
     from src.stages.export import run_export
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
-    progress = SseProgressReporter("export")
-    init_progress("export")
+    progress = SseProgressReporter(req.kb, "export")
+    init_progress(req.kb, "export")
     scope = CorpusFilterSpec(
         source_id=req.source_id,
         folder_prefix=req.folder_prefix,
@@ -292,30 +298,30 @@ def export_run(req: ExportRunRequest, background_tasks: BackgroundTasks) -> dict
 
 
 @router.post("/export/cancel", tags=["pipeline"])
-def export_cancel() -> dict[str, str]:
-    ev = _active_cancels.get("export")
+def export_cancel(kb: str = Query(...)) -> dict[str, str]:
+    ev = _active_cancels.get((kb, "export"))
     if ev:
         ev.set()
     return {"status": "cancelled"}
 
 
 @router.get("/export/status", tags=["pipeline"])
-def export_status() -> dict[str, Any]:
-    return get_progress("export") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
+def export_status(kb: str = Query(...)) -> dict[str, Any]:
+    return get_progress(kb, "export") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
 
 
 @router.get("/export/stream", tags=["pipeline"])
-async def export_stream():
+async def export_stream(kb: str = Query(...)):
     import asyncio
     import json
     from fastapi.responses import StreamingResponse
 
     async def _gen():
-        state = get_progress("export") or {"status": "idle"}
+        state = get_progress(kb, "export") or {"status": "idle"}
         yield f"data: {json.dumps(state)}\n\n"
         while state.get("status") == "running":
             await asyncio.sleep(0.5)
-            state = get_progress("export") or {}
+            state = get_progress(kb, "export") or {}
             yield f"data: {json.dumps(state)}\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
@@ -381,9 +387,12 @@ class SummarizeRunRequest(BaseModel):
 
 @router.post("/summarize/run", tags=["pipeline"])
 def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    if is_running(req.kb, "summarize"):
+        raise HTTPException(status_code=409, detail=f"summarize is already running for {req.kb}")
+
     job_id = str(uuid.uuid4())
     cancel = threading.Event()
-    _active_cancels["summarize"] = cancel
+    _active_cancels[(req.kb, "summarize")] = cancel
 
     folder = _get_kb_folder(req.kb)
     corpus_path = folder / "corpus.db"
@@ -392,8 +401,8 @@ def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -
     from pathlib import Path as P
     from src.config import load_config
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
-    progress = SseProgressReporter("summarize")
-    init_progress("summarize")
+    progress = SseProgressReporter(req.kb, "summarize")
+    init_progress(req.kb, "summarize")
 
     from src.pipeline.filter_spec import CorpusFilterSpec as _CFS
     _scope = _CFS(
@@ -423,30 +432,30 @@ def summarize_run(req: SummarizeRunRequest, background_tasks: BackgroundTasks) -
 
 
 @router.post("/summarize/cancel", tags=["pipeline"])
-def summarize_cancel() -> dict[str, str]:
-    ev = _active_cancels.get("summarize")
+def summarize_cancel(kb: str = Query(...)) -> dict[str, str]:
+    ev = _active_cancels.get((kb, "summarize"))
     if ev:
         ev.set()
     return {"status": "cancelled"}
 
 
 @router.get("/summarize/status", tags=["pipeline"])
-def summarize_status() -> dict[str, Any]:
-    return get_progress("summarize") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
+def summarize_status(kb: str = Query(...)) -> dict[str, Any]:
+    return get_progress(kb, "summarize") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
 
 
 @router.get("/summarize/stream", tags=["pipeline"])
-async def summarize_stream():
+async def summarize_stream(kb: str = Query(...)):
     import asyncio
     import json
     from fastapi.responses import StreamingResponse
 
     async def _gen():
-        state = get_progress("summarize") or {"status": "idle"}
+        state = get_progress(kb, "summarize") or {"status": "idle"}
         yield f"data: {json.dumps(state)}\n\n"
         while state.get("status") == "running":
             await asyncio.sleep(0.5)
-            state = get_progress("summarize") or {}
+            state = get_progress(kb, "summarize") or {}
             yield f"data: {json.dumps(state)}\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
@@ -461,8 +470,11 @@ class SuggestRunRequest(BaseModel):
 
 @router.post("/suggest/run", tags=["pipeline"])
 def suggest_run(req: SuggestRunRequest, background_tasks: BackgroundTasks) -> dict:
+    if is_running(req.kb, "suggest"):
+        raise HTTPException(status_code=409, detail=f"suggest is already running for {req.kb}")
+
     cancel = threading.Event()
-    _active_cancels["suggest"] = cancel
+    _active_cancels[(req.kb, "suggest")] = cancel
 
     folder = _get_kb_folder(req.kb)
     corpus_path = folder / "corpus.db"
@@ -472,8 +484,8 @@ def suggest_run(req: SuggestRunRequest, background_tasks: BackgroundTasks) -> di
     from src.config import load_config
     from src.stages.suggest import run_suggest
     config = load_config(P("config.yaml") if P("config.yaml").exists() else None)
-    progress = SseProgressReporter("suggest")
-    init_progress("suggest")
+    progress = SseProgressReporter(req.kb, "suggest")
+    init_progress(req.kb, "suggest")
 
     def _wrapped(cp=corpus_path, kp=kb_path, cfg=config, pr=progress, ce=cancel, lv=req.levels):
         try:
@@ -487,30 +499,30 @@ def suggest_run(req: SuggestRunRequest, background_tasks: BackgroundTasks) -> di
 
 
 @router.post("/suggest/cancel", tags=["pipeline"])
-def suggest_cancel() -> dict:
-    ev = _active_cancels.get("suggest")
+def suggest_cancel(kb: str = Query(...)) -> dict:
+    ev = _active_cancels.get((kb, "suggest"))
     if ev:
         ev.set()
     return {"status": "cancelled"}
 
 
 @router.get("/suggest/status", tags=["pipeline"])
-def suggest_status() -> dict:
-    return get_progress("suggest") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
+def suggest_status(kb: str = Query(...)) -> dict:
+    return get_progress(kb, "suggest") or {"status": "idle", "current": 0, "total": 0, "rate": 0.0, "eta": 0}
 
 
 @router.get("/suggest/stream", tags=["pipeline"])
-async def suggest_stream():
+async def suggest_stream(kb: str = Query(...)):
     import asyncio
     import json
     from fastapi.responses import StreamingResponse
 
     async def _gen():
-        state = get_progress("suggest") or {"status": "idle"}
+        state = get_progress(kb, "suggest") or {"status": "idle"}
         yield f"data: {json.dumps(state)}\n\n"
         while state.get("status") == "running":
             await asyncio.sleep(0.5)
-            state = get_progress("suggest") or {}
+            state = get_progress(kb, "suggest") or {}
             yield f"data: {json.dumps(state)}\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")

@@ -25,9 +25,10 @@ def _make_corpus_db() -> sqlite3.Connection:
     conn.executescript("""
         PRAGMA foreign_keys = OFF;
         CREATE TABLE files (
-            id        INTEGER PRIMARY KEY,
-            path      TEXT    NOT NULL,
-            file_type TEXT    NOT NULL DEFAULT 'audio'
+            id                       INTEGER PRIMARY KEY,
+            path                     TEXT    NOT NULL,
+            file_type                TEXT    NOT NULL DEFAULT 'audio',
+            voice_diarize_checked_at DATETIME
         );
         CREATE TABLE file_voice_segments (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -299,14 +300,31 @@ class TestGetFilesWithoutVoiceSegments:
         rows = get_files_without_voice_segments(conn)
         assert {r["id"] for r in rows} == {1, 2}
 
-    def test_excludes_already_processed(self):
-        from src.db.corpus import get_files_without_voice_segments, upsert_voice_segment
+    def test_excludes_checked_files(self):
+        from src.db.corpus import get_files_without_voice_segments, set_voice_diarize_checked, upsert_voice_segment
         conn = _make_corpus_db()
         conn.execute("INSERT INTO files(id, path, file_type) VALUES (1, '/a.wav', 'audio')")
         conn.execute("INSERT INTO files(id, path, file_type) VALUES (2, '/b.wav', 'audio')")
         upsert_voice_segment(conn, 1, 0, 0, 1000, "SPEAKER_00", None, None, None, None)
+        set_voice_diarize_checked(conn, 1)
         rows = get_files_without_voice_segments(conn)
         assert len(rows) == 1 and rows[0]["id"] == 2
+
+    def test_checked_file_with_zero_segments_stays_excluded(self):
+        """A silent/too-short/errored file is marked checked with no segment rows —
+        it must not be perpetually re-selected as pending (KB.AN1)."""
+        from src.db.corpus import get_files_without_voice_segments, set_voice_diarize_checked
+        conn = _make_corpus_db()
+        conn.execute("INSERT INTO files(id, path, file_type) VALUES (1, '/silent.wav', 'audio')")
+        set_voice_diarize_checked(conn, 1)
+        assert get_files_without_voice_segments(conn) == []
+
+    def test_unchecked_file_with_no_segments_stays_pending(self):
+        from src.db.corpus import get_files_without_voice_segments
+        conn = _make_corpus_db()
+        conn.execute("INSERT INTO files(id, path, file_type) VALUES (1, '/a.wav', 'audio')")
+        rows = get_files_without_voice_segments(conn)
+        assert len(rows) == 1 and rows[0]["id"] == 1
 
     def test_empty_corpus(self):
         from src.db.corpus import get_files_without_voice_segments

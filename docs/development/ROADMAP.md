@@ -16,9 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1865 passing, 2 skipped
-- **Last completed sprint:** KB.AM3 (Knowledge Settings: UI — collapsible Knowledge Settings panel on `/pipeline` with People/Places/Dates toggles and a Dates & Events calendar-rule enable-list; `pipeline_page()`'s per-stage state gains a gating-aware `skipped`/`partial_note` layer sitting alongside the existing done/ready/blocked dependency state, rendering "Skipped — {Category} disabled" badges and a "Partial — Dates disabled" note on `classify`; new `GET /api/kb/{name}/settings/panel` and `PATCH /api/kb/{name}/classify-rules/{id}` endpoints, plus `GET /pipeline/groups` for reload-free re-rendering after a toggle; +12 net tests)
-- **Next planned sprint:** none queued — see Planned Concepts below for unscheduled UI/UX work
+- **Tests:** 1887 passing, 2 skipped
+- **Last completed sprint:** KB.AN1 (Pipeline Execution Correctness — `/run`/`/cancel`/`/status`/`/stream` state scoped by `(kb, stage)` instead of `stage` alone, so two KBs running the same stage no longer collide; `POST /run` rejects a concurrent same-`(kb, stage)` request with 409 instead of silently starting a second background worker; Cancel no longer resets the UI eagerly — it waits for the SSE stream's real `done`/`failed` signal, same as a normal completion; new `files.voice_checked_at`/`files.voice_diarize_checked_at` markers (migration 0025) so `voice`/`voice_diarize` can reach true completion on a corpus with non-speech files; +7 net tests)
+- **Next planned sprint:** KB.AN2 (Voice Diarization Accuracy & Performance) — see AN-series below
 
 ---
 
@@ -140,6 +140,34 @@ no full Classify Rules manager, per the pre-sprint review finding), cascading
 "Skipped — {Category} disabled" / "Partial — Dates disabled" badges on
 gated stage rows.
 **Result:** 1865 tests (+12 net)
+
+---
+
+## Sprints — Voice Diarization Reliability (AN-series)
+
+Ad hoc findings from a session investigating a user-reported `voice_diarize`
+issue (progress appeared stuck ~5 files in). Root-caused to a stage-execution
+concurrency bug affecting all pipeline stages, plus voice-specific
+performance/accuracy gaps.
+
+### KB.AN1 — Pipeline Execution Correctness ✓
+**Status:** Complete
+**Document:** `sprints/complete/KB.AN1.md`
+**Scope:** `/run`/`/cancel`/`/status`/`/stream` state scoped by `(kb, stage)`
+instead of `stage` alone; `POST /run` rejects a concurrent same-`(kb, stage)`
+request with 409; Cancel waits for the stream's real `done`/`failed` signal
+instead of resetting the UI eagerly; new `files.voice_checked_at`/
+`files.voice_diarize_checked_at` markers (migration 0025) so `voice`/
+`voice_diarize` can reach true completion on corpora with non-speech files.
+**Result:** 1887 tests (+7 net)
+
+### KB.AN2 — Voice Diarization Accuracy & Performance
+**Status:** Planned
+**Document:** `sprints/planned/KB.AN2.md`
+**Scope:** Pool resemblyzer embeddings per local speaker label instead of
+per turn; align the duration floor to 1.5s; cache `VoiceEncoder`/pyannote
+`Pipeline` instances once per run; overlap-aware matching; duration-weighted
+match confidence; suppress confirmed-harmless torchcodec warning noise.
 
 ---
 

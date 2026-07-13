@@ -100,7 +100,7 @@
               </div>
               <button id="btn-cancel-{{ stage.name }}" class="btn btn--cancel"
                       style="display:none"
-                      onclick="cancelStage('{{ stage.name }}')">Cancel</button>
+                      onclick="cancelStage('{{ stage.name }}', '{{ kb }}')">Cancel</button>
               {% if stage.partial_note %}
                 <span class="wb-partial-note">{{ stage.partial_note }}</span>
               {% endif %}
