@@ -3,6 +3,7 @@ import sqlite3
 import struct
 import types
 import unittest.mock as mock
+import warnings
 import wave
 
 import numpy as np
@@ -188,14 +189,254 @@ class TestDiarizeAudio:
             result = diarize_audio(wav, self._config())
         assert result == []
 
+    def test_pipeline_load_failure_raises_model_load_error(self, tmp_path):
+        """KB.AN2: the pipeline now loads once per run rather than being
+        silently retried per file, so a load failure (auth/network/missing
+        cache) must surface as ModelLoadError, not degrade to an empty result."""
+        from src.stages.voice import ModelLoadError, diarize_audio
+
+        mod = types.ModuleType("pyannote")
+        audio_mod = types.ModuleType("pyannote.audio")
+
+        class _FailingPipeline:
+            @classmethod
+            def from_pretrained(cls, *a, **kw):
+                raise RuntimeError("401 unauthorized")
+
+        audio_mod.Pipeline = _FailingPipeline
+        mod.audio = audio_mod
+
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"pyannote": mod, "pyannote.audio": audio_mod}):
+            with pytest.raises(ModelLoadError):
+                diarize_audio(wav, self._config())
+
+    def test_reused_pipeline_skips_loading(self, tmp_path):
+        """KB.AN2: a `pipeline` passed in must be used directly — no fresh
+        Pipeline.from_pretrained() call, even if pyannote.audio is unavailable."""
+        from src.stages.voice import diarize_audio
+
+        class _FakeTurn:
+            def __init__(self, start, end):
+                self.start = start
+                self.end = end
+
+        class _FakeDiarization:
+            def itertracks(self, yield_label=False):
+                yield _FakeTurn(0.0, 2.0), None, "SPEAKER_00"
+
+        class _PreloadedPipeline:
+            def __call__(self, audio_input):
+                return _FakeDiarization()
+
+            @classmethod
+            def from_pretrained(cls, *a, **kw):
+                raise AssertionError("from_pretrained should not be called when a pipeline is provided")
+
+        torch_mod = types.ModuleType("torch")
+        _mock_tensor = mock.MagicMock()
+        _mock_tensor.unsqueeze.return_value = _mock_tensor
+        torch_mod.tensor = mock.MagicMock(return_value=_mock_tensor)
+
+        wav = _make_wav(tmp_path / "a.wav")
+        with mock.patch.dict("sys.modules", {"torch": torch_mod}):
+            result = diarize_audio(wav, self._config(), pipeline=_PreloadedPipeline())
+
+        assert len(result) == 1
+        assert result[0]["speaker_label"] == "SPEAKER_00"
+
 
 # ---------------------------------------------------------------------------
-# embed_voice_segment
+# _load_diarization_pipeline — warning scoping (KB.AN2 Criterion E)
+# ---------------------------------------------------------------------------
+
+class _WarningModule(types.ModuleType):
+    """A fake `pyannote.audio` module whose `Pipeline` attribute emits a
+    UserWarning on access — attribute access on an already-cached module
+    still goes through class-level descriptors, so this fires even though
+    `from pyannote.audio import Pipeline` doesn't re-execute module code."""
+
+    def __init__(self, name, warning_message):
+        super().__init__(name)
+        self._warning_message = warning_message
+
+    @property
+    def Pipeline(self):
+        import warnings as _warnings
+        _warnings.warn(self._warning_message, UserWarning)
+
+        class _FakePipeline:
+            @classmethod
+            def from_pretrained(cls, *a, **kw):
+                return cls()
+        return _FakePipeline
+
+
+class TestLoadDiarizationPipelineWarnings:
+    def _config(self):
+        from src.config import Config
+        return Config(diarization_model="pyannote/speaker-diarization-3.1")
+
+    def test_torchcodec_warning_suppressed(self):
+        from src.stages.voice import _load_diarization_pipeline
+
+        audio_mod = _WarningModule("pyannote.audio", "TorchCodec is not available: some detail")
+        pyannote_mod = types.ModuleType("pyannote")
+        pyannote_mod.audio = audio_mod
+
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                _load_diarization_pipeline(self._config())
+
+        assert not any("torchcodec" in str(w.message).lower() for w in caught)
+
+    def test_unrelated_warning_still_surfaces(self):
+        """Only the confirmed-harmless torchcodec message is suppressed — a
+        different warning from the same import must still be visible."""
+        from src.stages.voice import _load_diarization_pipeline
+
+        audio_mod = _WarningModule("pyannote.audio", "Some unrelated deprecation notice")
+        pyannote_mod = types.ModuleType("pyannote")
+        pyannote_mod.audio = audio_mod
+
+        with mock.patch.dict("sys.modules", {"pyannote": pyannote_mod, "pyannote.audio": audio_mod}):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                _load_diarization_pipeline(self._config())
+
+        assert any("unrelated deprecation notice" in str(w.message).lower() for w in caught)
+
+
+# ---------------------------------------------------------------------------
+# _find_overlapping_indices
+# ---------------------------------------------------------------------------
+
+class TestFindOverlappingIndices:
+    def test_no_overlap_returns_empty_set(self):
+        from src.stages.voice import _find_overlapping_indices
+        segments = [
+            {"start_ms": 0, "end_ms": 1000, "speaker_label": "SPEAKER_00"},
+            {"start_ms": 1000, "end_ms": 2000, "speaker_label": "SPEAKER_01"},
+        ]
+        assert _find_overlapping_indices(segments) == set()
+
+    def test_touching_boundary_not_overlap(self):
+        """Half-open intervals: [0,1000) and [1000,2000) share only a boundary point."""
+        from src.stages.voice import _find_overlapping_indices
+        segments = [
+            {"start_ms": 0, "end_ms": 1000, "speaker_label": "SPEAKER_00"},
+            {"start_ms": 1000, "end_ms": 2000, "speaker_label": "SPEAKER_01"},
+        ]
+        assert _find_overlapping_indices(segments) == set()
+
+    def test_cross_talk_detected(self):
+        from src.stages.voice import _find_overlapping_indices
+        segments = [
+            {"start_ms": 0, "end_ms": 5000, "speaker_label": "SPEAKER_00"},
+            {"start_ms": 4000, "end_ms": 8000, "speaker_label": "SPEAKER_01"},
+        ]
+        assert _find_overlapping_indices(segments) == {0, 1}
+
+    def test_same_label_overlap_not_flagged(self):
+        """Overlapping turns sharing one label aren't cross-talk — pooling a
+        speaker's own audio with itself doesn't corrupt the embedding."""
+        from src.stages.voice import _find_overlapping_indices
+        segments = [
+            {"start_ms": 0, "end_ms": 5000, "speaker_label": "SPEAKER_00"},
+            {"start_ms": 4000, "end_ms": 8000, "speaker_label": "SPEAKER_00"},
+        ]
+        assert _find_overlapping_indices(segments) == set()
+
+    def test_one_speaker_overlaps_two_others(self):
+        segments = [
+            {"start_ms": 0, "end_ms": 5000, "speaker_label": "SPEAKER_00"},   # overlaps both
+            {"start_ms": 1000, "end_ms": 2000, "speaker_label": "SPEAKER_01"},
+            {"start_ms": 3000, "end_ms": 4000, "speaker_label": "SPEAKER_02"},
+        ]
+        from src.stages.voice import _find_overlapping_indices
+        assert _find_overlapping_indices(segments) == {0, 1, 2}
+
+    def test_nonoverlapping_turn_not_flagged(self):
+        segments = [
+            {"start_ms": 0, "end_ms": 1000, "speaker_label": "SPEAKER_00"},
+            {"start_ms": 500, "end_ms": 1500, "speaker_label": "SPEAKER_01"},   # overlaps SPEAKER_00
+            {"start_ms": 2000, "end_ms": 3000, "speaker_label": "SPEAKER_02"},  # clean
+        ]
+        from src.stages.voice import _find_overlapping_indices
+        assert _find_overlapping_indices(segments) == {0, 1}
+
+
+# ---------------------------------------------------------------------------
+# _build_voice_encoder
+# ---------------------------------------------------------------------------
+
+class TestBuildVoiceEncoder:
+    def test_raises_model_load_error_if_not_installed(self):
+        from src.stages.voice import ModelLoadError, _build_voice_encoder
+        with mock.patch.dict("sys.modules", {"resemblyzer": None}):
+            with pytest.raises(ModelLoadError):
+                _build_voice_encoder()
+
+    def test_constructs_with_verbose_false(self):
+        """Silences resemblyzer's third-party per-construction log line."""
+        from src.stages.voice import _build_voice_encoder
+
+        calls = []
+        mod = types.ModuleType("resemblyzer")
+
+        class _FakeEncoder:
+            def __init__(self, verbose=True):
+                calls.append(verbose)
+
+        mod.VoiceEncoder = _FakeEncoder
+        with mock.patch.dict("sys.modules", {"resemblyzer": mod}):
+            _build_voice_encoder()
+        assert calls == [False]
+
+
+# ---------------------------------------------------------------------------
+# _duration_weighted_threshold
+# ---------------------------------------------------------------------------
+
+class TestDurationWeightedThreshold:
+    def test_floor_duration_applies_max_penalty(self):
+        from src.stages.voice import _duration_weighted_threshold
+        assert _duration_weighted_threshold(1.5, 0.75) == pytest.approx(0.85)
+
+    def test_ceiling_duration_applies_no_penalty(self):
+        from src.stages.voice import _duration_weighted_threshold
+        assert _duration_weighted_threshold(5.0, 0.75) == pytest.approx(0.75)
+
+    def test_beyond_ceiling_stays_at_base(self):
+        from src.stages.voice import _duration_weighted_threshold
+        assert _duration_weighted_threshold(8.0, 0.75) == pytest.approx(0.75)
+
+    def test_midpoint_ramps_linearly(self):
+        from src.stages.voice import _duration_weighted_threshold
+        # Midpoint of [1.5, 5.0] is 3.25s — half the max penalty.
+        assert _duration_weighted_threshold(3.25, 0.75) == pytest.approx(0.80)
+
+    def test_below_floor_clamps_to_max_penalty(self):
+        """Shouldn't happen in practice (floor == _MIN_DURATION_S), but a
+        duration below it must not extrapolate past the max penalty."""
+        from src.stages.voice import _duration_weighted_threshold
+        assert _duration_weighted_threshold(0.5, 0.75) == pytest.approx(0.85)
+
+    def test_penalty_never_pushes_threshold_above_one(self):
+        from src.stages.voice import _duration_weighted_threshold
+        assert _duration_weighted_threshold(1.5, 0.95) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# embed_pooled_voice_segments
 # ---------------------------------------------------------------------------
 
 def _make_fake_resemblyzer():
     mod = types.ModuleType("resemblyzer")
     class _FakeEncoder:
+        def __init__(self, verbose=True):
+            pass
         def embed_utterance(self, wav):
             v = np.ones(256, dtype=np.float32)
             return v / float(np.linalg.norm(v))
@@ -214,44 +455,86 @@ def _write_wav(path, n_samples: int = 32000, amplitude: int = 4096, sr: int = 16
     return path
 
 
-class TestEmbedVoiceSegment:
-    def test_returns_bytes_for_valid_slice(self, tmp_path):
-        from src.stages.voice import _EMBEDDING_DIM, embed_voice_segment
+class TestEmbedPooledVoiceSegments:
+    def test_returns_bytes_and_duration_for_valid_span(self, tmp_path):
+        from src.stages.voice import _EMBEDDING_DIM, embed_pooled_voice_segments
         wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s
         fake_res = _make_fake_resemblyzer()
         with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
-            result = embed_voice_segment(wav, 0, 2000)
-        assert result is not None
-        assert len(result) == _EMBEDDING_DIM * 4
+            embedding, duration_ms = embed_pooled_voice_segments(wav, [(0, 2000)])
+        assert embedding is not None
+        assert len(embedding) == _EMBEDDING_DIM * 4
+        assert duration_ms == pytest.approx(2000, abs=10)
 
-    def test_returns_none_for_zero_duration(self, tmp_path):
-        from src.stages.voice import embed_voice_segment
-        result = embed_voice_segment(tmp_path / "a.wav", 1000, 1000)
-        assert result is None
+    def test_pools_multiple_spans_into_one_call(self, tmp_path):
+        """Two spans that individually miss _MIN_DURATION_S combine to clear it."""
+        from src.stages.voice import embed_pooled_voice_segments
+        wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s
+        fake_res = _make_fake_resemblyzer()
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            # Two 800ms spans pool to 1.6s — clears the 1.5s minimum, neither alone would.
+            embedding, duration_ms = embed_pooled_voice_segments(wav, [(0, 800), (1000, 1800)])
+        assert embedding is not None
+        assert duration_ms == pytest.approx(1600, abs=10)
 
-    def test_returns_none_for_negative_duration(self, tmp_path):
-        from src.stages.voice import embed_voice_segment
-        result = embed_voice_segment(tmp_path / "a.wav", 2000, 1000)
-        assert result is None
+    def test_returns_none_for_no_spans(self, tmp_path):
+        from src.stages.voice import embed_pooled_voice_segments
+        embedding, duration_ms = embed_pooled_voice_segments(tmp_path / "a.wav", [])
+        assert embedding is None
+        assert duration_ms is None
+
+    def test_skips_zero_and_negative_duration_spans(self, tmp_path):
+        """Degenerate spans are skipped rather than aborting the whole pool."""
+        from src.stages.voice import embed_pooled_voice_segments
+        wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s
+        fake_res = _make_fake_resemblyzer()
+        with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
+            embedding, duration_ms = embed_pooled_voice_segments(wav, [(1000, 1000), (2000, 1000), (0, 2000)])
+        assert embedding is not None
 
     def test_returns_none_on_load_error(self, tmp_path):
-        from src.stages.voice import embed_voice_segment
+        from src.stages.voice import embed_pooled_voice_segments
         corrupt = tmp_path / "corrupt.wav"
         corrupt.write_bytes(b"\x00\xFF" * 50)
         fake_res = _make_fake_resemblyzer()
         with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
-            result = embed_voice_segment(corrupt, 0, 2000)
-        assert result is None
+            embedding, duration_ms = embed_pooled_voice_segments(corrupt, [(0, 2000)])
+        assert embedding is None
+        assert duration_ms is None
 
-    def test_returns_none_for_too_short_slice(self, tmp_path):
-        """Slice < _MIN_DURATION_S (1 s) returns None."""
-        from src.stages.voice import embed_voice_segment
+    def test_returns_none_for_too_short_pooled_audio(self, tmp_path):
+        """Pooled duration < _MIN_DURATION_S (1.5 s) returns None."""
+        from src.stages.voice import embed_pooled_voice_segments
         wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s WAV
         fake_res = _make_fake_resemblyzer()
         with mock.patch.dict("sys.modules", {"resemblyzer": fake_res}):
-            # Request only 100 ms — below 1 s minimum
-            result = embed_voice_segment(wav, 0, 100)
-        assert result is None
+            # Two 50ms spans pool to only 100ms — still below the 1.5 s minimum
+            embedding, duration_ms = embed_pooled_voice_segments(wav, [(0, 50), (1000, 1050)])
+        assert embedding is None
+        assert duration_ms is None
+
+    def test_reuses_provided_encoder_without_reconstructing(self, tmp_path):
+        """KB.AN2: a passed-in `encoder` must be used directly — no fresh
+        VoiceEncoder constructed, even though the class remains importable."""
+        from src.stages.voice import embed_pooled_voice_segments
+
+        class _FakeEncoder:
+            def embed_utterance(self, wav):
+                v = np.ones(256, dtype=np.float32)
+                return v / float(np.linalg.norm(v))
+
+        class _UnusedEncoderClass:
+            def __init__(self, *a, **kw):
+                raise AssertionError("VoiceEncoder should not be constructed when an encoder is provided")
+
+        mod = types.ModuleType("resemblyzer")
+        mod.VoiceEncoder = _UnusedEncoderClass
+        mod.preprocess_wav = lambda wav, source_sr=None: wav
+
+        wav = _write_wav(tmp_path / "a.wav", n_samples=32000)  # 2 s
+        with mock.patch.dict("sys.modules", {"resemblyzer": mod}):
+            embedding, duration_ms = embed_pooled_voice_segments(wav, [(0, 2000)], encoder=_FakeEncoder())
+        assert embedding is not None
 
 
 # ---------------------------------------------------------------------------

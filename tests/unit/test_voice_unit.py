@@ -318,6 +318,8 @@ def _make_fake_resemblyzer(embedding: np.ndarray | None = None):
     mod = types.ModuleType("resemblyzer")
 
     class _FakeEncoder:
+        def __init__(self, verbose=True):
+            pass
         def embed_utterance(self, wav):
             if embedding is not None:
                 return embedding
@@ -345,7 +347,7 @@ def _write_wav(path, n_samples: int = 32000, amplitude: int = 4096, sr: int = 16
 
 class TestEmbedVoiceMocked:
     def test_returns_none_for_short_audio(self, tmp_path):
-        """WAV shorter than _MIN_DURATION_S (1 s) returns (None, None)."""
+        """WAV shorter than _MIN_DURATION_S (1.5 s) returns (None, None)."""
         from src.stages.voice import embed_voice
         wav = _write_wav(tmp_path / "short.wav", n_samples=100)  # ~6 ms
         fake_res = _make_fake_resemblyzer()

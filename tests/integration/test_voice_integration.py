@@ -29,7 +29,12 @@ def _make_config(*, similarity_threshold: float = 0.75):
 
 @contextmanager
 def _mock_audio(has_speech: bool = True, has_clipping: bool = False):
-    """Patch prepare_audio in voice.py to yield a fake AudioTrack."""
+    """Patch prepare_audio in voice.py to yield a fake AudioTrack.
+
+    Also patches `_build_voice_encoder` (KB.AN2 — run_voice now constructs a
+    VoiceEncoder once per run, outside the mocked `embed_voice` call) so
+    tests never touch the real resemblyzer package.
+    """
     track = MagicMock()
     track.wav_path = MagicMock()
     track.has_speech = has_speech
@@ -40,7 +45,10 @@ def _mock_audio(has_speech: bool = True, has_clipping: bool = False):
     def _fake(*args, **kwargs):
         yield track
 
-    with patch("src.media.audiotrack.prepare_audio", new=_fake):
+    with (
+        patch("src.media.audiotrack.prepare_audio", new=_fake),
+        patch("src.stages.voice._build_voice_encoder", return_value=MagicMock()),
+    ):
         yield track
 
 
@@ -145,14 +153,14 @@ class TestRunVoiceIntegration:
         config = _make_config()
         call_count = 0
 
-        def embed_side_effect(path, model="resemblyzer"):
+        def embed_side_effect(path, model="resemblyzer", encoder=None):
             nonlocal call_count
             call_count += 1
             return (_fake_embedding(call_count), 2000)
 
         cancel1 = threading.Event()
 
-        def cancel_after_one(path, model="resemblyzer"):
+        def cancel_after_one(path, model="resemblyzer", encoder=None):
             cancel1.set()
             return (_fake_embedding(0), 2000)
 
@@ -169,7 +177,7 @@ class TestRunVoiceIntegration:
         # Second run — only the unprocessed file should be picked up
         processed_second = 0
 
-        def count_calls(path, model="resemblyzer"):
+        def count_calls(path, model="resemblyzer", encoder=None):
             nonlocal processed_second
             processed_second += 1
             return (_fake_embedding(99), 1000)

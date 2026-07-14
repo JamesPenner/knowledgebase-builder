@@ -16,9 +16,9 @@ See `memory/project_core_philosophy.md` for the full statement.
 ## Current State
 
 - **Branch:** `clean-master`
-- **Tests:** 1887 passing, 2 skipped
-- **Last completed sprint:** KB.AN1 (Pipeline Execution Correctness — `/run`/`/cancel`/`/status`/`/stream` state scoped by `(kb, stage)` instead of `stage` alone, so two KBs running the same stage no longer collide; `POST /run` rejects a concurrent same-`(kb, stage)` request with 409 instead of silently starting a second background worker; Cancel no longer resets the UI eagerly — it waits for the SSE stream's real `done`/`failed` signal, same as a normal completion; new `files.voice_checked_at`/`files.voice_diarize_checked_at` markers (migration 0025) so `voice`/`voice_diarize` can reach true completion on a corpus with non-speech files; +7 net tests)
-- **Next planned sprint:** KB.AN2 (Voice Diarization Accuracy & Performance) — see AN-series below
+- **Tests:** 1911 passing, 2 skipped
+- **Last completed sprint:** KB.AN2 (Voice Diarization Accuracy & Performance — pooled per-speaker-label resemblyzer embedding instead of per-turn (`embed_pooled_voice_segments`, replacing `embed_voice_segment`); `_MIN_DURATION_S` raised to 1.5s; `VoiceEncoder`/pyannote `Pipeline` each constructed once per run and reused (`_build_voice_encoder`/`_load_diarization_pipeline`); cross-talk turns (`_find_overlapping_indices`) excluded from pooled identity-matching audio but still stored for transcript attribution; duration-weighted match confidence (`_duration_weighted_threshold`, linear ramp +0.10 at the 1.5s floor down to the flat threshold at 5.0s); torchcodec `UserWarning` scoped-suppressed around the pyannote import. Manual validation against the real `test-run` KB still outstanding — GPU/LLM-adjacent stage, not run in CI; +24 net tests)
+- **Next planned sprint:** none queued — see Deferred Items below for ripe candidates
 
 ---
 
@@ -161,13 +161,19 @@ instead of resetting the UI eagerly; new `files.voice_checked_at`/
 `voice_diarize` can reach true completion on corpora with non-speech files.
 **Result:** 1887 tests (+7 net)
 
-### KB.AN2 — Voice Diarization Accuracy & Performance
-**Status:** Planned
-**Document:** `sprints/planned/KB.AN2.md`
+### KB.AN2 — Voice Diarization Accuracy & Performance ✓
+**Status:** Complete
+**Document:** `sprints/complete/KB.AN2.md`
 **Scope:** Pool resemblyzer embeddings per local speaker label instead of
-per turn; align the duration floor to 1.5s; cache `VoiceEncoder`/pyannote
-`Pipeline` instances once per run; overlap-aware matching; duration-weighted
-match confidence; suppress confirmed-harmless torchcodec warning noise.
+per turn (`embed_pooled_voice_segments`); duration floor raised to 1.5s;
+`VoiceEncoder`/pyannote `Pipeline` each built once per run and reused
+(`_build_voice_encoder`/`_load_diarization_pipeline`); cross-talk turns
+excluded from pooled identity-matching audio (`_find_overlapping_indices`)
+but still stored for transcript attribution; duration-weighted match
+confidence (`_duration_weighted_threshold`); torchcodec `UserWarning`
+scoped-suppressed around the pyannote import.
+**Result:** 1911 tests (+24 net). Manual validation against the real
+`test-run` KB not yet run — GPU/LLM-adjacent stage, not covered by CI.
 
 ---
 

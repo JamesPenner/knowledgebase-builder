@@ -1,11 +1,72 @@
 # KB.AN2 — Voice Diarization Accuracy & Performance
 
-**Status:** Planned
+**Status:** Complete
 **Preceding sprint:** KB.AN1 (Pipeline Execution Correctness) — required
 first; accuracy validation needs runs that actually complete in reasonable
 time, and KB.AN1 removes the per-file pyannote Pipeline reload this sprint
 would otherwise be validating against.
 **Concept doc:** none
+**Result:** 1911 tests passing, 2 skipped (+24 net from the 1887 baseline
+recorded at sprint start — that baseline itself included an unrelated,
+already-in-progress pattern-rules-staleness feature committed separately at
+the start of this sprint, not part of KB.AN2)
+
+## Implementation Notes
+
+- **Criterion A (pooling):** `run_voice_diarize` groups `diarize_audio()`
+  turns by local `speaker_label`, calls a new `embed_pooled_voice_segments()`
+  once per label (concatenated audio across that label's spans), and
+  propagates the resulting `embedding`/`matched_person_id`/`matched_cluster_id`/
+  `similarity` to every `file_voice_segments` row sharing that label. The old
+  per-turn `embed_voice_segment()` was removed (only caller was this loop) in
+  favor of `embed_pooled_voice_segments()`, which subsumes it (a one-span pool
+  behaves identically).
+- **Criterion B (duration floor + model caching):** `_MIN_DURATION_S` raised
+  to 1.5s. `_build_voice_encoder()` and `_load_diarization_pipeline()` extracted
+  as the sole model-construction boundary; `run_voice`/`run_voice_diarize`
+  build each lazily on first use (skipped entirely when there's no pending
+  work) and reuse for the rest of the run. **Deliberate behavior change:** a
+  `Pipeline.from_pretrained()` failure previously degraded silently to zero
+  segments per file (reloaded, and re-failed, on every file); since loading
+  now happens once, a load failure raises `ModelLoadError` and aborts the run
+  instead — one clear failure instead of N silent no-ops, consistent with how
+  `ModelLoadError` is used elsewhere (e.g. `run_face`'s upfront checks). Not
+  spelled out in the original acceptance criteria; flagged to the user during
+  implementation.
+- **Criterion C (overlap-aware matching):** new pure function
+  `_find_overlapping_indices()` flags turns overlapping a turn from a
+  *different* speaker label (same-label overlap is not cross-talk and isn't
+  flagged). Flagged turns are excluded from their label's pooling spans but
+  still get their own `file_voice_segments` row with the label's propagated
+  match — transcript attribution (raw label) is unaffected.
+- **Criterion D (duration-weighted confidence):** linear ramp confirmed with
+  the user — `base_threshold + 0.10` at the 1.5s floor, relaxing to
+  `base_threshold` at 5.0s and beyond (`_duration_weighted_threshold()`).
+  `embed_pooled_voice_segments()`'s return type changed from `bytes | None` to
+  `(bytes, duration_ms) | (None, None)` so the caller can weight the threshold
+  by actual pooled duration — applied to both the person-match and
+  cluster-join/create decisions in `run_voice_diarize`. `run_voice`'s
+  per-file (unpooled) matching is untouched.
+- **Criterion E (warning scoping):** `warnings.catch_warnings()` +
+  `filterwarnings("ignore", message=r"(?i).*torchcodec.*", category=UserWarning)`
+  scoped narrowly around the `from pyannote.audio import Pipeline` line in
+  `_load_diarization_pipeline()` — restores prior filter state on exit, and
+  only matches the torchcodec message so other warnings from that import
+  still surface.
+- **Regression caught mid-implementation (Criterion B):** the first pass had
+  `run_voice`/`run_voice_diarize` import `resemblyzer`/`pyannote.audio`
+  directly before calling the (test-mocked) `embed_voice`/`diarize_audio`,
+  bypassing the integration tests' mocks entirely — 14 tests failed since
+  neither package is installed in this dev environment. Fixed by routing all
+  real-model construction through `_build_voice_encoder()`/
+  `_load_diarization_pipeline()`, which the integration tests now patch
+  alongside the existing embed/diarize mocks.
+- **Outstanding:** manual validation against the real `test-run` KB (compare
+  match rate before/after) has **not** been run this session — resemblyzer/
+  pyannote.audio are not installed in this dev environment, and this is a
+  GPU/LLM-adjacent stage validated manually per the working agreement, not in
+  CI. All other Test Coverage Expectations below are covered by the automated
+  suite (1911 passing, 2 skipped).
 
 ## Goal
 
